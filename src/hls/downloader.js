@@ -93,7 +93,7 @@ export async function downloadQuality(quality, filename, onProgress, signal, opt
 
   // 首选扩展保存管线（downloads API 的 filename 支持子目录，剧集归目录依赖它）
   const saved = await saveViaExtension(payload, outName, mime, { conflictAction: opts.conflictAction });
-  if (saved.ok) return { mode: 'downloads-api', filename: outName, bytes: totalBytes };
+  if (saved.ok) return { mode: 'downloads-api', filename: outName, bytes: totalBytes, note: saved.note || '' };
 
   // 回退：页面锚点下载（不支持子目录，"/" 会被替换为 "_"）
   Logger.warn('SAVE', `扩展保存失败（${saved.error}），回退锚点下载`);

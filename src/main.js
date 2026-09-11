@@ -101,7 +101,7 @@ async function startDownload() {
       filename: result.filename || filename,
     };
     await saveCover(state.page);
-    hud.toast('下载完成');
+    hud.toast(result.note || '下载完成');
     return true;
   } catch (err) {
     const msg = err?.name === 'AbortError' ? '已取消' : (err?.message || '下载失败');

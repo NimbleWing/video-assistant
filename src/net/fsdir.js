@@ -34,14 +34,34 @@ export async function clearDirHandle() {
   try { await tx('readwrite', (s) => s.delete(KEY)); } catch {}
 }
 
-// null = 未设置自定义目录；false = 已设置但未授权（浏览器重启后需重新授权）；
-// handle = 已授权可用。
+// null = 未设置自定义目录；false = 已设置但本会话无写权限（扩展重载/浏览器重启后）；
+// handle = 可写。
 export async function dirGranted() {
   const h = await loadDirHandle();
   if (!h) return null;
   try {
     return (await h.queryPermission({ mode: 'readwrite' })) === 'granted' ? h : false;
   } catch {
+    return false;
+  }
+}
+
+// 真实写探针：创建并立即删除一个探测文件。
+// queryPermission 对扩展的 IDB 回读句柄不可靠（两个方向都会虚报），
+// 实际能否写入以本探针为准——offscreen 的写入权限与此同源同状态。
+export async function probeWritable() {
+  const h = await loadDirHandle();
+  if (!h) return false;
+  const name = '.rv-access-probe';
+  try {
+    const fh = await h.getFileHandle(name, { create: true });
+    const w = await fh.createWritable();
+    await w.write(new Blob(['1']));
+    await w.close();
+    await h.removeEntry(name);
+    return true;
+  } catch {
+    try { await h.removeEntry(name); } catch {}
     return false;
   }
 }

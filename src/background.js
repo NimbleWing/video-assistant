@@ -77,6 +77,7 @@ async function onOSUrl(msg) {
   const meta = activeSaves.get(msg.saveId);
   if (!meta) return;
   meta.url = msg.url;
+  meta.note = msg.note || '';
   try {
     const conflictAction = meta.conflictAction === 'overwrite' ? 'overwrite' : 'uniquify';
     const downloadId = await chrome.downloads.download({
@@ -98,6 +99,7 @@ async function onOSUrl(msg) {
         saveId: msg.saveId,
         ok,
         error: ok ? '' : (delta.error?.current || 'download interrupted'),
+        note: meta.note || '',
       }).catch(() => {});
       activeSaves.delete(msg.saveId);
     };
@@ -235,6 +237,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         saveId: message.saveId,
         ok: !!message.ok,
         error: message.ok ? '' : (message.error || 'save failed'),
+        note: message.note || '',
       }).catch(() => {});
       activeSaves.delete(message.saveId);
     }

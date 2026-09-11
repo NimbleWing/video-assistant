@@ -1,22 +1,28 @@
 // Offscreen document：两种保存模式。
-//  A. 自定义目录模式（用户在侧边栏选择过目录且已授权）：直接经文件句柄写入，
-//     剧集子目录自动创建，覆盖写；已下载判断变为真实磁盘直查。
-//  B. 默认目录模式：组装 Blob 生成 objectURL，交给 service worker 调
-//     chrome.downloads 保存（filename 支持子目录）。
+//  A. 自定义目录模式（IDB 中存有目录句柄）：直接经文件句柄写入，剧集子目录自动创建，
+//     覆盖写；已下载判断变为真实磁盘直查。
+//  B. 默认目录模式：组装 Blob 生成 objectURL，交给 service worker 调 chrome.downloads。
+// 权限策略：不信任 queryPermission（对 IDB 回读句柄会虚报 prompt），统一"乐观尝试"：
+// 写入/读取抛 NotAllowedError 时才视为本会话无权限，回退默认目录并附带提示。
 // 数据链路：内容脚本 →(to:'sw' 分块)→ SW →(to:'os' 转发)→ 本文档。
-import { dirGranted } from './net/fsdir.js';
+import { loadDirHandle } from './net/fsdir.js';
 
 const saves = new Map();
 
-// 解析 filename（形如 剧名/集名.mp4）到文件句柄；create=false 时仅探测存在性
+// 解析 filename（形如 剧名/集名.mp4）到文件句柄。
+// 错误分类：NotFoundError=目标不存在；NotAllowedError/SecurityError=本会话无权限。
 async function resolveFileHandle(filename, create) {
-  const root = await dirGranted();
-  if (!root) return null;
-  const segs = filename.split('/').filter(Boolean);
-  const base = segs.pop();
-  let dir = root;
-  for (const s of segs) dir = await dir.getDirectoryHandle(s, { create: !!create });
-  return dir.getFileHandle(base, { create: !!create });
+  const root = await loadDirHandle();
+  if (!root) return { err: 'NOHANDLE' };
+  try {
+    const segs = filename.split('/').filter(Boolean);
+    const base = segs.pop();
+    let dir = root;
+    for (const s of segs) dir = await dir.getDirectoryHandle(s, { create: !!create });
+    return { handle: await dir.getFileHandle(base, { create: !!create }) };
+  } catch (e) {
+    return { err: e?.name || 'ERROR' };
+  }
 }
 
 function pushChunk(saveId, b64) {
@@ -28,11 +34,17 @@ function pushChunk(saveId, b64) {
   s.chunks.push(u8);
 }
 
+function fallbackBlob(s, saveId, note) {
+  const blob = new Blob(s.chunks, { type: s.mime });
+  const url = URL.createObjectURL(blob);
+  chrome.runtime.sendMessage({ to: 'sw', type: 'os-url', saveId, url, size: blob.size, note: note || '' }).catch(() => {});
+}
+
 async function handleOsMessage(msg) {
   if (msg.type === 'os-save-begin') {
-    const root = await dirGranted();
-    saves.set(msg.saveId, { chunks: [], mime: msg.mime || 'video/mp4', fs: !!root, filename: msg.filename });
-    return { ok: true, fs: !!root };
+    const root = await loadDirHandle();
+    saves.set(msg.saveId, { chunks: [], mime: msg.mime || 'video/mp4', hasHandle: !!root, filename: msg.filename });
+    return { ok: true };
   }
   if (msg.type === 'os-save-chunk') {
     pushChunk(msg.saveId, msg.b64);
@@ -42,22 +54,35 @@ async function handleOsMessage(msg) {
     const s = saves.get(msg.saveId);
     if (!s) return { ok: false, error: 'no such save' };
     saves.delete(msg.saveId);
-    if (s.fs) {
-      try {
-        const fh = await resolveFileHandle(s.filename, true);
-        const w = await fh.createWritable();
-        await w.write(new Blob(s.chunks, { type: s.mime }));
-        await w.close();
-        chrome.runtime.sendMessage({ to: 'sw', type: 'os-saved', saveId: msg.saveId, ok: true }).catch(() => {});
-        return { ok: true };
-      } catch (e) {
-        chrome.runtime.sendMessage({ to: 'sw', type: 'os-saved', saveId: msg.saveId, ok: false, error: String(e?.message || e) }).catch(() => {});
-        return { ok: false, error: String(e?.message || e) };
+    if (s.hasHandle) {
+      const r = await resolveFileHandle(s.filename, true);
+      if (r.handle) {
+        try {
+          const w = await r.handle.createWritable();
+          await w.write(new Blob(s.chunks, { type: s.mime }));
+          await w.close();
+          chrome.runtime.sendMessage({ to: 'sw', type: 'os-saved', saveId: msg.saveId, ok: true }).catch(() => {});
+          return { ok: true };
+        } catch (e) {
+          const note = /NotAllowed|Security/.test(e?.name || '')
+            ? '下载目录未授权，本次已保存到默认下载目录'
+            : `写入自定义目录失败（${e?.message || e}），已保存到默认下载目录`;
+          fallbackBlob(s, msg.saveId, note);
+          return { ok: true, fallback: true };
+        }
       }
+      if (r.err === 'NOHANDLE') {
+        fallbackBlob(s, msg.saveId, '');
+        return { ok: true, fallback: true };
+      }
+      // 解析阶段就无权限（目录句柄不可访问）
+      const note = /NotAllowed|Security/.test(r.err)
+        ? '下载目录未授权，本次已保存到默认下载目录'
+        : `写入自定义目录失败（${r.err}），已保存到默认下载目录`;
+      fallbackBlob(s, msg.saveId, note);
+      return { ok: true, fallback: true };
     }
-    const blob = new Blob(s.chunks, { type: s.mime });
-    const url = URL.createObjectURL(blob);
-    chrome.runtime.sendMessage({ to: 'sw', type: 'os-url', saveId: msg.saveId, url, size: blob.size }).catch(() => {});
+    fallbackBlob(s, msg.saveId, '');
     return { ok: true };
   }
   if (msg.type === 'os-revoke') {
@@ -65,14 +90,11 @@ async function handleOsMessage(msg) {
     return { ok: true };
   }
   if (msg.type === 'os-file-exists') {
-    const root = await dirGranted();
-    if (!root) return { handled: false };
-    try {
-      await resolveFileHandle(msg.filename, false);
-      return { handled: true, exists: true };
-    } catch {
-      return { handled: true, exists: false };
-    }
+    const r = await resolveFileHandle(msg.filename, false);
+    if (r.handle) return { handled: true, exists: true };
+    if (r.err === 'NotFoundError') return { handled: true, exists: false };
+    // 无句柄 / 无权限 / 其它错误：交给默认目录的判断逻辑
+    return { handled: false };
   }
   return { ok: true };
 }

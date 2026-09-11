@@ -15,15 +15,15 @@ export function saveViaExtension(chunks, filename, mime, { conflictAction = 'uni
   const CHUNK = 4 * 1024 * 1024;
   return new Promise((resolve) => {
     let settled = false;
-    const finish = (ok, error) => {
+    const finish = (ok, error, note) => {
       if (settled) return;
       settled = true;
       chrome.runtime.onMessage.removeListener(onMsg);
       clearTimeout(timer);
-      resolve({ ok, error: error || '' });
+      resolve({ ok, error: error || '', note: note || '' });
     };
     const onMsg = (msg) => {
-      if (msg?.type === 'dl-settled' && msg.saveId === saveId) finish(!!msg.ok, msg.error);
+      if (msg?.type === 'dl-settled' && msg.saveId === saveId) finish(!!msg.ok, msg.error, msg.note);
     };
     chrome.runtime.onMessage.addListener(onMsg);
     const timer = setTimeout(() => finish(false, '保存超时'), 10 * 60 * 1000);
