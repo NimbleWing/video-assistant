@@ -67,22 +67,22 @@ function dirHtml() {
     return `
       <div class="dirrow">
         <span class="dirname">浏览器默认下载目录</span>
-        <button class="ghost mini" data-dact="pickdir">选择目录…</button>
+        <button class="ghost mini" data-bact="pickdir">选择目录…</button>
       </div>`;
   }
   if (dirState.granted) {
     return `
       <div class="dirrow">
         <span class="dirname ok">${escapeHtml(dirState.name)}</span>
-        <button class="ghost mini" data-dact="pickdir">更换</button>
-        <button class="ghost mini" data-dact="cleardir">恢复默认</button>
+        <button class="ghost mini" data-bact="pickdir">更换</button>
+        <button class="ghost mini" data-bact="cleardir">恢复默认</button>
       </div>`;
   }
   return `
     <div class="dirrow">
       <span class="dirname warn">${escapeHtml(dirState.name)}（待授权，暂存默认目录）</span>
-      <button class="ghost mini" data-dact="reauth">重新授权</button>
-      <button class="ghost mini" data-dact="cleardir">恢复默认</button>
+      <button class="ghost mini" data-bact="reauth">重新授权</button>
+      <button class="ghost mini" data-bact="cleardir">恢复默认</button>
     </div>`;
 }
 
