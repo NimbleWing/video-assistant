@@ -5,50 +5,7 @@ import { fetchBuffer, fetchText } from '../net/http.js';
 import { parseMediaPlaylist } from './playlist.js';
 import { TsRemux } from './ts-remux.js';
 
-// 经扩展保存：内容脚本 →(分块 base64)→ SW → offscreen 组装 Blob → chrome.downloads。
-// downloads API 的 filename 支持子目录（剧集归目录依赖这一点）；锚点 download 不支持。
-function bytesToBase64(u8) {
-  let s = '';
-  const step = 0x8000;
-  for (let i = 0; i < u8.length; i += step) {
-    s += String.fromCharCode.apply(null, u8.subarray(i, i + step));
-  }
-  return btoa(s);
-}
-
-function saveViaExtension(chunks, filename, mime) {
-  const saveId = `s${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-  const CHUNK = 4 * 1024 * 1024;
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = (ok, error) => {
-      if (settled) return;
-      settled = true;
-      chrome.runtime.onMessage.removeListener(onMsg);
-      clearTimeout(timer);
-      resolve({ ok, error: error || '' });
-    };
-    const onMsg = (msg) => {
-      if (msg?.type === 'dl-settled' && msg.saveId === saveId) finish(!!msg.ok, msg.error);
-    };
-    chrome.runtime.onMessage.addListener(onMsg);
-    const timer = setTimeout(() => finish(false, '保存超时'), 10 * 60 * 1000);
-    (async () => {
-      try {
-        await chrome.runtime.sendMessage({ type: 'rv-save-begin', saveId, filename, mime });
-        for (const piece of chunks) {
-          for (let off = 0; off < piece.length; off += CHUNK) {
-            const b64 = bytesToBase64(piece.subarray(off, off + CHUNK));
-            await chrome.runtime.sendMessage({ type: 'rv-save-chunk', saveId, b64 });
-          }
-        }
-        await chrome.runtime.sendMessage({ type: 'rv-save-end', saveId });
-      } catch (e) {
-        finish(false, String(e?.message || e));
-      }
-    })();
-  });
-}
+import { saveViaExtension } from '../net/save.js';
 
 // Downloads every segment of one media playlist (decrypting if needed),
 // remuxes TS → MP4 when possible, and saves the result via a blob download.

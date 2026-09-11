@@ -2,8 +2,9 @@ import { RATES } from './core/constants.js';
 import { Logger } from './core/logger.js';
 import { pageVideo, sanitizeName, toAbsolute } from './core/utils.js';
 import { downloadQuality } from './hls/downloader.js';
+import { saveViaExtension } from './net/save.js';
 import { isPlaylistUrl, parseMasterPlaylist, parseMediaPlaylist, playlistCandidates } from './hls/playlist.js';
-import { fetchText } from './net/http.js';
+import { fetchBuffer, fetchText } from './net/http.js';
 import { collectSniffedFromPerformance, installPageHookListener, sniffedUrls } from './net/sniffer.js';
 import { getVideoInfoFresh, videoIdFromPath } from './site/video-info.js';
 import { loadSettings, saveSetting, state } from './state.js';
@@ -82,6 +83,7 @@ async function startDownload() {
       bytes: result.bytes || state.download.bytes || 0,
       filename: result.filename || filename,
     };
+    await saveCover(state.page);
     hud.toast('下载完成');
     return true;
   } catch (err) {
@@ -96,6 +98,33 @@ async function startDownload() {
   } finally {
     state.abort = null;
     pushState();
+  }
+}
+
+// 封面随视频一起保存：剧集 → 剧名/剧名.jpg（每集覆盖写同一个文件，天然只留一张，
+// 且与文件夹同名会被 Windows 当作文件夹缩略图）；单片 → 视频名.jpg。
+function sniffImageExt(u8) {
+  if (u8.length > 3 && u8[0] === 0xff && u8[1] === 0xd8 && u8[2] === 0xff) return 'jpg';
+  if (u8.length > 8 && u8[0] === 0x89 && u8[1] === 0x50 && u8[2] === 0x4e && u8[3] === 0x47) return 'png';
+  if (u8.length > 12 && u8[8] === 0x57 && u8[9] === 0x45 && u8[10] === 0x42 && u8[11] === 0x50) return 'webp';
+  return 'jpg';
+}
+
+async function saveCover(page) {
+  try {
+    const isSeries = !!page?.seriesName;
+    const coverUrl = isSeries ? page?.seriesCoverUrl : page?.coverUrl;
+    if (!coverUrl) return;
+    const buf = new Uint8Array(await fetchBuffer(coverUrl));
+    if (!buf.length) return;
+    const ext = sniffImageExt(buf);
+    const base = isSeries
+      ? `${sanitizeName(page.seriesName)}/${sanitizeName(page.seriesName)}`
+      : sanitizeName(page?.name || 'rouvideo');
+    const r = await saveViaExtension([buf], `${base}.${ext}`, `image/${ext === 'jpg' ? 'jpeg' : ext}`, { conflictAction: 'overwrite' });
+    if (!r.ok) Logger.warn('COVER', `封面保存失败: ${r.error}`);
+  } catch (e) {
+    Logger.warn('COVER', `封面下载失败: ${e?.message || e}`);
   }
 }
 

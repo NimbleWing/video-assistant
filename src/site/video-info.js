@@ -44,6 +44,8 @@ function videoInfoFromData(data) {
     videoUrl,
     duration: video.duration || 0,
     seriesName: series?.nameZh || series?.name || '',
+    seriesCoverUrl: series?.coverImageUrl || '',
+    coverUrl: video.coverImageUrl || '',
   };
 }
 

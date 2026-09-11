@@ -78,11 +78,12 @@ async function onOSUrl(msg) {
   if (!meta) return;
   meta.url = msg.url;
   try {
+    const conflictAction = meta.conflictAction === 'overwrite' ? 'overwrite' : 'uniquify';
     const downloadId = await chrome.downloads.download({
       url: msg.url,
       filename: meta.filename,
       saveAs: false,
-      conflictAction: 'uniquify',
+      conflictAction,
     });
     const listener = (delta) => {
       if (delta.id !== downloadId) return;
@@ -118,7 +119,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'rv-save-begin' && sender.tab) {
-    activeSaves.set(message.saveId, { filename: message.filename, tabId: sender.tab.id, url: null });
+    activeSaves.set(message.saveId, {
+      filename: message.filename,
+      tabId: sender.tab.id,
+      url: null,
+      conflictAction: message.conflictAction,
+    });
     ensureOffscreen()
       .then(() => chrome.runtime.sendMessage({ type: 'os-save-begin', saveId: message.saveId, mime: message.mime }))
       .then(() => sendResponse({ ok: true }))
