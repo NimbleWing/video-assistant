@@ -50,16 +50,66 @@ async function pullBatch() {
 async function pullDir() {
   const h = await loadDirHandle();
   const granted = await dirGranted();
-  if (!h) dirState = { name: null, granted: null };
-  else dirState = { name: h.name, granted: granted === h };
+  if (!h) dirState = { name: null, path: null, granted: null };
+  else {
+    let path = null;
+    try {
+      const flag = (await chrome.storage.local.get('rv-hud:fsdir'))['rv-hud:fsdir'];
+      path = flag?.path || null;
+    } catch {}
+    dirState = { name: h.name, path, granted: granted === h };
+  }
 }
 
 async function syncDirFlag() {
-  // 供 SW 快速判断是否走自定义目录直查（避免无谓唤醒 offscreen）
+  // 供 SW 快速判断是否走自定义目录直查（避免无谓唤醒 offscreen）；
+  // path 仅用于面板显示完整路径
   try {
-    if (dirState.name) await chrome.storage.local.set({ 'rv-hud:fsdir': { name: dirState.name } });
+    if (dirState.name) await chrome.storage.local.set({ 'rv-hud:fsdir': { name: dirState.name, path: dirState.path || '' } });
     else await chrome.storage.local.remove('rv-hud:fsdir');
   } catch {}
+}
+
+// 浏览器不向页面暴露目录句柄的绝对路径；借一次系统"另存为"对话框
+// （保存 2 字节占位到所选文件夹）从下载记录读取绝对路径，随后删除文件。
+async function recordDirPath() {
+  toast('请在对话框中进入所选文件夹并保存（文件会自动删除）');
+  let id;
+  try {
+    id = await chrome.downloads.download({
+      url: 'data:text/plain;base64,AA==',
+      filename: 'rv-path.tmp',
+      saveAs: true,
+    });
+  } catch {
+    toast('已取消，路径未记录');
+    return;
+  }
+  const item = await new Promise((resolve) => {
+    const timer = setTimeout(() => { chrome.downloads.onChanged.removeListener(listener); resolve(null); }, 5 * 60 * 1000);
+    const listener = (delta) => {
+      if (delta.id !== id || !delta.state) return;
+      const st = delta.state.current;
+      if (st !== 'complete' && st !== 'interrupted') return;
+      clearTimeout(timer);
+      chrome.downloads.onChanged.removeListener(listener);
+      chrome.downloads.search({ id }).then(([it]) => resolve(it || null)).catch(() => resolve(null));
+    };
+    chrome.downloads.onChanged.addListener(listener);
+  });
+  try { await chrome.downloads.removeFile(id); } catch {}
+  try { await chrome.downloads.erase({ id }); } catch {}
+  if (!item || !item.filename) { toast('路径记录失败'); return; }
+  const abs = item.filename;
+  const dir = abs.slice(0, Math.max(abs.lastIndexOf('\\'), abs.lastIndexOf('/')));
+  if (dir.split(/[\\/]/).pop() !== dirState.name) {
+    toast(`保存位置「${dir.split(/[\\/]/).pop()}」与所选文件夹不一致，未记录`);
+    return;
+  }
+  dirState.path = dir;
+  await syncDirFlag();
+  toast('完整路径已记录');
+  render();
 }
 
 function dirHtml() {
@@ -70,19 +120,17 @@ function dirHtml() {
         <button class="ghost mini" data-bact="pickdir">选择目录…</button>
       </div>`;
   }
-  if (dirState.granted) {
-    return `
-      <div class="dirrow">
-        <span class="dirname ok">${escapeHtml(dirState.name)}</span>
-        <button class="ghost mini" data-bact="pickdir">更换</button>
-        <button class="ghost mini" data-bact="cleardir">恢复默认</button>
-      </div>`;
-  }
+  const label = dirState.path || dirState.name;
+  const mark = dirState.granted ? '' : '（待授权，暂存默认目录）';
+  const authBtn = dirState.granted ? '' : '<button class="ghost mini" data-bact="reauth">重新授权</button>';
+  const recBtn = dirState.path ? '' : '<button class="ghost mini" data-bact="recordpath">记录路径</button>';
   return `
     <div class="dirrow">
-      <span class="dirname warn">${escapeHtml(dirState.name)}（待授权，暂存默认目录）</span>
-      <button class="ghost mini" data-bact="reauth">重新授权</button>
-      <button class="ghost mini" data-bact="cleardir">恢复默认</button>
+      <span class="dirname ${dirState.granted ? 'ok' : 'warn'}" title="${escapeHtml(label)}">${escapeHtml(label + mark)}</span>
+      ${recBtn}
+      ${authBtn}
+      <button class="ghost mini" data-bact="pickdir">更换</button>
+      <button class="ghost mini" data-bact="cleardir">默认</button>
     </div>`;
 }
 
@@ -93,9 +141,9 @@ async function onDirAction(act) {
       await saveDirHandle(h);
       // 用句柄本体判定授权（IDB 回读的实例可能瞬时报 prompt）
       try {
-        dirState = { name: h.name, granted: (await h.queryPermission({ mode: 'readwrite' })) === 'granted' };
+        dirState = { name: h.name, path: null, granted: (await h.queryPermission({ mode: 'readwrite' })) === 'granted' };
       } catch {
-        dirState = { name: h.name, granted: true };
+        dirState = { name: h.name, path: null, granted: true };
       }
       await syncDirFlag();
       toast(`下载目录已设为「${h.name}」`);
@@ -318,6 +366,8 @@ app.addEventListener('click', (ev) => {
   } else if (bkind === 'stop') {
     cmd('batch-stop');
     toast('正在停止…');
+  } else if (bkind === 'recordpath') {
+    recordDirPath();
   } else if (bkind === 'pickdir' || bkind === 'cleardir' || bkind === 'reauth') {
     onDirAction(bkind);
   }
