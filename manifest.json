@@ -1,0 +1,71 @@
+{
+  "manifest_version": 3,
+  "name": "肉视频助手 RouVideo Assistant",
+  "version": "1.1.0",
+  "description": "从 rou.video 播放页解析并下载视频（HLS 分段自动解密、合并并封装为 MP4），支持长按方向键倍速播放/快退、画中画与复制播放地址。",
+  "author": "BExhei",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_title": "肉视频助手",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "side_panel": {
+    "default_path": "src/panel/panel.html"
+  },
+  "permissions": ["storage", "sidePanel"],
+  "host_permissions": [
+    "https://rou.video/*",
+    "https://*.rou.video/*",
+    "https://*.xyz/*",
+    "http://*.xyz/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://rou.video/v/*",
+        "https://rou.video/home",
+        "https://rou.video/search*",
+        "https://rou.video/t/*"
+      ],
+      "js": ["src/page-hook.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://rou.video/v/*",
+        "https://rou.video/home",
+        "https://rou.video/search*",
+        "https://rou.video/t/*"
+      ],
+      "js": ["src/content-loader.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "matches": ["https://rou.video/*"],
+      "resources": [
+        "src/main.js",
+        "src/state.js",
+        "src/core/*",
+        "src/net/*",
+        "src/hls/*",
+        "src/site/*",
+        "src/ui/*",
+        "src/features/*"
+      ]
+    }
+  ]
+}

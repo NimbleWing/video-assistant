@@ -1,0 +1,1725 @@
+// ==UserScript==
+// @name               肉视频助手
+// @name:en            RouVideo Assistant
+// @name:zh            肉视频助手
+// @name:zh-CN         肉视频助手
+// @name:zh-HK         肉視頻助手
+// @name:zh-SG         肉视频助手
+// @name:zh-TW         肉視頻助手
+// @description        从当前 rou.video 播放页下载视频，支持长按方向键倍速
+// @description:en     Download the current rou.video title, and hold arrow keys to play at 2×–4×
+// @description:zh     从当前 rou.video 播放页下载视频，支持长按方向键倍速
+// @description:zh-CN  从当前 rou.video 播放页下载视频，支持长按方向键倍速
+// @description:zh-HK  從當前 rou.video 播放頁下載影片，支援長按方向鍵倍速
+// @description:zh-SG  从当前 rou.video 播放页下载视频，支持长按方向键倍速
+// @description:zh-TW  從當前 rou.video 播放頁下載影片，支援長按方向鍵倍速
+// @author             BExhei
+// @namespace          rouvideo-assistant
+// @license            GPL-3.0
+// @version            1.1.0
+// @created            2026-08-29
+// @modified           2026-09-01
+// @match        https://rou.video/v/*
+// @match        https://rou.video/home
+// @match        https://rou.video/search*
+// @match        https://rou.video/t/*
+// @run-at       document-start
+// @noframes
+// @grant        GM_setClipboard
+// @grant        GM_xmlhttpRequest
+// @grant        GM.xmlHttpRequest
+// @grant        unsafeWindow
+// @connect      *
+// @connect      rou.video
+// @connect      *.rn221.xyz
+// @connect      *.rn246.xyz
+// @connect      *.rn247.xyz
+// @connect      *.rn213.xyz
+// @connect      *.rn212.xyz
+// @connect      *.rn223.xyz
+// @connect      *.rn204.xyz
+// @connect      *.rn252.xyz
+// @connect      *.rn206.xyz
+// @connect      *.rn237.xyz
+// @connect      *.rn203.xyz
+// @connect      *.rn231.xyz
+// @connect      *.rn227.xyz
+// @connect      *.rn228.xyz
+// @connect      *.rn250.xyz
+// @connect      *.rn232.xyz
+// @connect      *.rn234.xyz
+// @connect      *.rn244.xyz
+// @connect      *.rn240.xyz
+// @connect      *.rn209.xyz
+// @connect      *.xyz
+// @downloadURL https://update.sleazyfork.org/scripts/593379/%E8%82%89%E8%A7%86%E9%A2%91%E5%8A%A9%E6%89%8B.user.js
+// @updateURL https://update.sleazyfork.org/scripts/593379/%E8%82%89%E8%A7%86%E9%A2%91%E5%8A%A9%E6%89%8B.meta.js
+// ==/UserScript==
+
+(() => {
+  'use strict';
+
+  const NS = 'rv-hud';
+  const gmXhr = typeof GM_xmlhttpRequest === 'function'
+    ? GM_xmlhttpRequest
+    : (typeof GM !== 'undefined' && GM.xmlHttpRequest);
+
+  const Logger = {
+    debug(cat, msg, data) { console.debug(`[RouVideo:${cat}]`, msg, data || ''); },
+    info(cat, msg, data) { console.log(`[RouVideo:${cat}]`, msg, data || ''); },
+    warn(cat, msg, data) { console.warn(`[RouVideo:${cat}]`, msg, data || ''); },
+    error(cat, msg, data) { console.error(`[RouVideo:${cat}]`, msg, data || ''); },
+  };
+
+  const storage = {
+    get(key, fallback) {
+      try {
+        const raw = localStorage.getItem(`${NS}:${key}`);
+        return raw == null ? fallback : JSON.parse(raw);
+      } catch {
+        return fallback;
+      }
+    },
+    set(key, value) {
+      try { localStorage.setItem(`${NS}:${key}`, JSON.stringify(value)); } catch {}
+    },
+  };
+
+  function toAbsolute(url) {
+    try { return new URL(String(url || ''), location.href).href; } catch { return String(url || ''); }
+  }
+
+  function isPlaylistUrl(url) {
+    const s = String(url || '');
+    if (!s || /^blob:/i.test(s)) return false;
+    return /\/api\/hls\//i.test(s)
+      || /\.m3u8(\?|#|$)/i.test(s)
+      || /\/(?:index|master)\.(?:m3u8|jpg|jpeg|png)(\?|#|$)/i.test(s);
+  }
+
+  function playlistCandidates(videoUrl) {
+    const out = [];
+    const add = (u) => { if (u && !out.includes(u)) out.push(u); };
+    const abs = toAbsolute(videoUrl);
+    add(abs);
+    add(videoUrl);
+    try {
+      const u = new URL(abs);
+      const names = ['index.png', 'index.jpg', 'index.m3u8', 'master.m3u8'];
+      const m = u.pathname.match(/\/(index|master)\.(png|jpg|jpeg|m3u8)$/i);
+      if (m) {
+        for (const name of names) {
+          const alt = new URL(abs);
+          alt.pathname = u.pathname.replace(/\/(index|master)\.(png|jpg|jpeg|m3u8)$/i, `/${name}`);
+          add(alt.href);
+        }
+      }
+    } catch {}
+    return out;
+  }
+
+  const PNG_SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+
+  function looksLikePng(u8) {
+    if (!u8 || u8.length < PNG_SIG.length) return false;
+    for (let i = 0; i < PNG_SIG.length; i++) if (u8[i] !== PNG_SIG[i]) return false;
+    return true;
+  }
+
+  function readU32(u8, off) {
+    return ((u8[off] << 24) | (u8[off + 1] << 16) | (u8[off + 2] << 8) | u8[off + 3]) >>> 0;
+  }
+
+  async function inflateDeflate(u8) {
+    if (typeof DecompressionStream !== 'function') throw new Error('当前浏览器不支持解压播放列表');
+    const stream = new Response(u8).body.pipeThrough(new DecompressionStream('deflate'));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  }
+
+  // Site wraps HLS in a 1x1 PNG with a custom `roUd` chunk (flag&1 = zlib deflate).
+  async function unwrapRouPng(u8) {
+    let n = PNG_SIG.length;
+    while (n + 8 <= u8.length) {
+      const len = readU32(u8, n);
+      const type = readU32(u8, n + 4);
+      const start = n + 8;
+      if (start + len > u8.length) break;
+      if (type === 0x726f5564) {
+        const flag = u8[start];
+        const payload = u8.subarray(start + 1, start + len);
+        return (flag & 1) ? await inflateDeflate(payload) : payload;
+      }
+      n = start + len + 4;
+    }
+    throw new Error('PNG 中没有播放数据');
+  }
+
+  async function unwrapIfNeeded(buf) {
+    const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf || 0);
+    if (looksLikePng(u8)) return await unwrapRouPng(u8);
+    return u8;
+  }
+
+  const sniffedUrls = new Set();
+
+  function maybeSniff(url, via) {
+    if (!isPlaylistUrl(url)) return;
+    const s = String(url);
+    if (sniffedUrls.has(s)) return;
+    sniffedUrls.add(s);
+    Logger.info('SNIFF', `捕获 ${via}: ${s}`);
+  }
+
+  function collectSniffedFromPerformance() {
+    try {
+      performance.getEntriesByType('resource').forEach((entry) => {
+        maybeSniff(entry.name, 'Performance');
+      });
+    } catch {}
+  }
+
+  function hookNetwork() {
+    try {
+      const install = (win) => {
+        if (!win || win.__rvHudHooked) return;
+        win.__rvHudHooked = true;
+        try {
+          const origOpen = win.XMLHttpRequest.prototype.open;
+          win.XMLHttpRequest.prototype.open = function(method, url) {
+            maybeSniff(url, 'XHR');
+            this.addEventListener('load', () => {
+              try { maybeSniff(this.responseURL, 'XHR-final'); } catch {}
+            });
+            return origOpen.apply(this, arguments);
+          };
+        } catch {}
+        try {
+          const origFetch = win.fetch;
+          win.fetch = function(input) {
+            const url = typeof input === 'string' ? input : input?.url;
+            maybeSniff(url, 'fetch');
+            const p = origFetch.apply(this, arguments);
+            if (p && typeof p.then === 'function') {
+              p.then((resp) => { try { maybeSniff(resp && resp.url, 'fetch-final'); } catch {} });
+            }
+            return p;
+          };
+        } catch {}
+      };
+      install(window);
+      try { if (typeof unsafeWindow !== 'undefined') install(unsafeWindow); } catch {}
+      collectSniffedFromPerformance();
+      setTimeout(collectSniffedFromPerformance, 2000);
+      setTimeout(collectSniffedFromPerformance, 5000);
+    } catch (e) {
+      Logger.error('SNIFF', '网络嗅探启动失败', e.message);
+    }
+  }
+
+  hookNetwork();
+
+  function getPageFetch() {
+    try {
+      if (typeof unsafeWindow !== 'undefined' && unsafeWindow && typeof unsafeWindow.fetch === 'function') {
+        return unsafeWindow.fetch.bind(unsafeWindow);
+      }
+    } catch (e) {
+      Logger.warn('HTTP', '无法获取 unsafeWindow.fetch', e.message);
+    }
+    return null;
+  }
+
+  async function fetchWithPageContext(url, responseType = 'arraybuffer') {
+    const pageFetch = getPageFetch();
+    if (!pageFetch) throw new Error('无法获取页面 fetch');
+    const resp = await pageFetch(toAbsolute(url), {
+      method: 'GET',
+      credentials: 'omit',
+      mode: 'cors',
+      redirect: 'follow',
+      referrer: location.href,
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    if (responseType === 'arraybuffer') return await resp.arrayBuffer();
+    return await resp.text();
+  }
+
+  function gmRequest(url, responseType, headers) {
+    return new Promise((resolve, reject) => {
+      if (!gmXhr) {
+        reject(new Error('GM_xmlhttpRequest 不可用'));
+        return;
+      }
+      gmXhr({
+        method: 'GET',
+        url: toAbsolute(url),
+        responseType,
+        headers: Object.assign({
+          Referer: 'https://rou.video/',
+          Origin: 'https://rou.video',
+        }, headers || {}),
+        timeout: responseType === 'arraybuffer' ? 60000 : 30000,
+        onload: (res) => {
+          if (res.status >= 200 && res.status < 400) resolve(res.response);
+          else reject(new Error(`HTTP ${res.status}`));
+        },
+        onerror: (res) => reject(new Error(res?.error || 'network error')),
+        ontimeout: () => reject(new Error('timeout')),
+      });
+    });
+  }
+
+  async function fetchRaw(url, headers) {
+    const raw = await fetchWithPageContext(url, 'arraybuffer').catch(() => gmRequest(url, 'arraybuffer', headers));
+    return raw instanceof Uint8Array ? raw : new Uint8Array(raw);
+  }
+
+  async function fetchBuffer(url, headers) {
+    return unwrapIfNeeded(await fetchRaw(url, headers));
+  }
+
+  async function fetchText(url, headers) {
+    const u8 = await fetchBuffer(url, headers);
+    return new TextDecoder('utf-8').decode(u8);
+  }
+
+  function hexToBytes(hex) {
+    const clean = hex.length % 2 ? '0' + hex : hex;
+    const out = new Uint8Array(clean.length / 2);
+    for (let i = 0; i < out.length; i++) out[i] = parseInt(clean.substr(i * 2, 2), 16);
+    return out;
+  }
+
+  function sequenceIv(seq) {
+    const iv = new Uint8Array(16);
+    const view = new DataView(iv.buffer);
+    view.setUint32(12, seq >>> 0);
+    return iv;
+  }
+
+  async function decryptAes(buffer, keyBytes, iv) {
+    const cryptoKey = await crypto.subtle.importKey('raw', keyBytes, { name: 'AES-CBC' }, false, ['decrypt']);
+    const plain = await crypto.subtle.decrypt({ name: 'AES-CBC', iv }, cryptoKey, buffer);
+    return new Uint8Array(plain);
+  }
+
+  function resolveUrl(base, path) {
+    if (/^https?:\/\//i.test(path)) return path;
+    try {
+      const resolved = new URL(path, base);
+      if (!resolved.search && path.indexOf('?') < 0) {
+        const baseU = new URL(base);
+        if (baseU.search) resolved.search = baseU.search;
+      }
+      return resolved.href;
+    } catch { return path; }
+  }
+
+  function sanitizeName(name) {
+    return String(name || 'video').replace(/[\\/:*?"<>|\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120) || 'video';
+  }
+
+  function formatBytes(n) {
+    if (!n || n < 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let i = 0; let v = n;
+    while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+    return `${v >= 10 || i === 0 ? v.toFixed(0) : v.toFixed(1)} ${units[i]}`;
+  }
+
+  function formatEta(seconds) {
+    if (!Number.isFinite(seconds) || seconds < 0) return '—';
+    const s = Math.round(seconds);
+    if (s < 60) return `${s}s`;
+    const m = Math.floor(s / 60);
+    const r = s % 60;
+    if (m < 60) return `${m}m ${r}s`;
+    const h = Math.floor(m / 60);
+    return `${h}h ${m % 60}m`;
+  }
+
+  function formatDuration(sec) {
+    const s = Math.max(0, Math.round(Number(sec) || 0));
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const r = s % 60;
+    if (h) return `${h}:${String(m).padStart(2, '0')}:${String(r).padStart(2, '0')}`;
+    return `${m}:${String(r).padStart(2, '0')}`;
+  }
+
+  function getNextData() {
+    const script = document.getElementById('__NEXT_DATA__');
+    if (!script) return null;
+    try { return JSON.parse(script.textContent); } catch { return null; }
+  }
+
+  function decodeEv(ev) {
+    if (!ev || !ev.d || !ev.k) return null;
+    try {
+      const decoded = atob(ev.d);
+      const jsonStr = decoded.split('').map((c) => String.fromCharCode(c.charCodeAt(0) - ev.k)).join('');
+      return JSON.parse(jsonStr);
+    } catch {
+      return null;
+    }
+  }
+
+  function videoIdFromPath() {
+    const m = location.pathname.match(/^\/v\/([^/?#]+)/);
+    return m ? decodeURIComponent(m[1]) : '';
+  }
+
+  function videoInfoFromData(data) {
+    const pageProps = data?.props?.pageProps || data?.pageProps;
+    const video = pageProps?.video;
+    if (!video) return null;
+    const decoded = decodeEv(pageProps.ev);
+    if (!decoded) return null;
+    const videoUrl = decoded.videoUrl ? toAbsolute(decoded.videoUrl) : '';
+    return {
+      id: video.id,
+      name: video.name || video.nameZh || 'unknown',
+      masterM3u8: videoUrl,
+      videoUrl,
+      duration: video.duration || 0,
+    };
+  }
+
+  function getVideoInfo() {
+    const info = videoInfoFromData(getNextData());
+    const id = videoIdFromPath();
+    if (info && (!id || info.id === id)) return info;
+    return null;
+  }
+
+  async function getVideoInfoFresh() {
+    const local = getVideoInfo();
+    if (local) return local;
+    const id = videoIdFromPath();
+    if (!id) return null;
+    try {
+      const html = await fetch(location.href, { credentials: 'include', cache: 'no-cache' }).then((r) => r.text());
+      const match = html.match(/<script id="__NEXT_DATA__" type="application\/json">([^<]+)<\/script>/);
+      if (!match) return null;
+      return videoInfoFromData(JSON.parse(match[1]));
+    } catch (e) {
+      Logger.warn('INFO', '刷新页面数据失败', e.message);
+      return null;
+    }
+  }
+
+  function parseMasterPlaylist(text, baseUrl) {
+    const lines = text.split(/\r?\n/);
+    const variants = [];
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line.startsWith('#EXT-X-STREAM-INF:')) continue;
+      const meta = line.slice('#EXT-X-STREAM-INF:'.length);
+      let next = '';
+      for (let j = i + 1; j < lines.length; j++) {
+        if (lines[j].trim() && !lines[j].trim().startsWith('#')) { next = lines[j].trim(); break; }
+      }
+      if (!next) continue;
+      const res = (meta.match(/RESOLUTION=(\d+x\d+)/i) || [])[1] || '';
+      const bw = Number((meta.match(/BANDWIDTH=(\d+)/i) || [])[1] || 0);
+      const name = (meta.match(/NAME="?([^",]+)"?/i) || [])[1] || '';
+      const height = Number((res.split('x')[1] || name.match(/(\d{3,4})/)?.[1] || 0));
+      variants.push({
+        label: name || (height ? `${height}p` : 'Source'),
+        resolution: res,
+        bandwidth: bw,
+        height: height || 0,
+        url: resolveUrl(baseUrl, next),
+        prefix: resolveUrl(baseUrl, next.replace(/[^/]+$/, '')),
+      });
+    }
+    variants.sort((a, b) => (b.height - a.height) || (b.bandwidth - a.bandwidth));
+    return variants;
+  }
+
+  function parseMediaPlaylist(text, baseUrl) {
+    const lines = text.split(/\r?\n/);
+    const segments = [];
+    let keyUri = '';
+    let keyIv = null;
+    let seq = 0;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (line.startsWith('#EXT-X-MEDIA-SEQUENCE:')) {
+        seq = Number(line.split(':')[1]) || 0;
+      } else if (line.startsWith('#EXT-X-KEY:')) {
+        const method = (line.match(/METHOD=([^,]+)/) || [])[1];
+        if (method === 'NONE') { keyUri = ''; keyIv = null; }
+        else if (method === 'AES-128') {
+          const uri = (line.match(/URI="([^"]+)"/) || [])[1] || '';
+          const ivHex = (line.match(/IV=0x([0-9a-f]+)/i) || [])[1];
+          keyUri = resolveUrl(baseUrl, uri);
+          keyIv = ivHex ? hexToBytes(ivHex) : null;
+        }
+      } else if (line.startsWith('#EXTINF')) {
+        let path = '';
+        for (let j = i + 1; j < lines.length; j++) {
+          if (lines[j].trim() && !lines[j].trim().startsWith('#')) { path = lines[j].trim(); break; }
+        }
+        if (!path) continue;
+        const iv = keyIv || sequenceIv(seq);
+        const duration = Number((line.match(/#EXTINF:([\d.]+)/) || [])[1] || 0);
+        segments.push({ url: resolveUrl(baseUrl, path), iv, seq, duration });
+        seq++;
+      }
+    }
+    const duration = segments.reduce((sum, seg) => sum + (Number(seg.duration) || 0), 0);
+    return { segments, keyUri, duration };
+  }
+
+  const TsRemux = (function () {
+  'use strict';
+
+  function concat(parts) {
+    let n = 0;
+    for (const p of parts) n += p.length;
+    const out = new Uint8Array(n);
+    let o = 0;
+    for (const p of parts) { out.set(p, o); o += p.length; }
+    return out;
+  }
+
+  function u32(n) {
+    const b = new Uint8Array(4);
+    new DataView(b.buffer).setUint32(0, n >>> 0);
+    return b;
+  }
+
+  function u16(n) {
+    const b = new Uint8Array(2);
+    new DataView(b.buffer).setUint16(0, n & 0xffff);
+    return b;
+  }
+
+  function box(type, payload) {
+    const out = new Uint8Array(8 + payload.length);
+    new DataView(out.buffer).setUint32(0, out.length);
+    out[4] = type.charCodeAt(0);
+    out[5] = type.charCodeAt(1);
+    out[6] = type.charCodeAt(2);
+    out[7] = type.charCodeAt(3);
+    out.set(payload, 8);
+    return out;
+  }
+
+  function fullBox(type, ver, flags, payload) {
+    const head = new Uint8Array(4);
+    head[0] = ver;
+    head[1] = (flags >> 16) & 255;
+    head[2] = (flags >> 8) & 255;
+    head[3] = flags & 255;
+    return box(type, concat([head, payload]));
+  }
+
+  function isMpegTs(buf) {
+    if (!buf || buf.length < 188) return false;
+    let hits = 0, n = 0;
+    for (let i = 0; i + 188 <= Math.min(buf.length, 188 * 10); i += 188) {
+      n++;
+      if (buf[i] === 0x47) hits++;
+    }
+    return n > 0 && hits / n >= 0.8;
+  }
+
+  class Bits {
+    constructor(u8) { this.d = u8; this.p = 0; }
+    u(n) {
+      let v = 0;
+      while (n--) {
+        const bi = this.p >> 3, bo = 7 - (this.p & 7);
+        v = (v << 1) | ((this.d[bi] >> bo) & 1);
+        this.p++;
+      }
+      return v;
+    }
+    ue() {
+      let z = 0;
+      while (this.u(1) === 0) z++;
+      return z ? ((1 << z) - 1) + this.u(z) : 0;
+    }
+    se() {
+      const v = this.ue();
+      return (v & 1) ? (v + 1) >> 1 : -(v >> 1);
+    }
+  }
+
+  function parseSps(nal) {
+    const r = new Bits(nal);
+    r.u(8);
+    const profile = r.u(8);
+    r.u(8);
+    r.u(8);
+    r.ue();
+    if ([100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135].indexOf(profile) >= 0) {
+      const chroma = r.ue();
+      if (chroma === 3) r.u(1);
+      r.ue();
+      r.ue();
+      r.u(1);
+      if (r.u(1)) return { width: 0, height: 0, profile };
+    }
+    r.ue();
+    const poc = r.ue();
+    if (poc === 0) r.ue();
+    else if (poc === 1) {
+      r.u(1); r.se(); r.se();
+      const n = r.ue();
+      for (let i = 0; i < n; i++) r.se();
+    }
+    r.ue();
+    r.u(1);
+    const wM1 = r.ue();
+    const hM1 = r.ue();
+    const frameMbsOnly = r.u(1);
+    if (!frameMbsOnly) r.u(1);
+    r.u(1);
+    let cL = 0, cR = 0, cT = 0, cB = 0;
+    if (r.u(1)) { cL = r.ue(); cR = r.ue(); cT = r.ue(); cB = r.ue(); }
+    return {
+      width: (wM1 + 1) * 16 - (cL + cR) * 2,
+      height: (2 - frameMbsOnly) * (hM1 + 1) * 16 - (cT + cB) * 2,
+      profile,
+    };
+  }
+
+  function splitNals(data) {
+    const nals = [];
+    let i = 0;
+    const find = (from) => {
+      for (let p = from; p + 3 < data.length; p++) {
+        if (data[p] === 0 && data[p + 1] === 0) {
+          if (data[p + 2] === 1) return p;
+          if (p + 3 < data.length && data[p + 2] === 0 && data[p + 3] === 1) return p;
+        }
+      }
+      return -1;
+    };
+    let start = find(0);
+    while (start >= 0) {
+      const sc = (data[start + 2] === 1) ? 3 : 4;
+      const next = find(start + sc);
+      const end = next < 0 ? data.length : next;
+      let s = start + sc;
+      while (s < end && data[s] === 0 && s + 1 === end) s++;
+      if (end - (start + sc) > 0) nals.push(data.subarray(start + sc, end));
+      start = next;
+    }
+    return nals;
+  }
+
+  function nalsToAvcc(nals) {
+    const parts = [];
+    for (const nal of nals) {
+      parts.push(u32(nal.length), nal);
+    }
+    return concat(parts);
+  }
+
+  function parsePts(d, off) {
+    return ((d[off] & 0x0e) << 29) +
+      ((d[off + 1] & 0xff) << 22) +
+      ((d[off + 2] & 0xfe) << 14) +
+      ((d[off + 3] & 0xff) << 7) +
+      ((d[off + 4] & 0xfe) >> 1);
+  }
+
+  const ADTS_RATES = [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350];
+
+  function demuxTs(ts) {
+    const pesAcc = {};
+    const es = {};
+
+    const finishPes = (pid) => {
+      const acc = pesAcc[pid];
+      if (!acc || !acc.payload.length) return;
+      const sid = acc.sid;
+      const stream = es[pid] || (es[pid] = { sid, chunks: [], len: 0, ptsAt: [] });
+      stream.sid = sid;
+      if (acc.pts != null) stream.ptsAt.push({ off: stream.len, pts: acc.pts });
+      stream.chunks.push(acc.payload);
+      stream.len += acc.payload.length;
+      pesAcc[pid] = null;
+    };
+
+    const pushPes = (pid, payload, pusi) => {
+      if (pusi) {
+        finishPes(pid);
+        if (payload.length < 9 || payload[0] !== 0 || payload[1] !== 0 || payload[2] !== 1) return;
+        const sid = payload[3];
+        const hlen = payload[8];
+        const flags = payload[7];
+        let pts = null;
+        if (flags & 0x80) pts = parsePts(payload, 9);
+        pesAcc[pid] = { sid, pts, payload: payload.subarray(9 + hlen) };
+      } else if (pesAcc[pid]) {
+        const a = pesAcc[pid].payload;
+        const n = new Uint8Array(a.length + payload.length);
+        n.set(a);
+        n.set(payload, a.length);
+        pesAcc[pid].payload = n;
+      }
+    };
+
+    let i = 0;
+    while (i < ts.length && ts[i] !== 0x47) i++;
+    for (; i + 188 <= ts.length; i += 188) {
+      if (ts[i] !== 0x47) {
+        while (i < ts.length && ts[i] !== 0x47) i++;
+        continue;
+      }
+      const pkt = ts.subarray(i, i + 188);
+      const pusi = (pkt[1] & 0x40) !== 0;
+      const pid = ((pkt[1] & 0x1f) << 8) | pkt[2];
+      if (pid === 0x1fff) continue;
+      const afc = (pkt[3] >> 4) & 3;
+      let off = 4;
+      if (afc === 2 || afc === 3) off = 5 + pkt[4];
+      if (off >= 188) continue;
+      if (afc === 1 || afc === 3) pushPes(pid, pkt.subarray(off), pusi);
+    }
+    for (const pid of Object.keys(pesAcc)) finishPes(pid);
+
+    let sps, pps, width = 0, height = 0, profile = 100, level = 31;
+    let sampleRate = 44100, channels = 2, aacProfile = 2;
+    const video = [];
+    const audio = [];
+
+    const ptsFor = (stream, off, fallback) => {
+      let pts = fallback;
+      for (let k = 0; k < stream.ptsAt.length; k++) {
+        if (stream.ptsAt[k].off <= off) pts = stream.ptsAt[k].pts;
+        else break;
+      }
+      return pts;
+    };
+
+    for (const pid of Object.keys(es)) {
+      const stream = es[pid];
+      const data = concat(stream.chunks);
+      if (stream.sid >= 0xe0 && stream.sid <= 0xef) {
+        const nals = splitNals(data);
+        let group = [];
+        let groupOff = 0;
+        let lastPts = stream.ptsAt[0] ? stream.ptsAt[0].pts : 0;
+        const flushAu = () => {
+          const usable = group.filter((n) => {
+            const t = n[0] & 0x1f;
+            return t !== 7 && t !== 8 && t !== 9;
+          });
+          if (!usable.length) { group = []; return; }
+          let pts = ptsFor(stream, groupOff, lastPts);
+          if (pts < lastPts - 0x10000000) pts += 0x200000000;
+          video.push({
+            data: nalsToAvcc(usable),
+            pts,
+            isKey: usable.some((n) => (n[0] & 0x1f) === 5),
+          });
+          lastPts = pts;
+          group = [];
+        };
+        let cursor = 0;
+        for (const nal of nals) {
+          const t = nal[0] & 0x1f;
+          if (t === 7) {
+            sps = new Uint8Array(nal);
+            try {
+              const info = parseSps(sps);
+              if (info.width > 0) { width = info.width; height = info.height; profile = info.profile; }
+            } catch {}
+          } else if (t === 8) pps = new Uint8Array(nal);
+          if (t === 9 || ((t === 1 || t === 5) && group.length && (group[0][0] & 0x1f) !== 9 && (nal[1] & 0x80))) {
+            flushAu();
+            groupOff = cursor;
+          }
+          group.push(nal);
+          cursor += nal.length + 4;
+        }
+        flushAu();
+      } else if (stream.sid >= 0xc0 && stream.sid <= 0xdf) {
+        let p = 0;
+        let lastA = stream.ptsAt[0] ? stream.ptsAt[0].pts : 0;
+        while (p + 7 <= data.length) {
+          if (data[p] !== 0xff || (data[p + 1] & 0xf0) !== 0xf0) { p++; continue; }
+          const prot = data[p + 1] & 1;
+          aacProfile = ((data[p + 2] >> 6) & 3) + 1;
+          const sri = (data[p + 2] >> 2) & 0x0f;
+          sampleRate = ADTS_RATES[sri] || sampleRate;
+          channels = ((data[p + 2] & 1) << 2) | ((data[p + 3] >> 6) & 3);
+          const len = ((data[p + 3] & 3) << 11) | (data[p + 4] << 3) | ((data[p + 5] >> 5) & 7);
+          const hdr = prot ? 7 : 9;
+          if (len < hdr || p + len > data.length) break;
+          let pts = ptsFor(stream, p, lastA);
+          if (pts < lastA - 0x10000000) pts += 0x200000000;
+          audio.push({ data: new Uint8Array(data.subarray(p + hdr, p + len)), pts });
+          lastA = pts;
+          p += len;
+        }
+      }
+    }
+
+    return {
+      video,
+      audio,
+      meta: { width: width || 1280, height: height || 720, profile: profile || 100, level: level || 31, sps, pps, sampleRate, channels, aacProfile },
+    };
+  }
+
+  function stts(samples, timescale, getPts, getDurFallback) {
+    const entries = [];
+    for (let i = 0; i < samples.length; i++) {
+      let dur;
+      if (i + 1 < samples.length) dur = Math.max(1, getPts(samples[i + 1]) - getPts(samples[i]));
+      else dur = getDurFallback;
+      if (entries.length && entries[entries.length - 1].dur === dur) entries[entries.length - 1].cnt++;
+      else entries.push({ cnt: 1, dur });
+    }
+    const body = [u32(entries.length)];
+    for (const e of entries) body.push(u32(e.cnt), u32(e.dur));
+    return fullBox('stts', 0, 0, concat(body));
+  }
+
+  function muxMp4(demuxed) {
+    const { video, audio, meta } = demuxed;
+    if (!video.length) throw new Error('没有视频帧');
+    if (!meta.sps || !meta.pps) throw new Error('缺少 SPS/PPS');
+
+    const vTimescale = 90000;
+    const aTimescale = meta.sampleRate || 44100;
+    const vStart = video[0].pts;
+    const aStart = audio.length ? audio[0].pts : vStart;
+
+    const vDurs = [];
+    for (let i = 0; i < video.length; i++) {
+      const p = video[i].pts - vStart;
+      video[i].rel = p;
+      if (i + 1 < video.length) vDurs.push(Math.max(1, video[i + 1].pts - video[i].pts));
+    }
+    const vFallback = vDurs.length ? vDurs[vDurs.length - 1] : Math.round(vTimescale / 30);
+    if (vDurs.length < video.length) vDurs.push(vFallback);
+    let vDuration = vDurs.reduce((a, b) => a + b, 0);
+    if (audio.length) {
+      const aTicks = Math.round(audio.length * 1024 * vTimescale / aTimescale);
+      if (aTicks > 0 && (vDuration > aTicks * 1.12 || vDuration < aTicks * 0.75)) {
+        const tick = Math.max(1, Math.round(aTicks / video.length));
+        for (let i = 0; i < video.length; i++) video[i].pts = vStart + i * tick;
+        vDuration = tick * video.length;
+      }
+    }
+
+    const aDurs = [];
+    const aFrameDur = Math.round(1024 * 90000 / aTimescale);
+    for (let i = 0; i < audio.length; i++) {
+      audio[i].rel = (audio[i].pts == null ? vStart : audio[i].pts) - aStart;
+      if (i + 1 < audio.length) aDurs.push(Math.max(1, audio[i + 1].pts - audio[i].pts));
+      else aDurs.push(aFrameDur);
+    }
+    const aDuration = aDurs.reduce((a, b) => a + b, 0);
+    const duration = Math.max(vDuration, aDuration);
+
+    const mdats = [];
+    const vOff = [];
+    const aOff = [];
+    let cursor = 0;
+    let vi = 0, ai = 0;
+    while (vi < video.length || ai < audio.length) {
+      const takeA = ai < audio.length && (vi >= video.length || audio[ai].pts <= video[vi].pts);
+      if (takeA) {
+        aOff.push(cursor);
+        mdats.push(audio[ai].data);
+        cursor += audio[ai].data.length;
+        ai++;
+      } else {
+        vOff.push(cursor);
+        mdats.push(video[vi].data);
+        cursor += video[vi].data.length;
+        vi++;
+      }
+    }
+    const mdatPayload = concat(mdats);
+
+    const avcC = concat([
+      new Uint8Array([1, meta.sps[1], meta.sps[2], meta.sps[3], 0xff, 0xe1]),
+      u16(meta.sps.length), meta.sps,
+      new Uint8Array([1]),
+      u16(meta.pps.length), meta.pps,
+    ]);
+
+    const avc1 = box('avc1', concat([
+      new Uint8Array(6), u16(1),
+      new Uint8Array(16),
+      u16(meta.width), u16(meta.height),
+      new Uint8Array([0x00, 0x48, 0x00, 0x00, 0x00, 0x48, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01]),
+      new Uint8Array(32),
+      new Uint8Array([0x00, 0x18, 0xff, 0xff]),
+      box('avcC', avcC),
+    ]));
+
+    const freqIdx = Math.max(0, ADTS_RATES.indexOf(aTimescale));
+    const asc = new Uint8Array(2);
+    const obj = Math.min(meta.aacProfile, 4);
+    asc[0] = (obj << 3) | ((freqIdx >> 1) & 7);
+    asc[1] = ((freqIdx & 1) << 7) | ((meta.channels & 15) << 3);
+
+    const esds = fullBox('esds', 0, 0, concat([
+      new Uint8Array([0x03, 0x19, 0x00, 0x01, 0x00]),
+      new Uint8Array([0x04, 0x11, 0x40, 0x15, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]),
+      new Uint8Array([0x05, 0x02]), asc,
+      new Uint8Array([0x06, 0x01, 0x02]),
+    ]));
+
+    const mp4a = box('mp4a', concat([
+      new Uint8Array(6), u16(1),
+      new Uint8Array(8),
+      u16(meta.channels), u16(16), new Uint8Array(4),
+      u16(aTimescale), u16(0),
+      esds,
+    ]));
+
+    function trak(id, isVideo) {
+      const samples = isVideo ? video : audio;
+      const timescale = isVideo ? vTimescale : aTimescale;
+      const dur = isVideo ? vDuration : aDuration;
+      const mdhdDur = isVideo ? vDuration : (audio.length * 1024);
+      const tkhd = fullBox('tkhd', 0, 3, concat([
+        u32(0), u32(0), u32(id), u32(0), u32(dur),
+        new Uint8Array(8), u16(0), u16(0), u16(0), u16(0),
+        new Uint8Array([0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x40, 0, 0, 0]),
+        u32(isVideo ? meta.width << 16 : 0), u32(isVideo ? meta.height << 16 : 0),
+      ]));
+      const mdhd = fullBox('mdhd', 0, 0, concat([
+        u32(0), u32(0), u32(timescale), u32(isVideo ? vDuration : mdhdDur),
+        u16(0x55c4), u16(0),
+      ]));
+      const hdlr = fullBox('hdlr', 0, 0, concat([
+        u32(0),
+        new Uint8Array([isVideo ? 0x76 : 0x73, isVideo ? 0x69 : 0x6f, isVideo ? 0x64 : 0x75, isVideo ? 0x65 : 0x6e]),
+        new Uint8Array(12),
+        new Uint8Array(isVideo ? [0x56, 0x69, 0x64, 0x65, 0x6f, 0x48, 0x61, 0x6e, 0x64, 0x6c, 0x65, 0x72, 0] : [0x53, 0x6f, 0x75, 0x6e, 0x64, 0x48, 0x61, 0x6e, 0x64, 0x6c, 0x65, 0x72, 0]),
+      ]));
+      const mediaHead = isVideo ? box('vmhd', new Uint8Array([0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0])) : box('smhd', new Uint8Array([0, 0, 0, 0, 0, 0, 0, 0]));
+      const dinf = box('dinf', box('dref', concat([new Uint8Array([0, 0, 0, 0]), u32(1), fullBox('url ', 0, 1, new Uint8Array(0))])));
+      const stsd = fullBox('stsd', 0, 0, concat([u32(1), isVideo ? avc1 : mp4a]));
+      const sttsBox = isVideo
+        ? stts(video, vTimescale, (s) => s.pts, vFallback)
+        : (() => {
+          const entries = [{ cnt: audio.length, dur: 1024 }];
+          return fullBox('stts', 0, 0, concat([u32(1), u32(entries[0].cnt), u32(1024)]));
+        })();
+      let stssBox = new Uint8Array(0);
+      if (isVideo) {
+        const keys = [];
+        for (let i = 0; i < video.length; i++) if (video[i].isKey) keys.push(i + 1);
+        if (!keys.length) keys.push(1);
+        const body = [u32(keys.length)];
+        for (const k of keys) body.push(u32(k));
+        stssBox = fullBox('stss', 0, 0, concat(body));
+      }
+      const stsc = fullBox('stsc', 0, 0, concat([u32(1), u32(1), u32(1), u32(1)]));
+      const sz = [u32(0), u32(samples.length)];
+      for (const s of samples) sz.push(u32(s.data.length));
+      const stsz = fullBox('stsz', 0, 0, concat(sz));
+      const co = [u32(samples.length)];
+      const offs = isVideo ? vOff : aOff;
+      for (const o of offs) co.push(u32(o));
+      const stco = fullBox('stco', 0, 0, concat(co));
+      const stbl = box('stbl', concat([stsd, sttsBox, stssBox, stsc, stsz, stco].filter((x) => x.length)));
+      const minf = box('minf', concat([mediaHead, dinf, stbl]));
+      const mdia = box('mdia', concat([mdhd, hdlr, minf]));
+      return box('trak', concat([tkhd, mdia]));
+    }
+
+    const mvhd = fullBox('mvhd', 0, 0, concat([
+      u32(0), u32(0), u32(vTimescale), u32(duration),
+      u32(0x00010000), u16(0x0100), u16(0), new Uint8Array(8),
+      new Uint8Array([0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x40, 0, 0, 0]),
+      new Uint8Array(24), u32(audio.length ? 3 : 2),
+    ]));
+
+    const moovParts = [mvhd, trak(1, true)];
+    if (audio.length) moovParts.push(trak(2, false));
+    const moov = box('moov', concat(moovParts));
+    const ftyp = box('ftyp', concat([
+      new Uint8Array([0x69, 0x73, 0x6f, 0x6d]), u32(0x200),
+      new Uint8Array([0x69, 0x73, 0x6f, 0x6d, 0x69, 0x73, 0x6f, 0x32, 0x61, 0x76, 0x63, 0x31, 0x6d, 0x70, 0x34, 0x31]),
+    ]));
+
+    const mdatHead = 8;
+    const mdatOffset = ftyp.length + moov.length + mdatHead;
+    function patchStco(mp4) {
+      const view = new DataView(mp4.buffer, mp4.byteOffset, mp4.byteLength);
+      const walk = (start, end) => {
+        let off = start;
+        while (off + 8 <= end) {
+          const size = view.getUint32(off);
+          if (size < 8 || off + size > end) break;
+          const typ = String.fromCharCode(mp4[off + 4], mp4[off + 5], mp4[off + 6], mp4[off + 7]);
+          if (typ === 'stco') {
+            const count = view.getUint32(off + 12);
+            for (let i = 0; i < count; i++) {
+              const cur = view.getUint32(off + 16 + i * 4);
+              view.setUint32(off + 16 + i * 4, cur + mdatOffset);
+            }
+          } else if (typ === 'moov' || typ === 'trak' || typ === 'mdia' || typ === 'minf' || typ === 'stbl') {
+            walk(off + 8, off + size);
+          }
+          off += size;
+        }
+      };
+      walk(0, mp4.length);
+    }
+
+    const mdat = box('mdat', mdatPayload);
+    const mp4 = concat([ftyp, moov, mdat]);
+    patchStco(mp4);
+    return mp4;
+  }
+
+  function remux(chunksOrTs) {
+    let ts;
+    if (Array.isArray(chunksOrTs)) ts = concat(chunksOrTs);
+    else ts = chunksOrTs instanceof Uint8Array ? chunksOrTs : new Uint8Array(chunksOrTs);
+    if (!isMpegTs(ts)) return ts;
+    return muxMp4(demuxTs(ts));
+  }
+
+  return { isMpegTs, remux, demuxTs, muxMp4 };
+})();
+
+  async function downloadQuality(quality, filename, onProgress, signal) {
+    const text = await fetchText(quality.url);
+    const media = parseMediaPlaylist(text, quality.url);
+    if (!media.segments.length) throw new Error('播放列表为空');
+
+    let keyBytes = null;
+    if (media.keyUri) {
+      keyBytes = new Uint8Array(await fetchBuffer(media.keyUri));
+    }
+
+    const total = media.segments.length;
+    const chunks = new Array(total);
+    let done = 0;
+    let bytes = 0;
+    const started = performance.now();
+    const concurrency = Math.min(6, total);
+    let cursor = 0;
+    let nextWrite = 0;
+    const ready = new Map();
+
+    const fetchOne = async (index) => {
+      if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
+      const seg = media.segments[index];
+      let lastErr;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          let buf = new Uint8Array(await fetchBuffer(seg.url));
+          if (keyBytes) buf = await decryptAes(buf, keyBytes, seg.iv);
+          return buf;
+        } catch (err) {
+          lastErr = err;
+          await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+        }
+      }
+      throw lastErr || new Error(`分段失败 ${index}`);
+    };
+
+    const report = () => {
+      const elapsed = (performance.now() - started) / 1000;
+      const speed = elapsed > 0 ? bytes / elapsed : 0;
+      const remain = done > 0 ? ((total - done) * (elapsed / done)) : 0;
+      onProgress({ done, total, bytes, speed, eta: remain, pct: total ? (done / total) * 100 : 0 });
+    };
+
+    const workers = Array.from({ length: concurrency }, async () => {
+      while (true) {
+        if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
+        const index = cursor;
+        cursor++;
+        if (index >= total) return;
+        const buf = await fetchOne(index);
+        ready.set(index, buf);
+        while (ready.has(nextWrite)) {
+          const piece = ready.get(nextWrite);
+          ready.delete(nextWrite);
+          bytes += piece.byteLength;
+          chunks[nextWrite] = piece;
+          nextWrite++;
+          done++;
+          report();
+        }
+      }
+    });
+
+    await Promise.all(workers);
+    onProgress({ done: total, total, bytes, speed: 0, eta: 0, pct: 99 });
+    let payload = chunks;
+    let outName = filename;
+    try {
+      if (chunks[0] && TsRemux.isMpegTs(chunks[0])) {
+        const mp4 = TsRemux.remux(chunks);
+        payload = [mp4];
+        bytes = mp4.byteLength;
+      }
+    } catch (err) {
+      Logger.warn('REMUX', err && err.message ? err.message : err);
+      outName = filename.replace(/\.mp4$/i, '.ts');
+    }
+    const blob = new Blob(payload, { type: outName.endsWith('.ts') ? 'video/MP2T' : 'video/mp4' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = outName;
+    a.click();
+    return { mode: 'blob', blobUrl: url, filename: outName, bytes: blob.size };
+  }
+
+  const RATES = [2, 3, 4];
+  const state = {
+    booting: false,
+    ready: false,
+    open: false,
+    qualities: [],
+    download: null,
+    abort: null,
+    page: null,
+    holdBoost: storage.get('holdBoost', false) === true,
+    holdRate: RATES.includes(Number(storage.get('holdRate', 2))) ? Number(storage.get('holdRate', 2)) : 2,
+    lastPath: location.pathname,
+  };
+
+  const hold = {
+    timer: 0,
+    rewindTimer: 0,
+    active: false,
+    dir: 0,
+    pendingDir: 0,
+    originalRate: 1,
+    startedPlay: false,
+    resumeAfter: false,
+    video: null,
+  };
+
+  const ICONS = {
+    down: '<svg viewBox="0 0 24 24" fill="none"><path d="M12 4v12m0 0 4.2-4.2M12 16 7.8 11.8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 19.5h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
+    close: '<svg viewBox="0 0 24 24" fill="none"><path d="M7 7l10 10M17 7 7 17" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
+    copy: '<svg viewBox="0 0 24 24" fill="none"><rect x="8.2" y="8.2" width="10.3" height="10.3" rx="2.2" stroke="currentColor" stroke-width="1.6"/><path d="M6.4 15.2H6A2 2 0 0 1 4 13.2v-7A2 2 0 0 1 6 4.2h7A2 2 0 0 1 15 6.2V7" stroke="currentColor" stroke-width="1.6"/></svg>',
+    pip: '<svg viewBox="0 0 24 24" fill="none"><rect x="3.5" y="5.5" width="17" height="13" rx="2.4" stroke="currentColor" stroke-width="1.6"/><rect x="12.2" y="11.4" width="6.6" height="5.2" rx="1.1" fill="currentColor"/></svg>',
+    abort: '<svg viewBox="0 0 24 24" fill="none"><rect x="7" y="7" width="10" height="10" rx="1.6" fill="currentColor"/></svg>',
+  };
+
+  const CSS = `
+:host{position:fixed;inset:0;width:100%;height:100%;z-index:2147483647;pointer-events:none;display:block}
+*{box-sizing:border-box;-webkit-font-smoothing:antialiased}
+.hud{
+  font-family:"SF Pro Text","Segoe UI Variable","Segoe UI","PingFang SC","Noto Sans SC",sans-serif;
+  color:#f7f7fa;
+  --pink:#ff3d7f;
+  --pink2:#ff7aa8;
+  --line:rgba(255,255,255,.1);
+  --muted:#9a9aa6;
+}
+.fab,.sheet.on,.toast.on,.badge.on{pointer-events:auto}
+.fab{
+  position:fixed;right:20px;bottom:22px;width:48px;height:48px;border:0;padding:0;
+  border-radius:16px;cursor:pointer;color:#fff;
+  background:linear-gradient(160deg,#ff5a93 0%,#ff2d6a 58%,#e11d5a 100%);
+  box-shadow:0 3px 8px rgba(255,45,106,.22),0 0 0 1px rgba(255,255,255,.1) inset;
+  display:grid;place-items:center;transition:transform .18s ease,box-shadow .18s;
+}
+.fab:hover{transform:translateY(-2px) scale(1.04)}
+.fab:active{transform:scale(.96)}
+.fab svg{width:20px;height:20px}
+.fab .ring{
+  position:absolute;inset:0;border-radius:16px;
+  background:conic-gradient(#fff var(--p,0%),transparent 0);
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+  -webkit-mask-composite:xor;mask-composite:exclude;padding:2px;
+  opacity:0;pointer-events:none;
+}
+.fab.busy .ring{opacity:1}
+.sheet{
+  position:fixed;right:20px;bottom:80px;width:min(320px,calc(100vw - 28px));
+  background:rgba(16,16,18,.72);border:1px solid var(--line);border-radius:22px;
+  box-shadow:0 8px 24px rgba(0,0,0,.28);backdrop-filter:blur(22px) saturate(1.4);
+  padding:16px 16px 14px;transform:translateY(12px) scale(.98);
+  opacity:0;visibility:hidden;pointer-events:none;
+  transition:transform .22s cubic-bezier(.22,1,.36,1),opacity .18s,visibility .18s;
+}
+.sheet.on{transform:none;opacity:1;visibility:visible;pointer-events:auto}
+.head{display:flex;align-items:flex-start;gap:10px;margin-bottom:14px}
+.who{min-width:0;flex:1}
+.title{font-size:14px;font-weight:620;letter-spacing:-.01em;line-height:1.35;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.meta{margin-top:4px;font-size:12px;color:var(--muted);display:flex;gap:6px;align-items:center}
+.dot{width:4px;height:4px;border-radius:99px;background:#3dd68c;box-shadow:0 0 0 3px rgba(61,214,140,.16)}
+.dot.wait{background:#ffb020;box-shadow:0 0 0 3px rgba(255,176,32,.16)}
+.dot.err{background:#ff5d5d;box-shadow:0 0 0 3px rgba(255,93,93,.16)}
+.x{width:28px;height:28px;border:0;border-radius:9px;background:transparent;color:#8b8b96;cursor:pointer;display:grid;place-items:center;flex:none}
+.x:hover{background:rgba(255,255,255,.06);color:#fff}
+.x svg{width:14px;height:14px}
+.dl{
+  position:relative;width:100%;height:44px;border:0;border-radius:14px;cursor:pointer;overflow:hidden;
+  color:#fff;font:inherit;font-size:13.5px;font-weight:650;letter-spacing:.01em;
+  background:linear-gradient(180deg,#ff5a93,#ff2d6a);
+  box-shadow:0 2px 6px rgba(255,45,106,.18);
+  display:flex;align-items:center;justify-content:center;gap:8px;
+}
+.dl:disabled{opacity:.42;cursor:not-allowed;box-shadow:none}
+.dl-fill{position:absolute;inset:0 auto 0 0;width:0;background:rgba(255,255,255,.18);transition:width .2s}
+.dl svg,.dl span{position:relative;z-index:1}
+.dl svg{width:16px;height:16px}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+.ghost{
+  height:38px;border-radius:12px;border:1px solid var(--line);background:rgba(255,255,255,.04);
+  color:#eee;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;
+  font:inherit;font-size:12.5px;
+}
+.ghost:hover{background:rgba(255,255,255,.08)}
+.ghost:disabled{opacity:.38;cursor:not-allowed}
+.ghost svg{width:14px;height:14px}
+.stats{margin-top:10px;display:flex;justify-content:space-between;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.ok{margin-top:10px;font-size:12px;color:#7ddea8}
+.boost{
+  margin-top:14px;padding:12px;border-radius:16px;background:rgba(255,255,255,.04);border:1px solid var(--line);
+}
+.boost-top{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.boost-k{font-size:13px;font-weight:600}
+.boost-s{font-size:11px;color:var(--muted);margin-top:2px}
+.sw{position:relative;width:40px;height:24px;border-radius:99px;border:0;cursor:pointer;background:#3a3a42;transition:background .18s;flex:none}
+.sw.on{background:var(--pink)}
+.sw i{position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:99px;background:#fff;transition:transform .18s;display:block}
+.sw.on i{transform:translateX(16px)}
+.seg{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:10px}
+.seg button{
+  height:32px;border-radius:10px;border:1px solid var(--line);background:transparent;
+  color:#ddd;cursor:pointer;font:inherit;font-size:12.5px;font-weight:620;
+}
+.seg button.on{border-color:transparent;background:rgba(255,61,127,.18);color:#ffd0e0}
+.empty{color:var(--muted);font-size:13px;line-height:1.6;padding:6px 2px 2px}
+.hint{margin-top:8px;font-size:11px;color:#7a7a86;line-height:1.5}
+kbd{font:11px ui-monospace,Consolas,monospace;background:rgba(255,255,255,.08);border-radius:5px;padding:1px 5px}
+.toast{
+  position:fixed;left:50%;bottom:28px;transform:translateX(-50%) translateY(8px);
+  background:rgba(20,20,22,.92);border:1px solid var(--line);color:#fff;
+  padding:8px 12px;border-radius:10px;font-size:12px;opacity:0;transition:.18s;pointer-events:none;
+}
+.toast.on{opacity:1;transform:translateX(-50%)}
+.badge{
+  position:fixed;left:50%;top:42%;transform:translate(-50%,-50%) scale(.92);
+  font-size:64px;font-weight:780;letter-spacing:-.06em;color:#fff;opacity:0;
+  text-shadow:0 10px 40px rgba(255,45,106,.55);transition:opacity .12s,transform .12s;pointer-events:none;
+}
+.badge.on{opacity:1;transform:translate(-50%,-50%)}
+@media(max-width:640px){
+  .fab{right:14px;bottom:16px}
+  .sheet{right:14px;left:14px;width:auto;bottom:74px}
+}
+`;
+
+  let root = null;
+  let ui = {};
+
+  function escapeHtml(s) {
+    return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function pageVideo() {
+    return document.querySelector('video');
+  }
+
+  function isTypingTarget(el) {
+    if (!el || el === document.body || el === document.documentElement) return false;
+    const tag = (el.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
+    return !!el.isContentEditable;
+  }
+
+  function mount() {
+    if (document.getElementById('rv-host')) return;
+    const host = document.createElement('div');
+    host.id = 'rv-host';
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = `<style>${CSS}</style>
+      <div class="hud">
+        <button class="fab" id="fab" title="肉视频助手 (Alt+D)">${ICONS.down}<i class="ring"></i></button>
+        <aside class="sheet" id="sheet"></aside>
+        <div class="badge" id="badge">2×</div>
+        <div class="toast" id="toast"></div>
+      </div>`;
+    (document.body || document.documentElement).appendChild(host);
+    root = shadow;
+    ui = {
+      fab: shadow.getElementById('fab'),
+      sheet: shadow.getElementById('sheet'),
+      badge: shadow.getElementById('badge'),
+      toast: shadow.getElementById('toast'),
+    };
+    ui.fab.addEventListener('click', () => setOpen(!state.open));
+    ui.sheet.addEventListener('click', onSheetClick);
+  }
+
+  function setOpen(open) {
+    state.open = open;
+    render();
+  }
+
+  let toastTimer = 0;
+  function toast(msg) {
+    if (!ui.toast) return;
+    ui.toast.textContent = msg;
+    ui.toast.classList.add('on');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => ui.toast.classList.remove('on'), 1800);
+  }
+
+  function copyText(value) {
+    const text = String(value || '');
+    if (!text) return;
+    try {
+      if (typeof GM_setClipboard === 'function') { GM_setClipboard(text); toast('已复制'); return; }
+    } catch {}
+    navigator.clipboard?.writeText(text).then(() => toast('已复制')).catch(() => toast('复制失败'));
+  }
+
+  function currentStream() {
+    return state.qualities[0] || null;
+  }
+
+  function statusLabel() {
+    if (!location.pathname.startsWith('/v/')) return { text: '打开视频页后可用', dot: 'wait' };
+    if (state.download?.running) return { text: state.download.pct >= 99 ? '封装 MP4…' : '下载中', dot: 'wait' };
+    if (state.qualities.length) return { text: '已就绪', dot: '' };
+    if (state.booting) return { text: '解析中…', dot: 'wait' };
+    return { text: '未解析', dot: 'err' };
+  }
+
+  function render() {
+    if (!root) return;
+    ui.sheet.classList.toggle('on', state.open);
+    const d = state.download;
+    const pct = d?.running ? Math.max(0, Math.min(100, d.pct || 0)) : 0;
+    ui.fab.classList.toggle('busy', !!d?.running);
+    ui.fab.style.setProperty('--p', `${pct}%`);
+
+    if (!state.open) return;
+
+    const info = state.page || getVideoInfo();
+    state.page = info;
+    const isVideo = location.pathname.startsWith('/v/');
+    const stream = currentStream();
+    const st = statusLabel();
+    const dur = stream?.duration || info?.duration || 0;
+    const title = info?.name || (isVideo ? '当前视频' : '肉视频助手');
+
+    let body;
+    if (!isVideo) {
+      body = `<div class="empty">打开任意 <code>/v/…</code> 视频页后，这里可以直接下载。<br><br>快捷键 <kbd>Alt</kbd>+<kbd>D</kbd></div>`;
+    } else {
+      const dlLabel = d?.running
+        ? (d.pct >= 99 ? '正在封装 MP4…' : `下载中 ${pct.toFixed(0)}% · 点按取消`)
+        : (stream ? '下载视频' : (state.booting ? '解析中…' : '解析并下载'));
+      body = `
+        <button class="dl" data-act="${d?.running ? 'abort' : 'download'}" ${!d?.running && !stream && state.booting ? 'disabled' : ''}>
+          <i class="dl-fill" style="width:${d?.running ? pct : 0}%"></i>
+          ${d?.running ? ICONS.abort : ICONS.down}<span>${dlLabel}</span>
+        </button>
+        <div class="row">
+          <button class="ghost" data-act="copy-m3u8" ${!stream ? 'disabled' : ''}>${ICONS.copy}复制地址</button>
+          <button class="ghost" data-act="pip">${ICONS.pip}画中画</button>
+        </div>
+        ${d?.running ? `<div class="stats"><span>${d.done}/${d.total} · ${formatBytes(d.bytes)}</span><span>${formatBytes(d.speed)}/s · ${formatEta(d.eta)}</span></div>` : ''}
+        ${d?.finished && !d.running ? '<div class="ok">已保存到浏览器下载目录</div>' : ''}
+        ${!stream && !state.booting ? '<button class="ghost" data-act="rescan" style="width:100%;margin-top:8px">重新解析</button>' : ''}
+        <div class="boost">
+          <div class="boost-top">
+            <div>
+              <div class="boost-k">长按方向键倍速</div>
+              <div class="boost-s">长按右加速、长按左快退；轻点左右仍是进退 5 秒</div>
+            </div>
+            <button class="sw ${state.holdBoost ? 'on' : ''}" data-act="toggle-boost" aria-pressed="${state.holdBoost}"><i></i></button>
+          </div>
+          <div class="seg">
+            ${RATES.map((n) => `<button data-act="rate" data-rate="${n}" class="${state.holdRate === n ? 'on' : ''}">${n}×</button>`).join('')}
+          </div>
+        </div>`;
+    }
+
+    ui.sheet.innerHTML = `
+      <div class="head">
+        <div class="who">
+          <div class="title">${escapeHtml(title)}</div>
+          <div class="meta"><i class="dot ${st.dot}"></i><span>${st.text}</span>${dur ? `<span>·</span><span>${formatDuration(dur)}</span>` : ''}${canShowSeg(stream)}</div>
+        </div>
+        <button class="x" data-act="close">${ICONS.close}</button>
+      </div>
+      ${body}`;
+  }
+
+  function canShowSeg(stream) {
+    if (!stream?.segments) return '';
+    return `<span>·</span><span>${stream.segments} 段</span>`;
+  }
+
+  function onSheetClick(ev) {
+    const act = ev.target.closest('[data-act]');
+    if (!act) return;
+    const kind = act.dataset.act;
+    if (kind === 'close') setOpen(false);
+    else if (kind === 'download') startDownload();
+    else if (kind === 'abort') state.abort?.abort();
+    else if (kind === 'copy-m3u8') {
+      const q = currentStream();
+      if (q) copyText(q.url);
+      else toast('还没有解析到地址');
+    } else if (kind === 'rescan') {
+      toast('正在解析…');
+      bootVideo(true);
+    } else if (kind === 'pip') togglePip();
+    else if (kind === 'toggle-boost') {
+      state.holdBoost = !state.holdBoost;
+      storage.set('holdBoost', state.holdBoost);
+      if (!state.holdBoost) endBoost();
+      render();
+    } else if (kind === 'rate') {
+      const n = Number(act.dataset.rate);
+      if (!RATES.includes(n)) return;
+      state.holdRate = n;
+      storage.set('holdRate', n);
+      if (hold.active && hold.video && hold.dir > 0) hold.video.playbackRate = n;
+      showSpeedHud(hold.active, hold.dir || 1);
+      render();
+    }
+  }
+
+  async function togglePip() {
+    const v = pageVideo();
+    if (!v || !document.pictureInPictureEnabled) return toast('当前浏览器不支持画中画');
+    try {
+      if (document.pictureInPictureElement) await document.exitPictureInPicture();
+      else await v.requestPictureInPicture();
+    } catch {
+      toast('画中画失败');
+    }
+  }
+
+  function showSpeedHud(on, dir = 1) {
+    if (!ui.badge) return;
+    const n = state.holdRate;
+    ui.badge.textContent = dir < 0 ? `−${n}×` : `${n}×`;
+    ui.badge.classList.toggle('on', !!on);
+  }
+
+  function seekBy(video, seconds) {
+    try {
+      const t = Math.min(video.duration || 1e9, Math.max(0, (video.currentTime || 0) + seconds));
+      video.currentTime = t;
+    } catch {}
+  }
+
+  function arrowDir(e) {
+    if (e.code === 'ArrowRight' || e.key === 'ArrowRight') return 1;
+    if (e.code === 'ArrowLeft' || e.key === 'ArrowLeft') return -1;
+    return 0;
+  }
+
+  function beginBoost(video, dir) {
+    if (!video || !dir) return;
+    if (hold.active && hold.dir === dir) return;
+    if (hold.active) endBoost();
+    hold.active = true;
+    hold.dir = dir;
+    hold.video = video;
+    hold.originalRate = video.playbackRate || 1;
+    hold.startedPlay = false;
+    hold.resumeAfter = false;
+    if (dir > 0) {
+      hold.startedPlay = video.paused;
+      video.playbackRate = state.holdRate;
+      if (video.paused) {
+        const p = video.play();
+        if (p && p.catch) p.catch(() => {});
+      }
+    } else {
+      hold.resumeAfter = !video.paused;
+      if (!video.paused) {
+        try { video.pause(); } catch {}
+      }
+      const tick = 50;
+      hold.rewindTimer = setInterval(() => {
+        const v = hold.video || pageVideo();
+        if (!v) return;
+        seekBy(v, -state.holdRate * (tick / 1000));
+      }, tick);
+    }
+    showSpeedHud(true, dir);
+  }
+
+  function endBoost() {
+    clearTimeout(hold.timer);
+    hold.timer = 0;
+    hold.pendingDir = 0;
+    clearInterval(hold.rewindTimer);
+    hold.rewindTimer = 0;
+    if (!hold.active) return;
+    const v = hold.video || pageVideo();
+    const dir = hold.dir;
+    if (v) {
+      try { v.playbackRate = hold.originalRate || 1; } catch {}
+      if (dir > 0 && hold.startedPlay && v.paused === false) {
+        try { v.pause(); } catch {}
+      }
+      if (dir < 0 && hold.resumeAfter && v.paused) {
+        const p = v.play();
+        if (p && p.catch) p.catch(() => {});
+      }
+    }
+    hold.active = false;
+    hold.startedPlay = false;
+    hold.resumeAfter = false;
+    hold.video = null;
+    hold.dir = 0;
+    showSpeedHud(false);
+  }
+
+  function onHoldKeyDown(e) {
+    if (e.altKey && (e.key === 'd' || e.key === 'D')) {
+      e.preventDefault();
+      if (!root) mount();
+      setOpen(!state.open);
+      return;
+    }
+    if (e.key === 'Escape' && state.open) {
+      setOpen(false);
+      return;
+    }
+    if (!state.holdBoost) return;
+    const dir = arrowDir(e);
+    if (!dir) return;
+    if (isTypingTarget(e.target)) return;
+    const video = pageVideo();
+    if (!video) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (e.repeat) return;
+    if (hold.active && hold.dir === dir) return;
+    clearTimeout(hold.timer);
+    hold.pendingDir = dir;
+    hold.timer = setTimeout(() => beginBoost(video, dir), 160);
+  }
+
+  function onHoldKeyUp(e) {
+    const dir = arrowDir(e);
+    if (!dir) return;
+    if (!state.holdBoost) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (hold.active && hold.dir && hold.dir !== dir) return;
+    const wasPending = !!hold.timer && !hold.active && hold.pendingDir === dir;
+    clearTimeout(hold.timer);
+    hold.timer = 0;
+    hold.pendingDir = 0;
+    if (wasPending) {
+      const video = pageVideo();
+      if (video) seekBy(video, dir * 5);
+      return;
+    }
+    if (hold.active && hold.dir === dir) endBoost();
+  }
+
+  async function startDownload() {
+    let quality = currentStream();
+    if (!quality && !state.booting) {
+      await bootVideo(true);
+      quality = currentStream();
+    }
+    if (!quality || state.download?.running) return;
+    const filename = `${sanitizeName(state.page?.name || 'rouvideo')}.mp4`;
+    const ctrl = new AbortController();
+    state.abort = ctrl;
+    state.download = { running: true, finished: false, done: 0, total: 0, bytes: 0, speed: 0, eta: 0, pct: 0 };
+    render();
+    try {
+      const result = await downloadQuality(quality, filename, (info) => {
+        state.download = { running: true, finished: false, ...info };
+        const fill = root.querySelector('.dl-fill');
+        const label = root.querySelector('.dl span');
+        const stats = root.querySelector('.stats');
+        if (fill) fill.style.width = `${info.pct}%`;
+        if (label) label.textContent = info.pct >= 99 ? '正在封装 MP4…' : `下载中 ${info.pct.toFixed(0)}%`;
+        if (stats) {
+          stats.innerHTML = `<span>${info.done}/${info.total} · ${formatBytes(info.bytes)}</span><span>${formatBytes(info.speed)}/s · ${formatEta(info.eta)}</span>`;
+        }
+        ui.fab.style.setProperty('--p', `${info.pct}%`);
+      }, ctrl.signal);
+      state.download = {
+        running: false, finished: true, pct: 100,
+        bytes: result.bytes || state.download.bytes || 0,
+        filename: result.filename || filename,
+      };
+      toast('下载完成');
+    } catch (err) {
+      if (err?.name === 'AbortError') toast('已取消');
+      else toast(err?.message || '下载失败');
+      if (state.download) { state.download.running = false; state.download.finished = false; }
+    } finally {
+      state.abort = null;
+      render();
+    }
+  }
+
+  async function bootVideo(force = false) {
+    if (state.booting) return;
+    if (state.qualities.length && !force) return;
+    state.booting = true;
+    state.page = await getVideoInfoFresh();
+    render();
+    const videoId = state.page?.id || videoIdFromPath();
+    try {
+      const m3u8Url = state.page?.masterM3u8;
+      collectSniffedFromPerformance();
+      const candidates = [];
+      const addCandidate = (u) => { if (u && !candidates.includes(u)) candidates.push(u); };
+      for (const url of sniffedUrls) {
+        if (isPlaylistUrl(url)) addCandidate(url);
+      }
+      if (m3u8Url) {
+        for (const url of playlistCandidates(m3u8Url)) addCandidate(url);
+      }
+      if (videoId) addCandidate(toAbsolute(`/api/hls/${videoId}`));
+      if (!candidates.length) throw new Error('无法获取播放地址');
+
+      let text = null;
+      let usedUrl = null;
+      for (const url of candidates) {
+        try {
+          text = await fetchText(url);
+          if (text && (text.includes('#EXTM3U') || text.includes('#EXTINF'))) {
+            usedUrl = url;
+            break;
+          }
+          text = null;
+        } catch (e) {
+          Logger.warn('BOOT', `播放列表失败: ${e.message}`);
+        }
+      }
+
+      if (!text) {
+        const videos = document.querySelectorAll('video');
+        for (const v of videos) {
+          const src = v.currentSrc || v.src;
+          if (src && !src.startsWith('blob:')) {
+            state.qualities = [{
+              label: '视频源', url: src, prefix: src,
+              duration: v.duration || state.page?.duration || 0, segments: 0,
+            }];
+            state.booting = false;
+            state.ready = true;
+            render();
+            return;
+          }
+        }
+      }
+
+      if (!text) throw new Error('无法获取播放列表');
+
+      if (text.includes('#EXT-X-STREAM-INF')) {
+        const variants = parseMasterPlaylist(text, usedUrl);
+        if (!variants.length) throw new Error('播放列表为空');
+        const best = variants[0];
+        try {
+          const mediaText = await fetchText(best.url);
+          const media = parseMediaPlaylist(mediaText, best.url);
+          best.duration = media.duration || 0;
+          best.segments = media.segments.length;
+        } catch { best.duration = 0; }
+        state.qualities = [best];
+      } else if (text.includes('#EXTINF')) {
+        const media = parseMediaPlaylist(text, usedUrl);
+        if (!media.segments.length) throw new Error('播放列表为空');
+        state.qualities = [{
+          label: 'default',
+          url: usedUrl,
+          prefix: usedUrl.replace(/[^/]+$/, ''),
+          duration: media.duration || state.page?.duration || 0,
+          segments: media.segments.length,
+        }];
+      } else {
+        throw new Error('无法识别的播放列表格式');
+      }
+      render();
+    } catch (err) {
+      Logger.error('BOOT', `解析失败: ${err.message}`);
+      if (force) toast(`解析失败: ${err.message}`);
+      render();
+    } finally {
+      state.booting = false;
+      state.ready = true;
+      render();
+    }
+  }
+
+  function resetForRoute() {
+    endBoost();
+    state.qualities = [];
+    state.page = null;
+    state.download = null;
+    state.abort = null;
+    state.booting = false;
+    sniffedUrls.clear();
+    if (location.pathname.startsWith('/v/')) bootVideo(true);
+    else render();
+  }
+
+  function watchRoute() {
+    const onChange = () => {
+      if (location.pathname === state.lastPath) return;
+      state.lastPath = location.pathname;
+      resetForRoute();
+    };
+    const wrap = (obj, fn) => {
+      try {
+        const orig = obj[fn];
+        if (typeof orig !== 'function') return;
+        obj[fn] = function () {
+          const r = orig.apply(this, arguments);
+          queueMicrotask(onChange);
+          return r;
+        };
+      } catch {}
+    };
+    wrap(history, 'pushState');
+    wrap(history, 'replaceState');
+    try {
+      if (typeof unsafeWindow !== 'undefined' && unsafeWindow.history && unsafeWindow.history !== history) {
+        wrap(unsafeWindow.history, 'pushState');
+        wrap(unsafeWindow.history, 'replaceState');
+      }
+    } catch {}
+    window.addEventListener('popstate', onChange);
+    setInterval(onChange, 800);
+  }
+
+  function init() {
+    mount();
+    watchRoute();
+    if (location.pathname.startsWith('/v/')) {
+      bootVideo();
+      setTimeout(() => { if (!state.qualities.length) bootVideo(); }, 2000);
+      setTimeout(() => { if (!state.qualities.length) bootVideo(); }, 5000);
+    } else {
+      render();
+    }
+  }
+
+  window.addEventListener('keydown', onHoldKeyDown, true);
+  window.addEventListener('keyup', onHoldKeyUp, true);
+  window.addEventListener('blur', endBoost);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) endBoost(); });
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
+})();
