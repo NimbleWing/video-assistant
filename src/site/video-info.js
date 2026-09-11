@@ -36,12 +36,14 @@ function videoInfoFromData(data) {
   const decoded = decodeEv(pageProps.ev);
   if (!decoded) return null;
   const videoUrl = decoded.videoUrl ? toAbsolute(decoded.videoUrl) : '';
+  const series = pageProps?.series;
   return {
     id: video.id,
     name: video.name || video.nameZh || 'unknown',
     masterM3u8: videoUrl,
     videoUrl,
     duration: video.duration || 0,
+    seriesName: series?.nameZh || series?.name || '',
   };
 }
 

@@ -65,7 +65,9 @@ async function startDownload() {
     quality = currentStream();
   }
   if (!quality || state.download?.running) return false;
-  const filename = `${sanitizeName(state.page?.name || 'rouvideo')}.mp4`;
+  // 剧集视频归入以剧名命名的子目录（Chrome 的 download 属性支持子目录并自动创建）
+  const seriesDir = state.page?.seriesName ? `${sanitizeName(state.page.seriesName)}/` : '';
+  const filename = `${seriesDir}${sanitizeName(state.page?.name || 'rouvideo')}.mp4`;
   const ctrl = new AbortController();
   state.abort = ctrl;
   state.download = { running: true, finished: false, done: 0, total: 0, bytes: 0, speed: 0, eta: 0, pct: 0 };
