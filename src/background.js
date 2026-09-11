@@ -92,6 +92,7 @@ async function onOSUrl(msg) {
       chrome.downloads.onChanged.removeListener(listener);
       chrome.runtime.sendMessage({ type: 'os-revoke', saveId: msg.saveId, url: msg.url }).catch(() => {});
       const ok = st.current === 'complete';
+      if (ok) ledgerPut(meta.filename.split(/[\\/]/).pop(), downloadId);
       chrome.tabs.sendMessage(meta.tabId, {
         type: 'dl-settled',
         saveId: msg.saveId,
@@ -110,12 +111,60 @@ async function onOSUrl(msg) {
   }
 }
 
+// ---------------------------------------------------------------- 已下载判断
+
+// basename（含集名的完整文件名）→ downloadId 账本，先查账本再兜底搜索下载历史
+const LEDGER_KEY = 'rv-hud:dl-ledger';
+
+async function ledgerGet() {
+  try {
+    const raw = await chrome.storage.local.get(LEDGER_KEY);
+    return raw[LEDGER_KEY] || {};
+  } catch {
+    return {};
+  }
+}
+
+async function ledgerPut(basename, id) {
+  try {
+    const ledger = await ledgerGet();
+    ledger[basename] = { id, at: Date.now() };
+    await chrome.storage.local.set({ [LEDGER_KEY]: ledger });
+  } catch {}
+}
+
+async function fileExists(basename) {
+  const rec = (await ledgerGet())[basename];
+  if (rec) {
+    try {
+      const [item] = await chrome.downloads.search({ id: rec.id });
+      if (item && item.state === 'complete' && item.exists !== false) return true;
+    } catch {}
+  }
+  try {
+    const items = await chrome.downloads.search({ query: [basename], limit: 200 });
+    const hit = items.find((d) => d.state === 'complete' && d.exists !== false && (d.filename || '').endsWith(basename));
+    if (hit) {
+      ledgerPut(basename, hit.id);
+      return true;
+    }
+  } catch {}
+  return false;
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message !== 'object') return false;
 
   if (message.type === 'os-url') {
     onOSUrl(message);
     return false;
+  }
+
+  if (message.type === 'rv-file-exists') {
+    fileExists(String(message.basename || ''))
+      .then((exists) => sendResponse({ exists }))
+      .catch(() => sendResponse({ exists: false }));
+    return true;
   }
 
   if (message.type === 'rv-save-begin' && sender.tab) {

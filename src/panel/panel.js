@@ -169,7 +169,7 @@ function render() {
       <button class="ghost" data-act="pip">${ICONS.pip}画中画</button>
     </div>
     ${d?.running ? `<div class="stats"><span>${d.done}/${d.total} · ${formatBytes(d.bytes)}</span><span>${formatBytes(d.speed)}/s · ${formatEta(d.eta)}</span></div>` : ''}
-    ${d?.finished && !d.running ? '<div class="ok">已保存到浏览器下载目录</div>' : ''}
+    ${d?.finished && !d.running ? `<div class="ok">${d.skipped ? '本地已存在，已跳过下载' : '已保存到浏览器下载目录'}</div>` : ''}
     ${!stream && !snap.booting ? '<button class="ghost" data-act="rescan" style="width:100%;margin-top:8px">重新解析</button>' : ''}
     <div class="boost">
       <div class="boost-top">

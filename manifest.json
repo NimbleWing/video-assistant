@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "肉视频助手 RouVideo Assistant",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "从 rou.video 播放页解析并下载视频（HLS 分段自动解密、合并并封装为 MP4），支持长按方向键倍速播放/快退、画中画与复制播放地址。",
   "author": "BExhei",
   "icons": {

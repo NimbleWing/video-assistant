@@ -59,6 +59,14 @@ function currentStream() {
   return state.qualities[0] || null;
 }
 
+// 查询 SW：该文件名是否已存在于下载历史且文件仍在磁盘上
+function alreadyDownloaded(filename) {
+  const basename = filename.split('/').pop();
+  return chrome.runtime.sendMessage({ type: 'rv-file-exists', basename })
+    .then((r) => !!r?.exists)
+    .catch(() => false);
+}
+
 async function startDownload() {
   let quality = currentStream();
   if (!quality && !state.booting) {
@@ -69,6 +77,14 @@ async function startDownload() {
   // 剧集视频归入以剧名命名的子目录（Chrome 的 download 属性支持子目录并自动创建）
   const seriesDir = state.page?.seriesName ? `${sanitizeName(state.page.seriesName)}/` : '';
   const filename = `${seriesDir}${sanitizeName(state.page?.name || 'rouvideo')}.mp4`;
+  if (await alreadyDownloaded(filename)) {
+    Logger.info('DL', `本地已存在，跳过：${filename}`);
+    hud.toast('本地已存在，已跳过下载');
+    state.download = { running: false, finished: true, pct: 100, skipped: true, filename };
+    pushState();
+    saveCover(state.page); // 封面仍补齐（覆盖写，代价极小）
+    return true;
+  }
   const ctrl = new AbortController();
   state.abort = ctrl;
   state.download = { running: true, finished: false, done: 0, total: 0, bytes: 0, speed: 0, eta: 0, pct: 0 };

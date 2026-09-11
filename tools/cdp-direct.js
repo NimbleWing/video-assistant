@@ -91,6 +91,51 @@ async function main() {
     console.log('已导航到', url);
   }
 
+  if (step === 'state') {
+    const r = await send(ws, 'Target.getTargets');
+    const sw = r.targetInfos.find((t) => t.type === 'service_worker' && t.url.includes('fieogbjpjaiokpmfkokckebfaojncomm'));
+    if (!sw) { console.log('SW 未唤醒'); process.exit(1); }
+    const swSid = await attach(ws, sw.targetId);
+    const expr = `(async () => {
+      const tabs = await chrome.tabs.query({ url: 'https://rou.video/*' });
+      if (!tabs.length) return 'no-tab';
+      return await chrome.tabs.sendMessage(tabs[0].id, { type: 'rv-get-state' });
+    })()`;
+    const r2 = await send(ws, 'Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true }, swSid);
+    const s = r2.result.value;
+    console.log(JSON.stringify({ path: s.path, page: s.page?.name, series: s.page?.seriesName, download: s.download, listing: s.listing ? s.listing.kind : null }));
+  }
+
+  if (step === 'batch-start') {
+    const mode = process.argv[3] || 'series';
+    const limit = Number(process.argv[4]) || 0;
+    const r = await send(ws, 'Target.getTargets');
+    const sw = r.targetInfos.find((t) => t.type === 'service_worker' && t.url.includes('fieogbjpjaiokpmfkokckebfaojncomm'));
+    if (!sw) { console.log('SW 未唤醒'); process.exit(1); }
+    const swSid = await attach(ws, sw.targetId);
+    const expr = `(async () => {
+      const tabs = await chrome.tabs.query({ url: 'https://rou.video/*' });
+      if (!tabs.length) return 'no-tab';
+      await chrome.tabs.sendMessage(tabs[0].id, { type: 'rv-cmd', cmd: 'batch-start', value: { mode: '${mode}', allPages: false, limit: ${limit} } });
+      return 'batch-started';
+    })()`;
+    const r2 = await send(ws, 'Runtime.evaluate', { expression: expr, awaitPromise: true }, swSid);
+    console.log('SW 执行结果:', JSON.stringify(r2.result.value));
+  }
+
+  if (step === 'batch-state') {
+    const r = await send(ws, 'Target.getTargets');
+    const sw = r.targetInfos.find((t) => t.type === 'service_worker' && t.url.includes('fieogbjpjaiokpmfkokckebfaojncomm'));
+    if (!sw) { console.log('SW 未唤醒'); process.exit(1); }
+    const swSid = await attach(ws, sw.targetId);
+    const r2 = await send(ws, 'Runtime.evaluate', {
+      expression: `(async () => (await chrome.storage.local.get('rv-hud:batch'))['rv-hud:batch'])()`,
+      awaitPromise: true, returnByValue: true,
+    }, swSid);
+    const b = r2.result.value;
+    console.log(b ? JSON.stringify({ active: b.active, done: b.done, failed: b.failed?.length, note: b.note, vq: b.videoQueue?.length, sq: b.seriesQueue?.length }) : 'null');
+  }
+
   if (step === 'download') {
     // 通过扩展 SW 向 rou.video 标签发 rv-cmd download
     const r = await send(ws, 'Target.getTargets');
