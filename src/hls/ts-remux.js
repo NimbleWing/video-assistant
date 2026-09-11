@@ -416,7 +416,7 @@ function muxMp4(demuxed) {
     const tkhd = fullBox('tkhd', 0, 3, concat([
       u32(0), u32(0), u32(id), u32(0), u32(dur),
       new Uint8Array(8), u16(0), u16(0), u16(0), u16(0),
-      new Uint8Array([0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x40, 0, 0, 0]),
+      new Uint8Array([0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x40, 0, 0, 0]),
       u32(isVideo ? meta.width << 16 : 0), u32(isVideo ? meta.height << 16 : 0),
     ]));
     const mdhd = fullBox('mdhd', 0, 0, concat([
@@ -425,7 +425,7 @@ function muxMp4(demuxed) {
     ]));
     const hdlr = fullBox('hdlr', 0, 0, concat([
       u32(0),
-      new Uint8Array([isVideo ? 0x76 : 0x73, isVideo ? 0x69 : 0x64, isVideo ? 0x75 : 0x6e]),
+      new Uint8Array([isVideo ? 0x76 : 0x73, isVideo ? 0x69 : 0x6f, isVideo ? 0x64 : 0x75, isVideo ? 0x65 : 0x6e]),
       new Uint8Array(12),
       new Uint8Array(isVideo ? [0x56, 0x69, 0x64, 0x65, 0x6f, 0x48, 0x61, 0x6e, 0x64, 0x6c, 0x65, 0x72, 0] : [0x53, 0x6f, 0x75, 0x6e, 0x64, 0x48, 0x61, 0x6e, 0x64, 0x6c, 0x65, 0x72, 0]),
     ]));
@@ -464,7 +464,7 @@ function muxMp4(demuxed) {
   const mvhd = fullBox('mvhd', 0, 0, concat([
     u32(0), u32(0), u32(vTimescale), u32(duration),
     u32(0x00010000), u16(0x0100), u16(0), new Uint8Array(8),
-    new Uint8Array([0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x40, 0, 0, 0]),
+    new Uint8Array([0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x40, 0, 0, 0]),
     new Uint8Array(24), u32(audio.length ? 3 : 2),
   ]));
 
