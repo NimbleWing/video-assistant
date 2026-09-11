@@ -91,11 +91,18 @@ async function onDirAction(act) {
     try {
       const h = await window.showDirectoryPicker({ mode: 'readwrite', startIn: 'downloads' });
       await saveDirHandle(h);
-      await pullDir();
+      // 用句柄本体判定授权（IDB 回读的实例可能瞬时报 prompt）
+      try {
+        dirState = { name: h.name, granted: (await h.queryPermission({ mode: 'readwrite' })) === 'granted' };
+      } catch {
+        dirState = { name: h.name, granted: true };
+      }
       await syncDirFlag();
       toast(`下载目录已设为「${h.name}」`);
     } catch (e) {
       if (e?.name !== 'AbortError') toast('选择目录失败: ' + (e?.message || e));
+      await pullDir();
+      await syncDirFlag();
     }
     render();
   } else if (act === 'cleardir') {

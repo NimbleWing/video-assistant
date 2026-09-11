@@ -57,9 +57,9 @@ async function main() {
   if (step === 'open-panel-tab') {
     const r = await send(ws, 'Target.createTarget', {
       url: 'chrome-extension://fieogbjpjaiokpmfkokckebfaojncomm/src/panel/panel.html',
-      active: false,
+      background: true,
     });
-    console.log('面板已以后台标签打开:', r.targetId);
+    console.log('PANEL_TAB_TARGET=' + r.targetId);
   }
 
   if (step === 'close-panel-tab') {
@@ -71,8 +71,11 @@ async function main() {
 
   if (step === 'synth-save') {
     // 从面板标签发起一次微型保存，验证 SW→offscreen→落盘 全链路
+    // 可用环境变量 PANEL_TARGET 指定标签目标（侧边栏不是 tab，sender.tab 为空会被 SW 忽略）
     const r = await send(ws, 'Target.getTargets');
-    const panel = r.targetInfos.find((t) => t.url.includes('fieogbjpjaiokpmfkokckebfaojncomm/src/panel/panel.html'));
+    const panels = r.targetInfos.filter((t) => t.url.includes('src/panel/panel.html'));
+    const wanted = process.env.PANEL_TARGET;
+    const panel = wanted ? panels.find((t) => t.targetId === wanted) : panels[0];
     if (!panel) { console.log('面板页未打开'); process.exit(1); }
     const sid = await attach(ws, panel.targetId);
     const name = process.argv[3] || ('rv-pipeline-test-' + Date.now() + '.txt');
