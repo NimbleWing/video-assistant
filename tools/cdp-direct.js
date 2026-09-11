@@ -54,6 +54,73 @@ async function main() {
     }
   };
 
+  if (step === 'open-panel-tab') {
+    const r = await send(ws, 'Target.createTarget', {
+      url: 'chrome-extension://fieogbjpjaiokpmfkokckebfaojncomm/src/panel/panel.html',
+      active: false,
+    });
+    console.log('面板已以后台标签打开:', r.targetId);
+  }
+
+  if (step === 'close-panel-tab') {
+    const r = await send(ws, 'Target.getTargets');
+    const panel = r.targetInfos.find((t) => t.type === 'page' && t.url.includes('fieogbjpjaiokpmfkokckebfaojncomm/src/panel/panel.html'));
+    if (panel) { await send(ws, 'Target.closeTarget', { targetId: panel.targetId }); console.log('面板标签已关闭'); }
+    else console.log('无面板标签');
+  }
+
+  if (step === 'synth-save') {
+    // 从面板标签发起一次微型保存，验证 SW→offscreen→落盘 全链路
+    const r = await send(ws, 'Target.getTargets');
+    const panel = r.targetInfos.find((t) => t.url.includes('fieogbjpjaiokpmfkokckebfaojncomm/src/panel/panel.html'));
+    if (!panel) { console.log('面板页未打开'); process.exit(1); }
+    const sid = await attach(ws, panel.targetId);
+    const name = process.argv[3] || ('rv-pipeline-test-' + Date.now() + '.txt');
+    const expr = `(async () => {
+      const saveId = 'synth' + Date.now();
+      const b64 = btoa(' RouVideo save pipeline test @ ' + new Date().toISOString());
+      await chrome.runtime.sendMessage({ type: 'rv-save-begin', saveId, filename: '${name}', mime: 'text/plain', conflictAction: 'overwrite' });
+      await chrome.runtime.sendMessage({ type: 'rv-save-chunk', saveId, b64 });
+      const settled = await new Promise((resolve) => {
+        const onMsg = (m) => { if (m?.type === 'dl-settled' && m.saveId === saveId) { chrome.runtime.onMessage.removeListener(onMsg); resolve(m); } };
+        chrome.runtime.onMessage.addListener(onMsg);
+        chrome.runtime.sendMessage({ type: 'rv-save-end', saveId }).catch(() => {});
+        setTimeout(() => { chrome.runtime.onMessage.removeListener(onMsg); resolve({ ok: false, error: 'timeout' }); }, 20000);
+      });
+      return settled;
+    })()`;
+    const r2 = await send(ws, 'Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true }, sid);
+    console.log('落盘结果:', JSON.stringify(r2.result.value), ' 文件名:', name);
+  }
+
+  if (step === 'activate-rou') {
+    const r = await send(ws, 'Target.getTargets');
+    const page = r.targetInfos.find((t) => t.type === 'page' && t.url.includes('rou.video'));
+    if (!page) { console.log('未找到 rou.video 标签'); process.exit(1); }
+    await send(ws, 'Target.activateTarget', { targetId: page.targetId });
+    console.log('已激活 rou.video 标签');
+  }
+
+  if (step === 'panel-check') {
+    const r = await send(ws, 'Target.getTargets');
+    const panel = r.targetInfos.find((t) => t.url.includes('fieogbjpjaiokpmfkokckebfaojncomm/src/panel/panel.html'));
+    if (!panel) { console.log('面板页未打开'); process.exit(1); }
+    const sid = await attach(ws, panel.targetId);
+    const r2 = await send(ws, 'Runtime.evaluate', {
+      expression: `(async () => {
+        await new Promise(r => setTimeout(r, 1500));
+        const app = document.getElementById('app');
+        return {
+          dirText: app.querySelector('.dirbox')?.innerText.replace(/\\s+/g, ' ') || null,
+          hasPickBtn: !!app.querySelector('[data-dact="pickdir"]'),
+          meta: app.querySelector('.meta')?.textContent || '',
+        };
+      })()`,
+      awaitPromise: true, returnByValue: true,
+    }, sid);
+    console.log(JSON.stringify(r2.result.value));
+  }
+
   if (step === 'targets') {
     const r = await send(ws, 'Target.getTargets');
     for (const t of r.targetInfos) {

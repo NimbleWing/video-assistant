@@ -90,7 +90,7 @@ async function onOSUrl(msg) {
       const st = delta.state;
       if (!st || (st.current !== 'complete' && st.current !== 'interrupted')) return;
       chrome.downloads.onChanged.removeListener(listener);
-      chrome.runtime.sendMessage({ type: 'os-revoke', saveId: msg.saveId, url: msg.url }).catch(() => {});
+      chrome.runtime.sendMessage({ to: 'os', type: 'os-revoke', saveId: msg.saveId, url: msg.url }).catch(() => {});
       const ok = st.current === 'complete';
       if (ok) ledgerPut(meta.filename.split(/[\\/]/).pop(), downloadId);
       chrome.tabs.sendMessage(meta.tabId, {
@@ -103,7 +103,7 @@ async function onOSUrl(msg) {
     };
     onDownloadChanged(listener);
   } catch (e) {
-    chrome.runtime.sendMessage({ type: 'os-revoke', saveId: msg.saveId, url: msg.url }).catch(() => {});
+    chrome.runtime.sendMessage({ to: 'os', type: 'os-revoke', saveId: msg.saveId, url: msg.url }).catch(() => {});
     chrome.tabs.sendMessage(meta.tabId, {
       type: 'dl-settled', saveId: msg.saveId, ok: false, error: String(e?.message || e),
     }).catch(() => {});
@@ -204,10 +204,19 @@ async function probeExists(filename) {
 }
 
 async function fileExists(filename) {
+  // 自定义目录模式：经 offscreen 直接查磁盘句柄（不依赖任何下载历史）
+  try {
+    const flag = (await chrome.storage.local.get('rv-hud:fsdir'))['rv-hud:fsdir'];
+    if (flag?.name) {
+      await ensureOffscreen();
+      const r = await chrome.runtime.sendMessage({ to: 'os', type: 'os-file-exists', filename });
+      if (r?.handled) return { exists: !!r.exists, via: 'fs' };
+    }
+  } catch {}
   const basename = filename.split('/').pop();
   if (await historyExists(basename)) return { exists: true, via: 'history' };
   if (await probeExists(filename)) return { exists: true, via: 'probe' };
-  return { exists: false, via: 'probe' };
+  return { exists: false };
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -215,6 +224,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === 'os-url') {
     onOSUrl(message);
+    return false;
+  }
+
+  if (message.type === 'os-saved') {
+    const meta = activeSaves.get(message.saveId);
+    if (meta) {
+      chrome.tabs.sendMessage(meta.tabId, {
+        type: 'dl-settled',
+        saveId: message.saveId,
+        ok: !!message.ok,
+        error: message.ok ? '' : (message.error || 'save failed'),
+      }).catch(() => {});
+      activeSaves.delete(message.saveId);
+    }
     return false;
   }
 
@@ -233,19 +256,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       conflictAction: message.conflictAction,
     });
     ensureOffscreen()
-      .then(() => chrome.runtime.sendMessage({ type: 'os-save-begin', saveId: message.saveId, mime: message.mime }))
+      .then(() => chrome.runtime.sendMessage({ to: 'os', type: 'os-save-begin', saveId: message.saveId, filename: message.filename, mime: message.mime }))
       .then(() => sendResponse({ ok: true }))
       .catch((e) => sendResponse({ ok: false, error: String(e?.message || e) }));
     return true; // 分块必须严格有序：逐条 ACK
   }
   if (message.type === 'rv-save-chunk') {
-    chrome.runtime.sendMessage({ type: 'os-save-chunk', saveId: message.saveId, b64: message.b64 })
+    chrome.runtime.sendMessage({ to: 'os', type: 'os-save-chunk', saveId: message.saveId, b64: message.b64 })
       .then(() => sendResponse({ ok: true }))
       .catch((e) => sendResponse({ ok: false, error: String(e?.message || e) }));
     return true;
   }
   if (message.type === 'rv-save-end') {
-    chrome.runtime.sendMessage({ type: 'os-save-end', saveId: message.saveId })
+    chrome.runtime.sendMessage({ to: 'os', type: 'os-save-end', saveId: message.saveId })
       .then(() => sendResponse({ ok: true }))
       .catch((e) => sendResponse({ ok: false, error: String(e?.message || e) }));
     return true;

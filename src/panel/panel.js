@@ -1,5 +1,6 @@
 import { BATCH_KEY, RATES } from '../core/constants.js';
 import { escapeHtml, formatBytes, formatDuration, formatEta } from '../core/utils.js';
+import { clearDirHandle, dirGranted, loadDirHandle, saveDirHandle } from '../net/fsdir.js';
 import { ICONS } from '../ui/icons.js';
 
 // Side panel workspace. Video state lives in the content script of the active
@@ -13,6 +14,7 @@ let toastTimer = 0;
 let currentTabId = null;
 let snap = null;
 let batchState = null;
+let dirState = { name: null, granted: null }; // 自定义下载目录状态
 // Panel-local UI state for batch setup
 let modeSel = null;   // 'series' | 'single' | null(=跟随检测结果)
 let scopeSel = 'page'; // 'page' | 'all'
@@ -43,6 +45,78 @@ async function pullBatch() {
     const raw = await chrome.storage.local.get(BATCH_KEY);
     batchState = raw[BATCH_KEY] || null;
   } catch {}
+}
+
+async function pullDir() {
+  const h = await loadDirHandle();
+  const granted = await dirGranted();
+  if (!h) dirState = { name: null, granted: null };
+  else dirState = { name: h.name, granted: granted === h };
+}
+
+async function syncDirFlag() {
+  // 供 SW 快速判断是否走自定义目录直查（避免无谓唤醒 offscreen）
+  try {
+    if (dirState.name) await chrome.storage.local.set({ 'rv-hud:fsdir': { name: dirState.name } });
+    else await chrome.storage.local.remove('rv-hud:fsdir');
+  } catch {}
+}
+
+function dirHtml() {
+  if (!dirState.name) {
+    return `
+      <div class="dirrow">
+        <span class="dirname">浏览器默认下载目录</span>
+        <button class="ghost mini" data-dact="pickdir">选择目录…</button>
+      </div>`;
+  }
+  if (dirState.granted) {
+    return `
+      <div class="dirrow">
+        <span class="dirname ok">${escapeHtml(dirState.name)}</span>
+        <button class="ghost mini" data-dact="pickdir">更换</button>
+        <button class="ghost mini" data-dact="cleardir">恢复默认</button>
+      </div>`;
+  }
+  return `
+    <div class="dirrow">
+      <span class="dirname warn">${escapeHtml(dirState.name)}（待授权，暂存默认目录）</span>
+      <button class="ghost mini" data-dact="reauth">重新授权</button>
+      <button class="ghost mini" data-dact="cleardir">恢复默认</button>
+    </div>`;
+}
+
+async function onDirAction(act) {
+  if (act === 'pickdir') {
+    try {
+      const h = await window.showDirectoryPicker({ mode: 'readwrite', startIn: 'downloads' });
+      await saveDirHandle(h);
+      await pullDir();
+      await syncDirFlag();
+      toast(`下载目录已设为「${h.name}」`);
+    } catch (e) {
+      if (e?.name !== 'AbortError') toast('选择目录失败: ' + (e?.message || e));
+    }
+    render();
+  } else if (act === 'cleardir') {
+    await clearDirHandle();
+    await pullDir();
+    await syncDirFlag();
+    toast('已恢复浏览器默认下载目录');
+    render();
+  } else if (act === 'reauth') {
+    const h = await loadDirHandle();
+    if (!h) return;
+    try {
+      const p = await h.requestPermission({ mode: 'readwrite' });
+      await pullDir();
+      await syncDirFlag();
+      toast(p === 'granted' ? '已重新授权' : '未授权');
+    } catch (e) {
+      toast('授权失败: ' + (e?.message || e));
+    }
+    render();
+  }
 }
 
 function cmd(name, value) {
@@ -137,6 +211,7 @@ function render() {
           <div class="meta"><i class="dot ${snap.listing ? '' : 'wait'}"></i><span>${snap.listing ? '列表页已就绪' : '打开视频页后可单独下载'}</span></div>
         </div>
       </div>
+      <div class="dirbox">${dirHtml()}</div>
       ${batchHtml()}`;
     return;
   }
@@ -160,6 +235,7 @@ function render() {
         <div class="meta"><i class="dot ${st.dot}"></i><span>${st.text}</span>${dur ? `<span>·</span><span>${formatDuration(dur)}</span>` : ''}${segInfo}</div>
       </div>
     </div>
+    <div class="dirbox">${dirHtml()}</div>
     <button class="dl" data-act="${d?.running ? 'abort' : 'download'}" ${!d?.running && !stream && snap.booting ? 'disabled' : ''}>
       <i class="dl-fill" style="width:${d?.running ? pct : 0}%"></i>
       ${d?.running ? ICONS.abort : ICONS.down}<span>${dlLabel}</span>
@@ -235,6 +311,8 @@ app.addEventListener('click', (ev) => {
   } else if (bkind === 'stop') {
     cmd('batch-stop');
     toast('正在停止…');
+  } else if (bkind === 'pickdir' || bkind === 'cleardir' || bkind === 'reauth') {
+    onDirAction(bkind);
   }
 });
 
@@ -264,12 +342,14 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
   currentTabId = tabId;
   modeSel = null;
   scopeSel = 'page';
+  await pullDir();
   await pull();
 });
 
 async function init() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   currentTabId = tab?.id ?? null;
+  await pullDir();
   await pullBatch();
   await pull();
 }
