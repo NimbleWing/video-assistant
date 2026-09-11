@@ -59,12 +59,11 @@ function currentStream() {
   return state.qualities[0] || null;
 }
 
-// 查询 SW：该文件名是否已存在于下载历史且文件仍在磁盘上
-function alreadyDownloaded(filename) {
-  const basename = filename.split('/').pop();
-  return chrome.runtime.sendMessage({ type: 'rv-file-exists', basename })
-    .then((r) => !!r?.exists)
-    .catch(() => false);
+// 查询 SW：目标文件是否已在本地（历史/账本快路径 + 0 字节占位磁盘探测兜底）
+function checkDownloaded(filename) {
+  return chrome.runtime.sendMessage({ type: 'rv-file-exists', filename })
+    .then((r) => ({ exists: !!r?.exists }))
+    .catch(() => ({ exists: false }));
 }
 
 async function startDownload() {
@@ -77,7 +76,8 @@ async function startDownload() {
   // 剧集视频归入以剧名命名的子目录（Chrome 的 download 属性支持子目录并自动创建）
   const seriesDir = state.page?.seriesName ? `${sanitizeName(state.page.seriesName)}/` : '';
   const filename = `${seriesDir}${sanitizeName(state.page?.name || 'rouvideo')}.mp4`;
-  if (await alreadyDownloaded(filename)) {
+  const verdict = await checkDownloaded(filename);
+  if (verdict.exists) {
     Logger.info('DL', `本地已存在，跳过：${filename}`);
     hud.toast('本地已存在，已跳过下载');
     state.download = { running: false, finished: true, pct: 100, skipped: true, filename };
@@ -85,6 +85,7 @@ async function startDownload() {
     saveCover(state.page); // 封面仍补齐（覆盖写，代价极小）
     return true;
   }
+  // 探测确认不存在 → overwrite 落盘（自愈探测占位的任何残留）
   const ctrl = new AbortController();
   state.abort = ctrl;
   state.download = { running: true, finished: false, done: 0, total: 0, bytes: 0, speed: 0, eta: 0, pct: 0 };
@@ -93,7 +94,7 @@ async function startDownload() {
     const result = await downloadQuality(quality, filename, (info) => {
       state.download = { running: true, finished: false, ...info };
       pushState();
-    }, ctrl.signal);
+    }, ctrl.signal, { conflictAction: 'overwrite' });
     state.download = {
       running: false, finished: true, pct: 100,
       bytes: result.bytes || state.download.bytes || 0,

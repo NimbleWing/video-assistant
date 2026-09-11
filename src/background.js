@@ -113,7 +113,11 @@ async function onOSUrl(msg) {
 
 // ---------------------------------------------------------------- 已下载判断
 
-// basename（含集名的完整文件名）→ downloadId 账本，先查账本再兜底搜索下载历史
+// 判定优先级：
+//   1) 账本（basename → downloadId，扩展自己保存的记录，O(1) 命中）
+//   2) 下载历史精确搜索（覆盖账本之前的下载）
+//   3) 磁盘探测（权威兜底）：向目标路径下 0 字节占位，uniquify 改名 → 已存在；
+//      原名落盘 → 不存在，随即删除占位并抹除历史。不依赖任何历史记录。
 const LEDGER_KEY = 'rv-hud:dl-ledger';
 
 async function ledgerGet() {
@@ -133,7 +137,7 @@ async function ledgerPut(basename, id) {
   } catch {}
 }
 
-async function fileExists(basename) {
+async function historyExists(basename) {
   const rec = (await ledgerGet())[basename];
   if (rec) {
     try {
@@ -152,6 +156,60 @@ async function fileExists(basename) {
   return false;
 }
 
+function waitComplete(downloadId, timeoutMs = 8000) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(async () => {
+      chrome.downloads.onChanged.removeListener(listener);
+      try { const [it] = await chrome.downloads.search({ id: downloadId }); resolve(it || null); } catch { resolve(null); }
+    }, timeoutMs);
+    const listener = async (delta) => {
+      if (delta.id !== downloadId || !delta.state) return;
+      const st = delta.state.current;
+      if (st !== 'complete' && st !== 'interrupted') return;
+      clearTimeout(timer);
+      chrome.downloads.onChanged.removeListener(listener);
+      try { const [it] = await chrome.downloads.search({ id: downloadId }); resolve(it || null); } catch { resolve(null); }
+    };
+    chrome.downloads.onChanged.addListener(listener);
+  });
+}
+
+async function probeOne(filename) {
+  const base = filename.split('/').pop();
+  let id;
+  try {
+    id = await chrome.downloads.download({
+      url: 'data:application/octet-stream,',
+      filename,
+      conflictAction: 'uniquify',
+      saveAs: false,
+    });
+  } catch {
+    return false; // 探测通道不可用，按不存在处理（走正常下载）
+  }
+  const item = await waitComplete(id);
+  try { await chrome.downloads.removeFile(id); } catch {}
+  try { await chrome.downloads.erase({ id }); } catch {}
+  if (!item || !item.filename) return false;
+  // Chrome 仅在目标名被占用时才改名（name (1).ext），落点名 ≠ 目标名 → 已存在
+  return item.filename.split(/[\\/]/).pop() !== base;
+}
+
+async function probeExists(filename) {
+  // 先探测根目录同名（兼容 1.3.0 之前的平铺文件，且不产生目录副作用）
+  const base = filename.split('/').pop();
+  if (!filename.includes('/')) return probeOne(base);
+  if (await probeOne(base)) return true;
+  return probeOne(filename);
+}
+
+async function fileExists(filename) {
+  const basename = filename.split('/').pop();
+  if (await historyExists(basename)) return { exists: true, via: 'history' };
+  if (await probeExists(filename)) return { exists: true, via: 'probe' };
+  return { exists: false, via: 'probe' };
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message !== 'object') return false;
 
@@ -161,9 +219,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'rv-file-exists') {
-    fileExists(String(message.basename || ''))
-      .then((exists) => sendResponse({ exists }))
-      .catch(() => sendResponse({ exists: false }));
+    fileExists(String(message.filename || String(message.basename || '')))
+      .then((r) => sendResponse(r))
+      .catch(() => sendResponse({ exists: false, via: 'error' }));
     return true;
   }
 

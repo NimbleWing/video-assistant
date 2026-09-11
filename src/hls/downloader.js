@@ -9,7 +9,7 @@ import { saveViaExtension } from '../net/save.js';
 
 // Downloads every segment of one media playlist (decrypting if needed),
 // remuxes TS → MP4 when possible, and saves the result via a blob download.
-export async function downloadQuality(quality, filename, onProgress, signal) {
+export async function downloadQuality(quality, filename, onProgress, signal, opts = {}) {
   const text = await fetchText(quality.url, { signal });
   const media = parseMediaPlaylist(text, quality.url);
   if (!media.segments.length) throw new Error('播放列表为空');
@@ -92,7 +92,7 @@ export async function downloadQuality(quality, filename, onProgress, signal) {
   const totalBytes = payload.reduce((sum, p) => sum + p.byteLength, 0);
 
   // 首选扩展保存管线（downloads API 的 filename 支持子目录，剧集归目录依赖它）
-  const saved = await saveViaExtension(payload, outName, mime);
+  const saved = await saveViaExtension(payload, outName, mime, { conflictAction: opts.conflictAction });
   if (saved.ok) return { mode: 'downloads-api', filename: outName, bytes: totalBytes };
 
   // 回退：页面锚点下载（不支持子目录，"/" 会被替换为 "_"）
