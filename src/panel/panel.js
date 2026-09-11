@@ -49,16 +49,22 @@ async function pullBatch() {
 
 async function pullDir() {
   const h = await loadDirHandle();
-  const granted = await dirGranted();
-  if (!h) dirState = { name: null, path: null, granted: null };
-  else {
-    let path = null;
-    try {
-      const flag = (await chrome.storage.local.get('rv-hud:fsdir'))['rv-hud:fsdir'];
-      path = flag?.path || null;
-    } catch {}
-    dirState = { name: h.name, path, granted: granted === h };
-  }
+  if (!h) { dirState = { name: null, path: null, granted: null }; return; }
+  // queryPermission 对 IDB 回读句柄可能虚报 prompt；以"本次会话内 pick/授权成功"为准，
+  // 浏览器重启后 session 清零 → 正确显示待授权
+  let sessionGranted = false;
+  try { sessionGranted = !!(await chrome.storage.session.get('rv-hud:fs-granted'))['rv-hud:fs-granted']; } catch {}
+  const granted = sessionGranted || (await dirGranted()) === h;
+  let path = null;
+  try {
+    const flag = (await chrome.storage.local.get('rv-hud:fsdir'))['rv-hud:fsdir'];
+    path = flag?.path || null;
+  } catch {}
+  dirState = { name: h.name, path, granted };
+}
+
+async function markSessionGranted() {
+  try { await chrome.storage.session.set({ 'rv-hud:fs-granted': true }); } catch {}
 }
 
 async function syncDirFlag() {
@@ -139,12 +145,14 @@ async function onDirAction(act) {
     try {
       const h = await window.showDirectoryPicker({ mode: 'readwrite', startIn: 'downloads' });
       await saveDirHandle(h);
-      // 用句柄本体判定授权（IDB 回读的实例可能瞬时报 prompt）
+      try { await chrome.storage.session.remove('rv-hud:fs-granted'); } catch {}
+      // 用句柄本体判定授权（IDB 回读的实例可能虚报 prompt）
       try {
         dirState = { name: h.name, path: null, granted: (await h.queryPermission({ mode: 'readwrite' })) === 'granted' };
       } catch {
         dirState = { name: h.name, path: null, granted: true };
       }
+      if (dirState.granted) await markSessionGranted();
       await syncDirFlag();
       toast(`下载目录已设为「${h.name}」`);
     } catch (e) {
@@ -155,6 +163,7 @@ async function onDirAction(act) {
     render();
   } else if (act === 'cleardir') {
     await clearDirHandle();
+    try { await chrome.storage.session.remove('rv-hud:fs-granted'); } catch {}
     await pullDir();
     await syncDirFlag();
     toast('已恢复浏览器默认下载目录');
@@ -164,6 +173,7 @@ async function onDirAction(act) {
     if (!h) return;
     try {
       const p = await h.requestPermission({ mode: 'readwrite' });
+      if (p === 'granted') await markSessionGranted();
       await pullDir();
       await syncDirFlag();
       toast(p === 'granted' ? '已重新授权' : '未授权');
