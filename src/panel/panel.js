@@ -1,10 +1,10 @@
-import { RATES } from '../core/constants.js';
+import { BATCH_KEY, RATES } from '../core/constants.js';
 import { escapeHtml, formatBytes, formatDuration, formatEta } from '../core/utils.js';
 import { ICONS } from '../ui/icons.js';
 
-// Side panel workspace. All state lives in the content script of the active
-// rou.video tab; this panel pulls a snapshot on open, subscribes to pushes,
-// and sends commands back.
+// Side panel workspace. Video state lives in the content script of the active
+// rou.video tab (pulled via rv-get-state, pushed via rv-state, commanded via
+// rv-cmd); batch state lives in chrome.storage and is subscribed to directly.
 
 const app = document.getElementById('app');
 const toastEl = document.getElementById('toast');
@@ -12,6 +12,11 @@ let toastTimer = 0;
 
 let currentTabId = null;
 let snap = null;
+let batchState = null;
+// Panel-local UI state for batch setup
+let modeSel = null;   // 'series' | 'single' | null(=跟随检测结果)
+let scopeSel = 'page'; // 'page' | 'all'
+let limitVal = '';
 
 function toast(msg) {
   toastEl.textContent = msg;
@@ -32,6 +37,14 @@ async function pull() {
   render();
 }
 
+async function pullBatch() {
+  batchState = null;
+  try {
+    const raw = await chrome.storage.local.get(BATCH_KEY);
+    batchState = raw[BATCH_KEY] || null;
+  } catch {}
+}
+
 function cmd(name, value) {
   if (currentTabId == null) return;
   chrome.tabs.sendMessage(currentTabId, { type: 'rv-cmd', cmd: name, value }).catch(() => {});
@@ -48,6 +61,60 @@ function statusLabel() {
   return { text: '未解析', dot: 'err' };
 }
 
+// ------------------------------------------------------------------ 连续下载
+
+function batchHtml() {
+  const b = batchState;
+  if (b?.active) {
+    const pending = (b.videoQueue?.length || 0) + (b.seriesQueue?.length || 0) + (b.listingPages?.length || 0);
+    return `
+      <div class="batch">
+        <div class="batch-top">
+          <span class="batch-k">连续下载进行中</span>
+          <span class="batch-mode">${b.mode === 'series' ? '剧集' : '单片'}</span>
+        </div>
+        <div class="batch-s">${escapeHtml(b.note || '')}</div>
+        <div class="batch-stats"><span>已完成 ${b.done}</span><span>失败 ${b.failed?.length || 0}</span><span>待处理 ${pending}</span></div>
+        ${b.failed?.length ? `<div class="batch-failed">跳过：${b.failed.map((f) => escapeHtml(f.name)).join('、')}</div>` : ''}
+        <button class="ghost batch-stop" data-bact="stop">停止连续下载</button>
+      </div>`;
+  }
+
+  const report = b && !b.active && b.finishedAt
+    ? `<div class="batch-s">上次完成：成功 ${b.done} · 失败 ${b.failed?.length || 0}</div>`
+    : '';
+
+  const det = snap?.listing || null;
+  if (!det) {
+    return `
+      <div class="batch">
+        <div class="batch-k">连续下载</div>
+        <div class="batch-s">到列表根页（剧集库 / 视频库 / 首页 / 搜索页）可批量收割并连续下载。</div>
+        ${report}
+      </div>`;
+  }
+
+  const kind = modeSel || det.kind || null;
+  return `
+    <div class="batch">
+      <div class="batch-k">连续下载</div>
+      <div class="seg2">
+        <button data-bact="mode" data-mode="series" class="${kind === 'series' ? 'on' : ''}">剧集</button>
+        <button data-bact="mode" data-mode="single" class="${kind === 'single' ? 'on' : ''}">单片</button>
+      </div>
+      <div class="batch-s">本页 ${det.itemCount} 项 · 共 ${det.totalPage} 页${det.fallback ? '（粗略检测）' : ''}</div>
+      <div class="seg2">
+        <button data-bact="scope" data-scope="page" class="${scopeSel === 'page' ? 'on' : ''}">仅本页</button>
+        <button data-bact="scope" data-scope="all" class="${scopeSel === 'all' ? 'on' : ''}" ${det.totalPage > 1 ? '' : 'disabled'}>全部 ${det.totalPage} 页</button>
+      </div>
+      <input class="batch-lim" id="batchLimit" type="number" min="1" step="1" placeholder="项数上限（默认不限）" value="${escapeHtml(limitVal)}">
+      <button class="dl batch-start" data-bact="start" ${!kind ? 'disabled' : ''}>${ICONS.down}<span>开始连续下载</span></button>
+      ${report}
+    </div>`;
+}
+
+// ------------------------------------------------------------------ 渲染
+
 function render() {
   if (!snap) {
     app.innerHTML = `
@@ -57,7 +124,7 @@ function render() {
           <div class="meta"><i class="dot wait"></i><span>未在视频页</span></div>
         </div>
       </div>
-      <div class="empty">在 rou.video 的任意 <code>/v/…</code> 播放页打开本侧边栏，即可解析并下载当前视频。<br><br>页面上可使用快捷键 <kbd>Alt</kbd>+<kbd>D</kbd>，或点击浏览器工具栏中的扩展图标打开本面板。</div>`;
+      <div class="empty">在 rou.video 的页面打开本侧边栏即可使用。<br><br>视频播放页可直接下载；列表根页（剧集库 / 视频库 / 首页 / 搜索页）可连续下载。<br><br>快捷键 <kbd>Alt</kbd>+<kbd>D</kbd></div>`;
     return;
   }
 
@@ -67,10 +134,10 @@ function render() {
       <div class="head">
         <div class="who">
           <div class="title">肉视频助手</div>
-          <div class="meta"><i class="dot wait"></i><span>打开视频页后可用</span></div>
+          <div class="meta"><i class="dot ${snap.listing ? '' : 'wait'}"></i><span>${snap.listing ? '列表页已就绪' : '打开视频页后可单独下载'}</span></div>
         </div>
       </div>
-      <div class="empty">打开任意 <code>/v/…</code> 视频页后，这里可以直接下载。<br><br>快捷键 <kbd>Alt</kbd>+<kbd>D</kbd></div>`;
+      ${batchHtml()}`;
     return;
   }
 
@@ -115,14 +182,15 @@ function render() {
       <div class="seg">
         ${RATES.map((n) => `<button data-act="rate" data-rate="${n}" class="${snap.holdRate === n ? 'on' : ''}">${n}×</button>`).join('')}
       </div>
-    </div>`;
+    </div>
+    ${batchHtml()}`;
 }
 
 // Fine-grained progress update without re-rendering (keeps button state).
 function renderProgress(d) {
   const pct = Math.max(0, Math.min(100, d.pct || 0));
   const fill = app.querySelector('.dl-fill');
-  const label = app.querySelector('.dl span');
+  const label = app.querySelector('.dl:not(.batch-start) span');
   const stats = app.querySelector('.stats');
   if (fill) fill.style.width = `${pct}%`;
   if (label) label.textContent = d.pct >= 99 ? '正在封装 MP4…' : `下载中 ${pct.toFixed(0)}% · 点按取消`;
@@ -133,10 +201,13 @@ function renderProgress(d) {
   }
 }
 
+// ------------------------------------------------------------------ 事件
+
 app.addEventListener('click', (ev) => {
-  const act = ev.target.closest('[data-act]');
+  const act = ev.target.closest('[data-act],[data-bact]');
   if (!act) return;
   const kind = act.dataset.act;
+  const bkind = act.dataset.bact;
   if (kind === 'download') cmd('download');
   else if (kind === 'abort') cmd('abort');
   else if (kind === 'rescan') { toast('正在解析…'); cmd('rescan'); }
@@ -149,7 +220,26 @@ app.addEventListener('click', (ev) => {
     navigator.clipboard.writeText(q.url)
       .then(() => toast('已复制'))
       .catch(() => toast('复制失败'));
+  } else if (bkind === 'mode') {
+    modeSel = act.dataset.mode;
+    render();
+  } else if (bkind === 'scope') {
+    scopeSel = act.dataset.scope;
+    render();
+  } else if (bkind === 'start') {
+    const mode = modeSel || snap?.listing?.kind;
+    if (!mode) return toast('请先选择 剧集 或 单片');
+    const limit = Number(limitVal) > 0 ? Number(limitVal) : 0;
+    cmd('batch-start', { mode, allPages: scopeSel === 'all', limit });
+    toast('连续下载已启动…');
+  } else if (bkind === 'stop') {
+    cmd('batch-stop');
+    toast('正在停止…');
   }
+});
+
+app.addEventListener('input', (ev) => {
+  if (ev.target?.id === 'batchLimit') limitVal = ev.target.value;
 });
 
 chrome.runtime.onMessage.addListener((message, sender) => {
@@ -163,14 +253,24 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   else render();
 });
 
+chrome.storage.onChanged.addListener((changes, area) => {
+  if ((area === 'session' || area === 'local') && changes[BATCH_KEY]) {
+    batchState = changes[BATCH_KEY].newValue || null;
+    render();
+  }
+});
+
 chrome.tabs.onActivated.addListener(async ({ tabId }) => {
   currentTabId = tabId;
+  modeSel = null;
+  scopeSel = 'page';
   await pull();
 });
 
 async function init() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   currentTabId = tab?.id ?? null;
+  await pullBatch();
   await pull();
 }
 

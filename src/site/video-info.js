@@ -7,6 +7,12 @@ function getNextData() {
   try { return JSON.parse(script.textContent); } catch { return null; }
 }
 
+// Raw Next.js pageProps — used by batch mode to read listing/series data.
+export function getPageProps() {
+  const d = getNextData();
+  return d?.props?.pageProps || d?.pageProps || {};
+}
+
 function decodeEv(ev) {
   if (!ev || !ev.d || !ev.k) return null;
   try {

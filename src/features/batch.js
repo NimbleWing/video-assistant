@@ -1,0 +1,344 @@
+import { BATCH_KEY } from '../core/constants.js';
+import { Logger } from '../core/logger.js';
+import { getPageProps, videoIdFromPath } from '../site/video-info.js';
+
+// 连续下载编排器。
+// 状态保存在 chrome.storage.local（chrome.storage.session 在内容脚本中不可用：
+// "Access to storage is not allowed from this context"）。为获得"浏览器关闭即失效"
+// 的语义，service worker 在 runtime.onStartup 时清除残留任务。
+//
+// 每个匹配页面的内容脚本都是流水线工人：
+//   列表根页 → 收割条目 → 跳播放页 /s/ 汇总页 → 收割集数 → 跳 /v/ → 下载 → 下一项…
+// 侧边栏通过 storage.onChanged 订阅状态，通过 rv-cmd 下发开始/停止命令。
+
+const NAV_DELAY = 1200; // 跳转前稍作停顿，让状态落盘、页面稳定
+
+let hooks = {};
+let continuing = false;
+
+export function initBatch(h) {
+  hooks = h || {};
+}
+
+function batchArea() {
+  return chrome.storage?.local || null;
+}
+
+export async function getBatch() {
+  try {
+    const area = batchArea();
+    if (!area) {
+      Logger.warn('BATCH', '无可用存储区');
+      return null;
+    }
+    const raw = await area.get(BATCH_KEY);
+    return raw[BATCH_KEY] || null;
+  } catch (e) {
+    Logger.warn('BATCH', `读取状态失败: ${e?.message || e}`);
+    return null;
+  }
+}
+
+async function saveBatch(b) {
+  b.updatedAt = Date.now();
+  try {
+    const area = batchArea();
+    if (!area) throw new Error('无可用存储区');
+    await area.set({ [BATCH_KEY]: b });
+  } catch (e) {
+    Logger.warn('BATCH', `状态保存失败: ${e?.message || e}`);
+  }
+}
+
+export async function clearBatch() {
+  try { await batchArea()?.remove(BATCH_KEY); } catch {}
+}
+
+// ---------------------------------------------------------------- 页面检测
+
+let detectCache = { path: null, result: undefined };
+
+// 判断当前页是不是列表根页，以及是剧集列表还是单片列表。
+export function detectListing() {
+  const path = location.pathname;
+  if (detectCache.path === path) return detectCache.result;
+  let result = null;
+  if (!path.startsWith('/v/') && !path.startsWith('/s/')) {
+    const pp = getPageProps();
+    const list = Array.isArray(pp.list) ? pp.list : null;
+    const videos = Array.isArray(pp.videos) ? pp.videos : null;
+    if (list?.length && list[0] && ('totalEpisodes' in list[0] || 'episodeCount' in list[0])) {
+      result = {
+        kind: 'series',
+        itemCount: list.length,
+        totalPage: Number(pp.totalPage) || 1,
+        pageNum: Number(pp.pageNum) || 1,
+        total: Number(pp.total) || list.length,
+      };
+    } else {
+      const vids = videos?.length ? videos : (list?.length && list[0] && 'duration' in list[0] ? list : null);
+      if (vids) {
+        result = {
+          kind: 'single',
+          itemCount: vids.length,
+          totalPage: Number(pp.totalPage) || 1,
+          pageNum: Number(pp.pageNum) || 1,
+          total: Number(pp.totalVideoNum ?? pp.total) || vids.length,
+        };
+      } else {
+        // DOM 兜底（如 /home 混合页）
+        const s = domLinkIds('/s/').length;
+        const v = domLinkIds('/v/').length;
+        if (s || v) {
+          result = {
+            kind: s >= v ? 'series' : 'single',
+            itemCount: Math.max(s, v),
+            totalPage: 1,
+            pageNum: 1,
+            total: Math.max(s, v),
+            fallback: true,
+          };
+        }
+      }
+    }
+  }
+  detectCache = { path, result };
+  return result;
+}
+
+function domLinkIds(prefix) {
+  const out = new Set();
+  const re = new RegExp(`^${prefix.replace(/\//g, '\\/')}([^/?#]+)`);
+  for (const a of document.querySelectorAll(`a[href^="${prefix}"]`)) {
+    const m = (a.getAttribute('href') || '').match(re);
+    if (m) out.add(decodeURIComponent(m[1]));
+  }
+  return Array.from(out);
+}
+
+function harvestListingItems(mode, limit) {
+  const pp = getPageProps();
+  let items = [];
+  if (mode === 'single') {
+    const vids = Array.isArray(pp.videos) ? pp.videos : (Array.isArray(pp.list) ? pp.list : []);
+    items = vids
+      .filter((v) => v && v.id && !('totalEpisodes' in v) && !('episodeCount' in v))
+      .map((v) => ({ id: v.id, name: v.nameZh || v.name || v.id }));
+    if (!items.length) items = domLinkIds('/v/').map((id) => ({ id, name: id }));
+  } else {
+    const list = Array.isArray(pp.list) ? pp.list : [];
+    items = list
+      .filter((s) => s && s.id && ('totalEpisodes' in s || 'episodeCount' in s))
+      .map((s) => ({ id: s.id, name: s.nameZh || s.name || s.id }));
+    if (!items.length) items = domLinkIds('/s/').map((id) => ({ id, name: id }));
+  }
+  return Number.isFinite(limit) ? items.slice(0, limit) : items;
+}
+
+function harvestSeriesEpisodes() {
+  const pp = getPageProps();
+  const sname = pp.series?.nameZh || pp.series?.name || '';
+  const eps = Array.isArray(pp.episodes) ? pp.episodes : [];
+  const out = eps
+    .filter((e) => e && e.id)
+    .map((e) => ({ id: e.id, name: e.nameZh || e.name || (sname ? `${sname} 第${e.episode}集` : e.id) }));
+  if (!out.length) return domLinkIds('/v/').map((id) => ({ id, name: id }));
+  return out;
+}
+
+function listingPageUrl(page) {
+  const u = new URL(location.href);
+  u.searchParams.set('page', String(page));
+  return u.pathname + u.search;
+}
+
+// pathname + search：翻页只改 query，防重复收割的标记必须带上 query。
+function pageKey() {
+  return location.pathname + location.search;
+}
+
+// 项数上限只约束列表层条目：剧集模式下 1 项 = 1 部剧集（其全部集都会下载），
+// 单片模式下 1 项 = 1 个视频。
+function remainingSlots(b) {
+  if (!b.limit) return Infinity;
+  const used = b.mode === 'series'
+    ? b.seriesQueue.length + (b.seriesTaken || 0)
+    : b.done + b.failed.length + b.videoQueue.length + (b.current ? 1 : 0);
+  return Math.max(0, b.limit - used);
+}
+
+function navTo(url) {
+  setTimeout(() => { location.assign(url); }, NAV_DELAY);
+}
+
+// ---------------------------------------------------------------- 流水线推进
+
+async function advance(b) {
+  const v = b.videoQueue.shift();
+  if (v) {
+    b.current = v;
+    b.note = `下载中：${v.name}`;
+    await saveBatch(b);
+    navTo(`/v/${encodeURIComponent(v.id)}`);
+    return;
+  }
+  const s = b.seriesQueue.shift();
+  if (s) {
+    b.current = null;
+    b.note = `读取剧集：${s.name}`;
+    await saveBatch(b);
+    navTo(`/s/${encodeURIComponent(s.id)}`);
+    return;
+  }
+  const lp = b.listingPages.shift();
+  if (lp) {
+    b.current = null;
+    b.note = `翻页收割：${lp}`;
+    await saveBatch(b);
+    navTo(lp);
+    return;
+  }
+  b.active = false;
+  b.current = null;
+  b.note = 'done';
+  b.finishedAt = Date.now();
+  await saveBatch(b);
+  hooks.toast?.(`连续下载完成：成功 ${b.done} · 失败 ${b.failed.length}`);
+  Logger.info('BATCH', `完成：成功 ${b.done}，失败 ${b.failed.length}`, b.failed);
+}
+
+// ---------------------------------------------------------------- 对外操作
+
+export async function startBatch(mode, scope = {}) {
+  const det = detectListing();
+  if (!det) throw new Error('当前页面不是列表页，无法连续下载');
+  const limit = Number(scope.limit) > 0 ? Math.floor(Number(scope.limit)) : 0;
+  const b = {
+    active: true,
+    mode,
+    limit,
+    seriesTaken: 0,
+    listingPages: [],
+    seriesQueue: [],
+    videoQueue: [],
+    current: null,
+    done: 0,
+    failed: [],
+    total: 0,
+    note: '开始连续下载',
+    lastHarvested: '',
+    startedAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+  if (scope.allPages && det.totalPage > det.pageNum) {
+    for (let p = det.pageNum + 1; p <= det.totalPage; p++) b.listingPages.push(listingPageUrl(p));
+  }
+  const take = limit || Infinity;
+  if (mode === 'single') {
+    const items = harvestListingItems('single', take);
+    b.videoQueue.push(...items);
+    b.total += items.length;
+  } else {
+    const items = harvestListingItems('series', take);
+    b.seriesQueue.push(...items);
+  }
+  b.lastHarvested = pageKey();
+  if (!b.videoQueue.length && !b.seriesQueue.length) {
+    throw new Error(`当前页未检测到${mode === 'series' ? '剧集' : '单片'}条目`);
+  }
+  Logger.info('BATCH', `开始：视频队列 ${b.videoQueue.length}，剧集队列 ${b.seriesQueue.length}，翻页 ${b.listingPages.length}`);
+  await saveBatch(b);
+  await advance(b);
+}
+
+export async function stopBatch() {
+  Logger.info('BATCH', '收到停止指令');
+  hooks.abort?.();
+  await clearBatch();
+}
+
+// 每个下载结束后由 main 调用；返回是否属于连续下载任务。
+export async function onDownloadSettled({ ok, error }) {
+  const b = await getBatch();
+  if (!b || !b.active || !b.current) return false;
+  if (ok) {
+    b.done += 1;
+    Logger.info('BATCH', `完成 ${b.done}：${b.current.name}`);
+  } else {
+    b.failed.push({ id: b.current.id, name: b.current.name, error: String(error || '下载失败').slice(0, 120) });
+    Logger.warn('BATCH', `跳过失败项：${b.current.name}（${error}）`);
+  }
+  b.current = null;
+  await advance(b);
+  return true;
+}
+
+// 每次页面加载后调用：若存在进行中的任务则继续流水线。
+export async function maybeContinueBatch() {
+  if (continuing) return;
+  const b = await getBatch();
+  if (!b || !b.active) return;
+  continuing = true;
+  const path = location.pathname;
+  Logger.info('BATCH', `续跑 @${path}：${b.note || ''}`);
+  try {
+    if (path.startsWith('/v/')) {
+      const id = videoIdFromPath();
+      if (b.current && b.current.id === id) {
+        b.note = `下载中：${b.current.name}`;
+        await saveBatch(b);
+        await hooks.downloadCurrent?.();
+        return;
+      }
+      await advance(b); // 队列外的播放页，直接推进
+      return;
+    }
+    if (path.startsWith('/s/') && b.mode === 'series') {
+      if (b.lastHarvested === pageKey()) { await advance(b); return; } // 防刷新重复收割
+      const eps = harvestSeriesEpisodes();
+      b.seriesTaken = (b.seriesTaken || 0) + 1;
+      b.videoQueue.push(...eps); // 剧集中的每一集都下载，不受列表项数上限约束
+      b.total += eps.length;
+      b.lastHarvested = pageKey();
+      const sname = getPageProps().series?.nameZh || getPageProps().series?.name || path;
+      b.note = `剧集「${sname}」共 ${eps.length} 集`;
+      await saveBatch(b);
+      await advance(b);
+      return;
+    }
+    // 列表根页
+    const det = detectListing();
+    if (!det) {
+      b.active = false;
+      b.note = 'error: 无法识别的页面';
+      await saveBatch(b);
+      hooks.toast?.('连续下载中断：页面无法识别');
+      return;
+    }
+    const take = remainingSlots(b);
+    if (take <= 0) {
+      b.listingPages = [];
+      await saveBatch(b);
+      await advance(b);
+      return;
+    }
+    if (b.lastHarvested === pageKey() && (b.videoQueue.length || b.seriesQueue.length)) {
+      await advance(b); // 防刷新重复收割
+      return;
+    }
+    if (b.mode === 'single') {
+      const items = harvestListingItems('single', take);
+      b.videoQueue.push(...items);
+      b.total += items.length;
+    } else {
+      const items = harvestListingItems('series', take);
+      b.seriesQueue.push(...items);
+    }
+    b.lastHarvested = pageKey();
+    b.note = `收割列表 ${path}（第 ${det.pageNum}/${det.totalPage} 页）`;
+    await saveBatch(b);
+    await advance(b);
+  } catch (e) {
+    Logger.error('BATCH', `续跑失败: ${e.message}`);
+  }
+}

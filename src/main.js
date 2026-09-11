@@ -7,6 +7,7 @@ import { fetchText } from './net/http.js';
 import { collectSniffedFromPerformance, installPageHookListener, sniffedUrls } from './net/sniffer.js';
 import { getVideoInfoFresh, videoIdFromPath } from './site/video-info.js';
 import { loadSettings, saveSetting, state } from './state.js';
+import * as batch from './features/batch.js';
 import { endBoost, handleKeyDown, handleKeyUp, initBoost, updateActiveRate } from './features/boost.js';
 import * as hud from './ui/hud.js';
 
@@ -28,6 +29,7 @@ function snapshot() {
     download: state.download ? { ...state.download } : null,
     holdBoost: state.holdBoost,
     holdRate: state.holdRate,
+    listing: batch.detectListing(),
   };
 }
 
@@ -62,7 +64,7 @@ async function startDownload() {
     await bootVideo(true);
     quality = currentStream();
   }
-  if (!quality || state.download?.running) return;
+  if (!quality || state.download?.running) return false;
   const filename = `${sanitizeName(state.page?.name || 'rouvideo')}.mp4`;
   const ctrl = new AbortController();
   state.abort = ctrl;
@@ -79,14 +81,37 @@ async function startDownload() {
       filename: result.filename || filename,
     };
     hud.toast('下载完成');
+    return true;
   } catch (err) {
-    if (err?.name === 'AbortError') hud.toast('已取消');
-    else hud.toast(err?.message || '下载失败');
-    if (state.download) { state.download.running = false; state.download.finished = false; }
+    const msg = err?.name === 'AbortError' ? '已取消' : (err?.message || '下载失败');
+    hud.toast(msg);
+    if (state.download) {
+      state.download.running = false;
+      state.download.finished = false;
+      state.download.error = err?.name === 'AbortError' ? 'aborted' : msg;
+    }
+    return false;
   } finally {
     state.abort = null;
     pushState();
   }
+}
+
+// 连续下载专用：等待解析完成 → 下载 → 把结果交回编排器推进队列。
+async function batchDownloadCurrent() {
+  const deadline = Date.now() + 30000;
+  while (Date.now() < deadline) {
+    if (currentStream()) break;
+    if (!state.booting) await bootVideo(true);
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  if (!currentStream()) {
+    await batch.onDownloadSettled({ ok: false, error: '解析超时' });
+    return;
+  }
+  const ok = await startDownload();
+  const errMsg = ok ? '' : (state.download?.error === 'aborted' ? '已取消' : (state.download?.error || '下载失败'));
+  await batch.onDownloadSettled({ ok, error: errMsg });
 }
 
 async function bootVideo(force = false) {
@@ -228,6 +253,11 @@ function runCommand(cmd, value) {
   else if (cmd === 'abort') state.abort?.abort();
   else if (cmd === 'rescan') { hud.toast('正在解析…'); bootVideo(true); }
   else if (cmd === 'pip') togglePip();
+  else if (cmd === 'batch-start') {
+    batch.startBatch(value?.mode, value).catch((e) => hud.toast(e.message));
+  } else if (cmd === 'batch-stop') {
+    batch.stopBatch().then(() => hud.toast('已停止连续下载'));
+  }
   else if (cmd === 'toggle-boost') {
     state.holdBoost = !state.holdBoost;
     saveSetting('holdBoost', state.holdBoost);
@@ -243,6 +273,12 @@ function runCommand(cmd, value) {
   }
 }
 
+batch.initBatch({
+  toast: hud.toast,
+  abort: () => state.abort?.abort(),
+  downloadCurrent: batchDownloadCurrent,
+});
+
 function init() {
   hud.mount();
   watchRoute();
@@ -254,6 +290,8 @@ function init() {
   } else {
     pushState();
   }
+  // 若存在进行中的连续下载任务，继续流水线（列表页收割 / 汇总页收割 / 播放页下载）
+  setTimeout(() => { batch.maybeContinueBatch(); }, 1500);
 }
 
 async function main() {

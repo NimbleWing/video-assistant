@@ -8,13 +8,13 @@ import { TsRemux } from './ts-remux.js';
 // Downloads every segment of one media playlist (decrypting if needed),
 // remuxes TS → MP4 when possible, and saves the result via a blob download.
 export async function downloadQuality(quality, filename, onProgress, signal) {
-  const text = await fetchText(quality.url);
+  const text = await fetchText(quality.url, { signal });
   const media = parseMediaPlaylist(text, quality.url);
   if (!media.segments.length) throw new Error('播放列表为空');
 
   let keyBytes = null;
   if (media.keyUri) {
-    keyBytes = new Uint8Array(await fetchBuffer(media.keyUri));
+    keyBytes = new Uint8Array(await fetchBuffer(media.keyUri, { signal }));
   }
 
   const total = media.segments.length;
@@ -33,10 +33,11 @@ export async function downloadQuality(quality, filename, onProgress, signal) {
     let lastErr;
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        let buf = new Uint8Array(await fetchBuffer(seg.url));
+        let buf = new Uint8Array(await fetchBuffer(seg.url, { signal }));
         if (keyBytes) buf = await decryptAes(buf, keyBytes, seg.iv);
         return buf;
       } catch (err) {
+        if (err?.name === 'AbortError') throw err; // 中止不重试
         lastErr = err;
         await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
       }
