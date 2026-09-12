@@ -39,12 +39,11 @@
   "content_scripts": [
     {
       "matches": [
-        "https://rou.video/v",
-        "https://rou.video/v/*",
-        "https://rou.video/home",
+        "https://rou.video/v*",
+        "https://rou.video/home*",
         "https://rou.video/search*",
         "https://rou.video/t/*",
-        "https://rou.video/series",
+        "https://rou.video/series*",
         "https://rou.video/s/*"
       ],
       "js": [
@@ -55,12 +54,11 @@
     },
     {
       "matches": [
-        "https://rou.video/v",
-        "https://rou.video/v/*",
-        "https://rou.video/home",
+        "https://rou.video/v*",
+        "https://rou.video/home*",
         "https://rou.video/search*",
         "https://rou.video/t/*",
-        "https://rou.video/series",
+        "https://rou.video/series*",
         "https://rou.video/s/*"
       ],
       "js": [
