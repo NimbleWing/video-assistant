@@ -7,19 +7,43 @@ import { ICONS } from '../ui/icons.js';
 // rou.video tab (pulled via rv-get-state, pushed via rv-state, commanded via
 // rv-cmd); batch state lives in chrome.storage and is subscribed to directly.
 
-const app = document.getElementById('app');
-const toastEl = document.getElementById('toast');
+/**
+ * @typedef {Object} Snapshot
+ * @property {string} path
+ * @property {boolean} booting
+ * @property {boolean} ready
+ * @property {{ name: string, duration: number } | null} page
+ * @property {{ label: string, url: string, duration: number, segments: number }[]} qualities
+ * @property {import('../state.js').DownloadUiState | null} download
+ * @property {boolean} holdBoost
+ * @property {number} holdRate
+ * @property {import('../features/batch.js').ListingInfo | null} listing
+ */
+
+const app = /** @type {HTMLElement} */ (document.getElementById('app'));
+const toastEl = /** @type {HTMLElement} */ (document.getElementById('toast'));
+/** @type {ReturnType<typeof setTimeout> | 0} */
 let toastTimer = 0;
 
+/** @type {number | null} */
 let currentTabId = null;
+/** @type {Snapshot | null} */
 let snap = null;
+/** @type {import('../features/batch.js').BatchState | null} */
 let batchState = null;
-let dirState = { name: null, granted: null }; // 自定义下载目录状态
+/** @type {{ name: string | null, path: string | null, granted: boolean | null }} */
+let dirState = { name: null, path: null, granted: null }; // 自定义下载目录状态
 // Panel-local UI state for batch setup
-let modeSel = null;   // 'series' | 'single' | null(=跟随检测结果)
-let scopeSel = 'page'; // 'page' | 'all'
+/** @type {'series' | 'single' | null} */
+let modeSel = null;   // null = 跟随检测结果
+/** @type {'page' | 'all'} */
+let scopeSel = 'page';
 let limitVal = '';
 
+/**
+ * @param {string} msg
+ * @param {number} [ms]
+ */
 function toast(msg, ms = 1800) {
   toastEl.textContent = msg;
   toastEl.classList.add('on');
@@ -31,7 +55,7 @@ async function pull() {
   snap = null;
   if (currentTabId != null) {
     try {
-      snap = await chrome.tabs.sendMessage(currentTabId, { type: 'rv-get-state' });
+      snap = /** @type {Snapshot} */ (await chrome.tabs.sendMessage(currentTabId, { type: 'rv-get-state' }));
     } catch {
       snap = null; // active tab is not a matched rou.video page
     }
@@ -42,7 +66,7 @@ async function pull() {
 async function pullBatch() {
   batchState = null;
   try {
-    const raw = await chrome.storage.local.get(BATCH_KEY);
+    const raw = /** @type {Record<string, any>} */ (await chrome.storage.local.get(BATCH_KEY));
     batchState = raw[BATCH_KEY] || null;
   } catch {}
 }
@@ -51,9 +75,10 @@ async function pullDir() {
   const h = await loadDirHandle();
   if (!h) { dirState = { name: null, path: null, granted: null }; return; }
   // 用真实写探针判定（queryPermission 对扩展句柄不可靠，两个方向都会虚报）
+  /** @type {string | null} */
   let path = null;
   try {
-    const flag = (await chrome.storage.local.get('rv-hud:fsdir'))['rv-hud:fsdir'];
+    const flag = (/** @type {Record<string, any>} */ (await chrome.storage.local.get('rv-hud:fsdir')))['rv-hud:fsdir'];
     path = flag?.path || null;
   } catch {}
   dirState = { name: h.name, path, granted: await probeWritable() };
@@ -72,6 +97,7 @@ async function syncDirFlag() {
 // （保存 2 字节占位到所选文件夹）从下载记录读取绝对路径，随后删除文件。
 async function recordDirPath() {
   toast('请在对话框中进入所选文件夹并保存（文件会自动删除）');
+  /** @type {number} */
   let id;
   try {
     id = await chrome.downloads.download({
@@ -85,7 +111,7 @@ async function recordDirPath() {
   }
   const item = await new Promise((resolve) => {
     const timer = setTimeout(() => { chrome.downloads.onChanged.removeListener(listener); resolve(null); }, 5 * 60 * 1000);
-    const listener = (delta) => {
+    const listener = (/** @type {chrome.downloads.DownloadDelta} */ delta) => {
       if (delta.id !== id || !delta.state) return;
       const st = delta.state.current;
       if (st !== 'complete' && st !== 'interrupted') return;
@@ -132,10 +158,11 @@ function dirHtml() {
     </div>`;
 }
 
+/** @param {string} act */
 async function onDirAction(act) {
   if (act === 'pickdir') {
     try {
-      const h = await window.showDirectoryPicker({ mode: 'readwrite', startIn: 'downloads' });
+      const h = await (/** @type {any} */ (window)).showDirectoryPicker({ mode: 'readwrite', startIn: 'downloads' });
       // 重选同一文件夹（同名）时保留已记录的完整路径
       const keepPath = dirState.name === h.name ? dirState.path : null;
       await saveDirHandle(h);
@@ -143,7 +170,7 @@ async function onDirAction(act) {
       await syncDirFlag();
       toast(`下载目录已设为「${h.name}」`);
     } catch (e) {
-      if (e?.name !== 'AbortError') toast('选择目录失败: ' + (e?.message || e), 4000);
+      if ((/** @type {any} */ (e))?.name !== 'AbortError') toast('选择目录失败: ' + ((/** @type {any} */ (e))?.message || e), 4000);
       await pullDir();
       await syncDirFlag();
     }
@@ -158,17 +185,21 @@ async function onDirAction(act) {
     const h = await loadDirHandle();
     if (!h) return;
     try {
-      const p = await h.requestPermission({ mode: 'readwrite' });
+      const p = await (/** @type {any} */ (h)).requestPermission({ mode: 'readwrite' });
       await pullDir();
       await syncDirFlag();
       toast(p === 'granted' ? '已重新授权' : '未授权');
     } catch (e) {
-      toast('授权失败: ' + (e?.message || e), 4000);
+      toast('授权失败: ' + ((/** @type {any} */ (e))?.message || e), 4000);
     }
     render();
   }
 }
 
+/**
+ * @param {string} name
+ * @param {any} [value]
+ */
 function cmd(name, value) {
   if (currentTabId == null) return;
   chrome.tabs.sendMessage(currentTabId, { type: 'rv-cmd', cmd: name, value }).catch(() => {});
@@ -178,10 +209,11 @@ function currentStream() {
   return snap?.qualities?.[0] || null;
 }
 
-function statusLabel() {
-  if (snap.download?.running) return { text: snap.download.pct >= 99 ? '封装 MP4…' : '下载中', dot: 'wait' };
-  if (snap.qualities?.length) return { text: '已就绪', dot: '' };
-  if (snap.booting) return { text: '解析中…', dot: 'wait' };
+/** @param {Snapshot} s */
+function statusLabel(s) {
+  if (s.download?.running) return { text: (s.download.pct || 0) >= 99 ? '封装 MP4…' : '下载中', dot: 'wait' };
+  if (s.qualities?.length) return { text: '已就绪', dot: '' };
+  if (s.booting) return { text: '解析中…', dot: 'wait' };
   return { text: '未解析', dot: 'err' };
 }
 
@@ -284,7 +316,7 @@ function render() {
 
   const d = snap.download;
   const stream = currentStream();
-  const st = statusLabel();
+  const st = statusLabel(snap);
   const dur = stream?.duration || snap.page?.duration || 0;
   const title = snap.page?.name || '当前视频';
   const pct = d?.running ? Math.max(0, Math.min(100, d.pct || 0)) : 0;
@@ -293,8 +325,9 @@ function render() {
 
   const dlLabel = d?.running
     ? (d.saving ? `保存到磁盘 ${Math.round(d.savePct || 0)}% · 点按取消`
-      : (d.pct >= 99 ? '正在封装 MP4…' : `下载中 ${pct.toFixed(0)}% · 点按取消`))
+      : ((d.pct || 0) >= 99 ? '正在封装 MP4…' : `下载中 ${pct.toFixed(0)}% · 点按取消`))
     : (stream ? '下载视频' : (snap.booting ? '解析中…' : '解析并下载'));
+  const holdRate = snap.holdRate;
 
   app.innerHTML = `
     <div class="head">
@@ -312,7 +345,7 @@ function render() {
       <button class="ghost" data-act="copy-m3u8" ${!stream ? 'disabled' : ''}>${ICONS.copy}复制地址</button>
       <button class="ghost" data-act="pip">${ICONS.pip}画中画</button>
     </div>
-    ${d?.running ? `<div class="stats"><span>${d.done}/${d.total} · ${formatBytes(d.bytes)}</span><span>${d.saving ? '正在写入磁盘…' : `${formatBytes(d.speed)}/s · ${formatEta(d.eta)}`}</span></div>` : ''}
+    ${d?.running ? `<div class="stats"><span>${d.done}/${d.total} · ${formatBytes(d.bytes || 0)}</span><span>${d.saving ? '正在写入磁盘…' : `${formatBytes(d.speed || 0)}/s · ${formatEta(d.eta || 0)}`}</span></div>` : ''}
     ${d?.finished && !d.running ? `<div class="ok">${d.skipped ? '本地已存在，已跳过下载' : (dirState.name ? `已保存到「${escapeHtml(dirState.name)}」` : '已保存到浏览器下载目录')}</div>` : ''}
     ${!stream && !snap.booting ? '<button class="ghost" data-act="rescan" style="width:100%;margin-top:8px">重新解析</button>' : ''}
     <div class="boost">
@@ -324,28 +357,29 @@ function render() {
         <button class="sw ${snap.holdBoost ? 'on' : ''}" data-act="toggle-boost" aria-pressed="${snap.holdBoost}"><i></i></button>
       </div>
       <div class="seg">
-        ${RATES.map((n) => `<button data-act="rate" data-rate="${n}" class="${snap.holdRate === n ? 'on' : ''}">${n}×</button>`).join('')}
+        ${RATES.map((n) => `<button data-act="rate" data-rate="${n}" class="${holdRate === n ? 'on' : ''}">${n}×</button>`).join('')}
       </div>
     </div>
     ${batchHtml()}`;
 }
 
 // Fine-grained progress update without re-rendering (keeps button state).
+/** @param {import('../state.js').DownloadUiState} d */
 function renderProgress(d) {
   const pct = Math.max(0, Math.min(100, d.pct || 0));
-  const fill = app.querySelector('.dl-fill');
+  const fill = /** @type {HTMLElement | null} */ (app.querySelector('.dl-fill'));
   const label = app.querySelector('.dl:not(.batch-start) span');
   const stats = app.querySelector('.stats');
   if (fill) fill.style.width = `${d.saving ? Math.max(0, Math.min(100, d.savePct || 0)) : pct}%`;
   if (label) {
     label.textContent = d.saving
       ? `保存到磁盘 ${Math.round(d.savePct || 0)}% · 点按取消`
-      : (d.pct >= 99 ? '正在封装 MP4…' : `下载中 ${pct.toFixed(0)}% · 点按取消`);
+      : ((d.pct || 0) >= 99 ? '正在封装 MP4…' : `下载中 ${pct.toFixed(0)}% · 点按取消`);
   }
   if (stats) {
     stats.innerHTML = d.saving
-      ? `<span>${formatBytes(d.bytes)}</span><span>正在写入磁盘…</span>`
-      : `<span>${d.done}/${d.total} · ${formatBytes(d.bytes)}</span><span>${formatBytes(d.speed)}/s · ${formatEta(d.eta)}</span>`;
+      ? `<span>${formatBytes(d.bytes || 0)}</span><span>正在写入磁盘…</span>`
+      : `<span>${d.done}/${d.total} · ${formatBytes(d.bytes || 0)}</span><span>${formatBytes(d.speed || 0)}/s · ${formatEta(d.eta || 0)}</span>`;
   } else {
     render();
   }
@@ -354,16 +388,16 @@ function renderProgress(d) {
 // ------------------------------------------------------------------ 事件
 
 app.addEventListener('click', (ev) => {
-  const act = ev.target.closest('[data-act],[data-bact]');
+  const act = (/** @type {HTMLElement | null} */ (ev.target))?.closest('[data-act],[data-bact]');
   if (!act) return;
-  const kind = act.dataset.act;
-  const bkind = act.dataset.bact;
+  const kind = (/** @type {HTMLElement} */ (act)).dataset.act;
+  const bkind = (/** @type {HTMLElement} */ (act)).dataset.bact;
   if (kind === 'download') cmd('download');
   else if (kind === 'abort') cmd('abort');
   else if (kind === 'rescan') { toast('正在解析…'); cmd('rescan'); }
   else if (kind === 'pip') cmd('pip');
   else if (kind === 'toggle-boost') cmd('toggle-boost');
-  else if (kind === 'rate') cmd('rate', Number(act.dataset.rate));
+  else if (kind === 'rate') cmd('rate', Number((/** @type {HTMLElement} */ (act)).dataset.rate));
   else if (kind === 'copy-m3u8') {
     const q = currentStream();
     if (!q) return toast('还没有解析到地址');
@@ -371,10 +405,10 @@ app.addEventListener('click', (ev) => {
       .then(() => toast('已复制'))
       .catch(() => toast('复制失败', 4000));
   } else if (bkind === 'mode') {
-    modeSel = act.dataset.mode;
+    modeSel = /** @type {'series' | 'single'} */ ((/** @type {HTMLElement} */ (act)).dataset.mode);
     render();
   } else if (bkind === 'scope') {
-    scopeSel = act.dataset.scope;
+    scopeSel = /** @type {'page' | 'all'} */ ((/** @type {HTMLElement} */ (act)).dataset.scope);
     render();
   } else if (bkind === 'start') {
     const mode = modeSel || snap?.listing?.kind;
@@ -401,23 +435,24 @@ app.addEventListener('click', (ev) => {
 });
 
 app.addEventListener('input', (ev) => {
-  if (ev.target?.id === 'batchLimit') limitVal = ev.target.value;
+  const t = /** @type {HTMLInputElement | null} */ (ev.target);
+  if (t?.id === 'batchLimit') limitVal = t.value;
 });
 
 chrome.runtime.onMessage.addListener((message, sender) => {
   if (message?.type !== 'rv-state') return;
   if (sender.tab?.id !== currentTabId) return;
   const wasRunning = snap?.download?.running;
-  snap = message.state;
-  const isRunning = snap?.download?.running;
+  const ns = /** @type {Snapshot} */ (message.state);
+  snap = ns;
   // During active downloads update only the progress bits to avoid flicker.
-  if (wasRunning && isRunning) renderProgress(snap.download);
+  if (wasRunning && ns.download?.running) renderProgress(ns.download);
   else render();
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if ((area === 'session' || area === 'local') && changes[BATCH_KEY]) {
-    batchState = changes[BATCH_KEY].newValue || null;
+    batchState = /** @type {import('../features/batch.js').BatchState | null} */ (changes[BATCH_KEY].newValue || null);
     render();
   }
 });

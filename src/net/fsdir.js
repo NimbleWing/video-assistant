@@ -4,6 +4,7 @@ const DB_NAME = 'rv-fs';
 const STORE = 'handles';
 const KEY = 'dir';
 
+/** @returns {Promise<IDBDatabase>} */
 function idbOpen() {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, 1);
@@ -13,6 +14,12 @@ function idbOpen() {
   });
 }
 
+/**
+ * @template T
+ * @param {IDBTransactionMode} mode
+ * @param {(store: IDBObjectStore) => IDBRequest<T>} fn
+ * @returns {Promise<T>}
+ */
 function tx(mode, fn) {
   return idbOpen().then((db) => new Promise((resolve, reject) => {
     const t = db.transaction(STORE, mode);
@@ -22,14 +29,20 @@ function tx(mode, fn) {
   }));
 }
 
+/** @returns {Promise<FileSystemDirectoryHandle | null>} */
 export async function loadDirHandle() {
   try { return (await tx('readonly', (s) => s.get(KEY))) || null; } catch { return null; }
 }
 
+/**
+ * @param {FileSystemDirectoryHandle} handle
+ * @returns {Promise<void>}
+ */
 export async function saveDirHandle(handle) {
   await tx('readwrite', (s) => s.put(handle, KEY));
 }
 
+/** @returns {Promise<void>} */
 export async function clearDirHandle() {
   try { await tx('readwrite', (s) => s.delete(KEY)); } catch {}
 }
@@ -37,6 +50,7 @@ export async function clearDirHandle() {
 // 真实写探针：创建并立即删除一个探测文件。
 // queryPermission 对扩展的 IDB 回读句柄不可靠（两个方向都会虚报），
 // 实际能否写入以本探针为准——offscreen 的写入权限与此同源同状态。
+/** @returns {Promise<boolean>} */
 export async function probeWritable() {
   const h = await loadDirHandle();
   if (!h) return false;

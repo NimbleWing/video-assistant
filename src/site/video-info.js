@@ -1,18 +1,37 @@
-import { toAbsolute } from '../core/utils.js';
+import { errText, toAbsolute } from '../core/utils.js';
 import { Logger } from '../core/logger.js';
 
+/**
+ * @typedef {Object} PageInfo
+ * @property {string} id
+ * @property {string} name
+ * @property {string} masterM3u8
+ * @property {string} videoUrl
+ * @property {number} duration
+ * @property {string} seriesName
+ * @property {string} seriesCoverUrl
+ * @property {string} coverUrl
+ */
+
+/** @returns {any} __NEXT_DATA__ 的 JSON；无或解析失败为 null */
 function getNextData() {
   const script = document.getElementById('__NEXT_DATA__');
   if (!script) return null;
-  try { return JSON.parse(script.textContent); } catch { return null; }
+  try { return JSON.parse(script.textContent || ''); } catch { return null; }
 }
 
 // Raw Next.js pageProps — used by batch mode to read listing/series data.
+/** @returns {any} */
 export function getPageProps() {
   const d = getNextData();
   return d?.props?.pageProps || d?.pageProps || {};
 }
 
+/**
+ * 站点对播放地址的简单位移加密：base64 后逐字符减 k。
+ * @param {any} ev { d: base64, k: number }
+ * @returns {any} { videoUrl } 或 null
+ */
 function decodeEv(ev) {
   if (!ev || !ev.d || !ev.k) return null;
   try {
@@ -24,11 +43,16 @@ function decodeEv(ev) {
   }
 }
 
+/** @returns {string} /v/<id> 中的视频 id */
 export function videoIdFromPath() {
   const m = location.pathname.match(/^\/v\/([^/?#]+)/);
   return m ? decodeURIComponent(m[1]) : '';
 }
 
+/**
+ * @param {any} data __NEXT_DATA__ JSON
+ * @returns {PageInfo | null}
+ */
 function videoInfoFromData(data) {
   const pageProps = data?.props?.pageProps || data?.pageProps;
   const video = pageProps?.video;
@@ -49,6 +73,7 @@ function videoInfoFromData(data) {
   };
 }
 
+/** @returns {PageInfo | null} 页面数据中的当前视频信息（与地址栏 id 一致才采信） */
 export function getVideoInfo() {
   const info = videoInfoFromData(getNextData());
   const id = videoIdFromPath();
@@ -56,6 +81,7 @@ export function getVideoInfo() {
   return null;
 }
 
+/** @returns {Promise<PageInfo | null>} 本地解析失败时重新抓取页面 HTML 兜底 */
 export async function getVideoInfoFresh() {
   const local = getVideoInfo();
   if (local) return local;
@@ -67,7 +93,7 @@ export async function getVideoInfoFresh() {
     if (!match) return null;
     return videoInfoFromData(JSON.parse(match[1]));
   } catch (e) {
-    Logger.warn('INFO', '刷新页面数据失败', e.message);
+    Logger.warn('INFO', '刷新页面数据失败', errText(e));
     return null;
   }
 }

@@ -1,8 +1,14 @@
 import { Logger } from '../core/logger.js';
 import { isPlaylistUrl } from '../hls/playlist.js';
 
+/** @type {Set<string>} */
 export const sniffedUrls = new Set();
 
+/**
+ * @param {unknown} url
+ * @param {string} via
+ * @returns {void}
+ */
 export function maybeSniff(url, via) {
   if (!isPlaylistUrl(url)) return;
   const s = String(url);
@@ -11,6 +17,7 @@ export function maybeSniff(url, via) {
   Logger.info('SNIFF', `捕获 ${via}: ${s}`);
 }
 
+/** @returns {void} */
 export function collectSniffedFromPerformance() {
   try {
     performance.getEntriesByType('resource').forEach((entry) => {
@@ -21,6 +28,7 @@ export function collectSniffedFromPerformance() {
 
 // Receives sniff results from the MAIN-world page hook (src/page-hook.js).
 // The hook always broadcasts the full set, so late listeners lose nothing.
+/** @returns {void} */
 export function installPageHookListener() {
   window.addEventListener('message', (e) => {
     if (e.source !== window) return;

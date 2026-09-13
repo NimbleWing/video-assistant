@@ -1,6 +1,38 @@
 import { resolveUrl, toAbsolute } from '../core/utils.js';
 import { hexToBytes, sequenceIv } from '../core/crypto.js';
 
+/**
+ * @typedef {Object} Segment
+ * @property {string} url
+ * @property {Uint8Array<ArrayBuffer>} iv
+ * @property {number} seq
+ * @property {number} duration
+ */
+
+/**
+ * @typedef {Object} MediaPlaylist
+ * @property {Segment[]} segments
+ * @property {string} keyUri 解密钥地址（明文流为空串）
+ * @property {number} duration 由 EXTINF 累加的总时长（秒）
+ */
+
+/**
+ * @typedef {Object} Variant
+ * @property {string} label
+ * @property {string} resolution
+ * @property {number} bandwidth
+ * @property {number} height
+ * @property {string} url
+ * @property {string} prefix
+ * @property {number} [duration] 由调用方解析媒体列表后回填
+ * @property {number} [segments] 由调用方解析媒体列表后回填
+ */
+
+/**
+ * 是否播放列表地址（含本站伪装成图片的 m3u8）。
+ * @param {unknown} url
+ * @returns {boolean}
+ */
 export function isPlaylistUrl(url) {
   const s = String(url || '');
   if (!s || /^blob:/i.test(s)) return false;
@@ -9,9 +41,15 @@ export function isPlaylistUrl(url) {
     || /\/(?:index|master)\.(?:m3u8|jpg|jpeg|png)(\?|#|$)/i.test(s);
 }
 
+/**
+ * 由视频地址生成候选播放列表地址（站点把 m3u8 伪装成 index.png/jpg）。
+ * @param {string} videoUrl
+ * @returns {string[]}
+ */
 export function playlistCandidates(videoUrl) {
+  /** @type {string[]} */
   const out = [];
-  const add = (u) => { if (u && !out.includes(u)) out.push(u); };
+  const add = (/** @type {string} */ u) => { if (u && !out.includes(u)) out.push(u); };
   const abs = toAbsolute(videoUrl);
   add(abs);
   add(videoUrl);
@@ -30,8 +68,15 @@ export function playlistCandidates(videoUrl) {
   return out;
 }
 
+/**
+ * 解析 master 播放列表，按清晰度降序返回变体。
+ * @param {string} text
+ * @param {string} baseUrl
+ * @returns {Variant[]}
+ */
 export function parseMasterPlaylist(text, baseUrl) {
   const lines = text.split(/\r?\n/);
+  /** @type {Variant[]} */
   const variants = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
@@ -45,7 +90,7 @@ export function parseMasterPlaylist(text, baseUrl) {
     const res = (meta.match(/RESOLUTION=(\d+x\d+)/i) || [])[1] || '';
     const bw = Number((meta.match(/BANDWIDTH=(\d+)/i) || [])[1] || 0);
     const name = (meta.match(/NAME="?([^",]+)"?/i) || [])[1] || '';
-    const height = Number((res.split('x')[1] || name.match(/(\d{3,4})/)?.[1] || 0));
+    const height = Number(res.split('x')[1] || name.match(/(\d{3,4})/)?.[1] || 0);
     variants.push({
       label: name || (height ? `${height}p` : 'Source'),
       resolution: res,
@@ -59,10 +104,18 @@ export function parseMasterPlaylist(text, baseUrl) {
   return variants;
 }
 
+/**
+ * 解析媒体播放列表为分段数组（含每段 IV 与解密钥地址）。
+ * @param {string} text
+ * @param {string} baseUrl
+ * @returns {MediaPlaylist}
+ */
 export function parseMediaPlaylist(text, baseUrl) {
   const lines = text.split(/\r?\n/);
+  /** @type {Segment[]} */
   const segments = [];
   let keyUri = '';
+  /** @type {Uint8Array<ArrayBuffer> | null} */
   let keyIv = null;
   let seq = 0;
   for (let i = 0; i < lines.length; i++) {

@@ -1,6 +1,6 @@
 import { RATES } from './core/constants.js';
 import { Logger } from './core/logger.js';
-import { pageVideo, sanitizeName, toAbsolute } from './core/utils.js';
+import { errText, isAbortError, pageVideo, sanitizeName, toAbsolute } from './core/utils.js';
 import { downloadQuality } from './hls/downloader.js';
 import { cancelActiveSave, saveViaExtension } from './net/save.js';
 import { isPlaylistUrl, parseMasterPlaylist, parseMediaPlaylist, playlistCandidates } from './hls/playlist.js';
@@ -60,6 +60,10 @@ function currentStream() {
 }
 
 // 查询 SW：目标文件是否已在本地（历史/账本快路径 + 0 字节占位磁盘探测兜底）
+/**
+ * @param {string} filename
+ * @returns {Promise<{ exists: boolean }>}
+ */
 function checkDownloaded(filename) {
   return chrome.runtime.sendMessage({ type: 'rv-file-exists', filename })
     .then((r) => ({ exists: !!r?.exists }))
@@ -116,12 +120,13 @@ async function startDownloadInner() {
     hud.toast(result.note || '下载完成');
     return true;
   } catch (err) {
-    const msg = err?.name === 'AbortError' ? '已取消' : (err?.message || '下载失败');
-    hud.toast(msg, err?.name === 'AbortError' ? 1800 : 4000); // 错误信息留足阅读时间
+    const aborted = isAbortError(err);
+    const msg = aborted ? '已取消' : (errText(err) || '下载失败');
+    hud.toast(msg, aborted ? 1800 : 4000); // 错误信息留足阅读时间
     if (state.download) {
       state.download.running = false;
       state.download.finished = false;
-      state.download.error = err?.name === 'AbortError' ? 'aborted' : msg;
+      state.download.error = aborted ? 'aborted' : msg;
     }
     return false;
   } finally {
@@ -132,6 +137,7 @@ async function startDownloadInner() {
 
 // 封面随视频一起保存：剧集 → 剧名/剧名.jpg（每集覆盖写同一个文件，天然只留一张，
 // 且与文件夹同名会被 Windows 当作文件夹缩略图）；单片 → 视频名.jpg。
+/** @param {Uint8Array} u8 @returns {'jpg' | 'png' | 'webp'} */
 function sniffImageExt(u8) {
   if (u8.length > 3 && u8[0] === 0xff && u8[1] === 0xd8 && u8[2] === 0xff) return 'jpg';
   if (u8.length > 8 && u8[0] === 0x89 && u8[1] === 0x50 && u8[2] === 0x4e && u8[3] === 0x47) return 'png';
@@ -139,6 +145,7 @@ function sniffImageExt(u8) {
   return 'jpg';
 }
 
+/** @param {import('./site/video-info.js').PageInfo | null} page */
 async function saveCover(page) {
   try {
     const isSeries = !!page?.seriesName;
@@ -153,7 +160,7 @@ async function saveCover(page) {
     const r = await saveViaExtension([buf], `${base}.${ext}`, `image/${ext === 'jpg' ? 'jpeg' : ext}`, { conflictAction: 'overwrite' });
     if (!r.ok) Logger.warn('COVER', `封面保存失败: ${r.error}`);
   } catch (e) {
-    Logger.warn('COVER', `封面下载失败: ${e?.message || e}`);
+    Logger.warn('COVER', `封面下载失败: ${errText(e)}`);
   }
 }
 
@@ -184,8 +191,9 @@ async function bootVideo(force = false) {
   try {
     const m3u8Url = state.page?.masterM3u8;
     collectSniffedFromPerformance();
+    /** @type {string[]} */
     const candidates = [];
-    const addCandidate = (u) => { if (u && !candidates.includes(u)) candidates.push(u); };
+    const addCandidate = (/** @type {string | undefined} */ u) => { if (u && !candidates.includes(u)) candidates.push(u); };
     for (const url of sniffedUrls) {
       if (isPlaylistUrl(url)) addCandidate(url);
     }
@@ -206,7 +214,7 @@ async function bootVideo(force = false) {
         }
         text = null;
       } catch (e) {
-        Logger.warn('BOOT', `播放列表失败: ${e.message}`);
+        Logger.warn('BOOT', `播放列表失败: ${errText(e)}`);
       }
     }
 
@@ -217,6 +225,7 @@ async function bootVideo(force = false) {
         if (src && !src.startsWith('blob:')) {
           state.qualities = [{
             label: '视频源', url: src, prefix: src,
+            resolution: '', bandwidth: 0, height: 0,
             duration: v.duration || state.page?.duration || 0, segments: 0,
           }];
           state.booting = false;
@@ -230,7 +239,7 @@ async function bootVideo(force = false) {
     if (!text) throw new Error('无法获取播放列表');
 
     if (text.includes('#EXT-X-STREAM-INF')) {
-      const variants = parseMasterPlaylist(text, usedUrl);
+      const variants = parseMasterPlaylist(text, /** @type {string} */ (usedUrl));
       if (!variants.length) throw new Error('播放列表为空');
       const best = variants[0];
       try {
@@ -241,12 +250,13 @@ async function bootVideo(force = false) {
       } catch { best.duration = 0; }
       state.qualities = [best];
     } else if (text.includes('#EXTINF')) {
-      const media = parseMediaPlaylist(text, usedUrl);
+      const media = parseMediaPlaylist(text, /** @type {string} */ (usedUrl));
       if (!media.segments.length) throw new Error('播放列表为空');
       state.qualities = [{
         label: 'default',
-        url: usedUrl,
-        prefix: usedUrl.replace(/[^/]+$/, ''),
+        url: /** @type {string} */ (usedUrl),
+        prefix: /** @type {string} */ (usedUrl).replace(/[^/]+$/, ''),
+        resolution: '', bandwidth: 0, height: 0,
         duration: media.duration || state.page?.duration || 0,
         segments: media.segments.length,
       }];
@@ -255,8 +265,8 @@ async function bootVideo(force = false) {
     }
     pushState();
   } catch (err) {
-    Logger.error('BOOT', `解析失败: ${err.message}`);
-    if (force) hud.toast(`解析失败: ${err.message}`, 4000);
+    Logger.error('BOOT', `解析失败: ${errText(err)}`);
+    if (force) hud.toast(`解析失败: ${errText(err)}`, 4000);
     pushState();
   } finally {
     state.booting = false;
@@ -296,6 +306,7 @@ function watchRoute() {
   setInterval(onChange, 800);
 }
 
+/** @param {KeyboardEvent} e */
 function onKeyDown(e) {
   if (e.altKey && (e.key === 'd' || e.key === 'D')) {
     e.preventDefault();
@@ -305,10 +316,15 @@ function onKeyDown(e) {
   handleKeyDown(e);
 }
 
+/** @param {KeyboardEvent} e */
 function onKeyUp(e) {
   handleKeyUp(e);
 }
 
+/**
+ * @param {string} cmd
+ * @param {any} [value]
+ */
 function runCommand(cmd, value) {
   if (cmd === 'download') startDownload();
   else if (cmd === 'abort') { state.abort?.abort(); cancelActiveSave(); } // 下载/保存两阶段都可取消

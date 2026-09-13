@@ -5,6 +5,13 @@ import { unwrapIfNeeded } from './rou-png.js';
 // and the GM_xmlhttpRequest fallback: with host_permissions for the CDN hosts,
 // cross-origin requests bypass CORS while keeping the page origin
 // (Origin/Referer = https://rou.video), which the CDN expects.
+
+/**
+ * @param {string} url
+ * @param {'arraybuffer' | 'text'} responseType
+ * @param {{ signal?: AbortSignal, timeoutMs?: number }} [opts]
+ * @returns {Promise<ArrayBuffer | string>}
+ */
 async function fetchOnce(url, responseType, { signal, timeoutMs } = {}) {
   const signals = [];
   if (signal) signals.push(signal);
@@ -21,15 +28,31 @@ async function fetchOnce(url, responseType, { signal, timeoutMs } = {}) {
   return responseType === 'arraybuffer' ? await resp.arrayBuffer() : await resp.text();
 }
 
+/**
+ * @param {string} url
+ * @param {{ signal?: AbortSignal, timeoutMs?: number }} [opts]
+ * @returns {Promise<Uint8Array>}
+ */
 export async function fetchRaw(url, { signal, timeoutMs = 60000 } = {}) {
   const raw = await fetchOnce(url, 'arraybuffer', { signal, timeoutMs });
-  return raw instanceof Uint8Array ? raw : new Uint8Array(raw);
+  return raw instanceof Uint8Array ? raw : new Uint8Array(/** @type {ArrayBuffer} */ (raw));
 }
 
+/**
+ * 拉取二进制并自动解开 PNG 伪装。
+ * @param {string} url
+ * @param {{ signal?: AbortSignal, timeoutMs?: number }} [opts]
+ * @returns {Promise<Uint8Array>}
+ */
 export async function fetchBuffer(url, { signal, timeoutMs } = {}) {
   return unwrapIfNeeded(await fetchRaw(url, { signal, timeoutMs }));
 }
 
+/**
+ * @param {string} url
+ * @param {{ signal?: AbortSignal }} [opts]
+ * @returns {Promise<string>}
+ */
 export async function fetchText(url, { signal } = {}) {
   const u8 = await fetchBuffer(url, { signal, timeoutMs: 30000 });
   return new TextDecoder('utf-8').decode(u8);

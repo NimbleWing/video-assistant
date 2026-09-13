@@ -4,7 +4,9 @@ import { showSpeedHud } from '../ui/hud.js';
 
 // Long-press arrow key boost: hold → Nx forward / rewind, tap → ±5s seek.
 const hold = {
+  /** @type {ReturnType<typeof setTimeout> | 0} */
   timer: 0,
+  /** @type {ReturnType<typeof setInterval> | 0} */
   rewindTimer: 0,
   active: false,
   dir: 0,
@@ -12,15 +14,24 @@ const hold = {
   originalRate: 1,
   startedPlay: false,
   resumeAfter: false,
+  /** @type {HTMLVideoElement | null} */
   video: null,
 };
 
+/**
+ * @param {KeyboardEvent} e
+ * @returns {number} 1 右 / -1 左 / 0 其他
+ */
 function arrowDir(e) {
   if (e.code === 'ArrowRight' || e.key === 'ArrowRight') return 1;
   if (e.code === 'ArrowLeft' || e.key === 'ArrowLeft') return -1;
   return 0;
 }
 
+/**
+ * @param {HTMLVideoElement} video
+ * @param {number} seconds
+ */
 function seekBy(video, seconds) {
   try {
     const t = Math.min(video.duration || 1e9, Math.max(0, (video.currentTime || 0) + seconds));
@@ -28,6 +39,10 @@ function seekBy(video, seconds) {
   } catch {}
 }
 
+/**
+ * @param {HTMLVideoElement} video
+ * @param {number} dir
+ */
 function beginBoost(video, dir) {
   if (!video || !dir) return;
   if (hold.active && hold.dir === dir) return;
@@ -60,6 +75,7 @@ function beginBoost(video, dir) {
   showSpeedHud(true, dir);
 }
 
+/** @returns {void} */
 export function endBoost() {
   clearTimeout(hold.timer);
   hold.timer = 0;
@@ -88,12 +104,17 @@ export function endBoost() {
 }
 
 // Called when the user picks a new rate while a boost is active.
+/** @param {number} n */
 export function updateActiveRate(n) {
   if (hold.active && hold.video && hold.dir > 0) hold.video.playbackRate = n;
   showSpeedHud(hold.active, hold.dir || 1);
 }
 
 // Returns true when the event was consumed by the boost feature.
+/**
+ * @param {KeyboardEvent} e
+ * @returns {boolean}
+ */
 export function handleKeyDown(e) {
   if (!state.holdBoost) return false;
   const dir = arrowDir(e);
@@ -111,6 +132,10 @@ export function handleKeyDown(e) {
   return true;
 }
 
+/**
+ * @param {KeyboardEvent} e
+ * @returns {boolean}
+ */
 export function handleKeyUp(e) {
   const dir = arrowDir(e);
   if (!dir) return false;
@@ -131,6 +156,7 @@ export function handleKeyUp(e) {
   return true;
 }
 
+/** @returns {void} */
 export function initBoost() {
   window.addEventListener('blur', endBoost);
   document.addEventListener('visibilitychange', () => { if (document.hidden) endBoost(); });

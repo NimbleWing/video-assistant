@@ -2,30 +2,73 @@
 // 仅在 begin 时记账并确保 offscreen 存在）→ 组装 → chrome.downloads / 文件句柄写入。
 // 大文件优化：16MB 分块减少往返；FileReader 原生 base64（比 JS 循环快 ~2x）。
 
-// 当前进行中的保存：让 99% 之后的"取消"按钮仍然有效（释放内存、立即复位 UI）
-let activeSave = null; // { saveId, cancel }
+/**
+ * @typedef {Object} SaveProgress
+ * @property {number} sent
+ * @property {number} total
+ * @property {number} pct
+ */
 
+/**
+ * @typedef {Object} SaveOptions
+ * @property {'uniquify' | 'overwrite' | 'prompt'} [conflictAction]
+ * @property {(p: SaveProgress) => void} [onProgress]
+ */
+
+/**
+ * @typedef {Object} SaveResult
+ * @property {boolean} ok
+ * @property {string} error
+ * @property {string} note
+ * @property {string} filename
+ * @property {boolean} cancelled
+ */
+
+// 当前进行中的保存：让 99% 之后的"取消"按钮仍然有效（释放内存、立即复位 UI）
+/** @type {{ saveId: string, cancel: () => void } | null} */
+let activeSave = null;
+
+/** @returns {void} */
 export function cancelActiveSave() {
   activeSave?.cancel();
 }
 
+/**
+ * @param {Uint8Array} u8
+ * @returns {Promise<string>}
+ */
 async function toBase64(u8) {
-  const blob = new Blob([u8]);
+  const blob = new Blob([/** @type {BlobPart} */ (u8)]);
   const url = await new Promise((resolve, reject) => {
     const fr = new FileReader();
-    fr.onload = () => resolve(fr.result);
+    fr.onload = () => resolve(/** @type {string} */ (fr.result));
     fr.onerror = () => reject(fr.error || new Error('FileReader 失败'));
     fr.readAsDataURL(blob);
   });
   return url.slice(url.indexOf(',') + 1);
 }
 
+/**
+ * 经扩展管线保存文件（offscreen 组装 → chrome.downloads 或自定义目录句柄写入）。
+ * @param {Uint8Array[]} chunks
+ * @param {string} filename 可含子目录（剧集归目录依赖此能力）
+ * @param {string} mime
+ * @param {SaveOptions} [opts]
+ * @returns {Promise<SaveResult>}
+ */
 export function saveViaExtension(chunks, filename, mime, { conflictAction = 'uniquify', onProgress } = {}) {
   const saveId = `s${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
   const CHUNK = 16 * 1024 * 1024;
   const totalToSend = chunks.reduce((s, p) => s + p.length, 0);
   return new Promise((resolve) => {
     let settled = false;
+    /**
+     * @param {boolean} ok
+     * @param {string} [error]
+     * @param {string} [note]
+     * @param {string | null} [finalFilename]
+     * @param {boolean} [cancelled]
+     */
     const finish = (ok, error, note, finalFilename, cancelled = false) => {
       if (settled) return;
       settled = true;
@@ -34,6 +77,7 @@ export function saveViaExtension(chunks, filename, mime, { conflictAction = 'uni
       clearTimeout(timer);
       resolve({ ok, error: error || '', note: note || '', filename: finalFilename || filename, cancelled });
     };
+    /** @param {any} msg */
     const onMsg = (msg) => {
       if (msg?.type === 'dl-settled' && msg.saveId === saveId) finish(!!msg.ok, msg.error, msg.note, msg.finalFilename);
     };
@@ -68,7 +112,7 @@ export function saveViaExtension(chunks, filename, mime, { conflictAction = 'uni
         const fin = await chrome.runtime.sendMessage({ type: 'rv-save-end', saveId });
         if (!fin || fin.ok === false) throw new Error(fin?.error || '保存收尾失败');
       } catch (e) {
-        finish(false, String(e?.message || e));
+        finish(false, String(/** @type {any} */ (e)?.message || e));
       }
     })();
   });

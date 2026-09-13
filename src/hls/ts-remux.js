@@ -1,8 +1,56 @@
 // Minimal MPEG-TS → MP4 (H.264/AAC) remuxer, ported unchanged from the
 // userscript. Demuxes TS packets into AVC/AAC samples and muxes a plain MP4.
+
+/**
+ * @typedef {Object} VideoSample
+ * @property {Uint8Array} data AVCC 格式（长度前缀 NAL）
+ * @property {number} pts 90kHz 时钟
+ * @property {boolean} isKey
+ * @property {number} [rel] mux 阶段回填的相对起始 PTS
+ */
+
+/**
+ * @typedef {Object} AudioSample
+ * @property {Uint8Array} data AAC 裸帧（去 ADTS 头）
+ * @property {number} pts 90kHz 时钟
+ * @property {number} [rel] mux 阶段回填的相对起始 PTS
+ */
+
+/**
+ * @typedef {Object} StreamMeta
+ * @property {number} width
+ * @property {number} height
+ * @property {number} profile
+ * @property {number} level
+ * @property {Uint8Array | undefined} sps
+ * @property {Uint8Array | undefined} pps
+ * @property {number} sampleRate
+ * @property {number} channels
+ * @property {number} aacProfile
+ */
+
+/**
+ * @typedef {Object} Demuxed
+ * @property {VideoSample[]} video
+ * @property {AudioSample[]} audio
+ * @property {StreamMeta} meta
+ */
+
+/**
+ * @typedef {Object} PesStream
+ * @property {number} sid PES stream_id
+ * @property {Uint8Array[]} chunks
+ * @property {number} len
+ * @property {{ off: number, pts: number }[]} ptsAt
+ */
+
 export const TsRemux = (function () {
 'use strict';
 
+/**
+ * @param {Uint8Array[]} parts
+ * @returns {Uint8Array}
+ */
 function concat(parts) {
   let n = 0;
   for (const p of parts) n += p.length;
@@ -12,18 +60,31 @@ function concat(parts) {
   return out;
 }
 
+/**
+ * @param {number} n
+ * @returns {Uint8Array}
+ */
 function u32(n) {
   const b = new Uint8Array(4);
   new DataView(b.buffer).setUint32(0, n >>> 0);
   return b;
 }
 
+/**
+ * @param {number} n
+ * @returns {Uint8Array}
+ */
 function u16(n) {
   const b = new Uint8Array(2);
   new DataView(b.buffer).setUint16(0, n & 0xffff);
   return b;
 }
 
+/**
+ * @param {string} type 4 字符 box 类型
+ * @param {Uint8Array} payload
+ * @returns {Uint8Array}
+ */
 function box(type, payload) {
   const out = new Uint8Array(8 + payload.length);
   new DataView(out.buffer).setUint32(0, out.length);
@@ -35,6 +96,13 @@ function box(type, payload) {
   return out;
 }
 
+/**
+ * @param {string} type
+ * @param {number} ver
+ * @param {number} flags
+ * @param {Uint8Array} payload
+ * @returns {Uint8Array}
+ */
 function fullBox(type, ver, flags, payload) {
   const head = new Uint8Array(4);
   head[0] = ver;
@@ -44,6 +112,11 @@ function fullBox(type, ver, flags, payload) {
   return box(type, concat([head, payload]));
 }
 
+/**
+ * MPEG-TS 嗅探：前 10 个包中 ≥80% 以 0x47 开头。
+ * @param {Uint8Array | null | undefined} buf
+ * @returns {boolean}
+ */
 function isMpegTs(buf) {
   if (!buf || buf.length < 188) return false;
   let hits = 0, n = 0;
@@ -55,7 +128,13 @@ function isMpegTs(buf) {
 }
 
 class Bits {
+  /** @param {Uint8Array} u8 */
   constructor(u8) { this.d = u8; this.p = 0; }
+  /**
+   * 读 n 位无符号整数。
+   * @param {number} n
+   * @returns {number}
+   */
   u(n) {
     let v = 0;
     while (n--) {
@@ -65,17 +144,24 @@ class Bits {
     }
     return v;
   }
+  /** 读 ue(v) 哥伦布编码。 @returns {number} */
   ue() {
     let z = 0;
     while (this.u(1) === 0) z++;
     return z ? ((1 << z) - 1) + this.u(z) : 0;
   }
+  /** 读 se(v) 哥伦布编码。 @returns {number} */
   se() {
     const v = this.ue();
     return (v & 1) ? (v + 1) >> 1 : -(v >> 1);
   }
 }
 
+/**
+ * 从 SPS NAL 解析分辨率与 profile。
+ * @param {Uint8Array} nal
+ * @returns {{ width: number, height: number, profile: number }}
+ */
 function parseSps(nal) {
   const r = new Bits(nal);
   r.u(8);
@@ -115,10 +201,15 @@ function parseSps(nal) {
   };
 }
 
+/**
+ * 按 Annex-B 起始码切分 NAL 单元。
+ * @param {Uint8Array} data
+ * @returns {Uint8Array[]}
+ */
 function splitNals(data) {
+  /** @type {Uint8Array[]} */
   const nals = [];
-  let i = 0;
-  const find = (from) => {
+  const find = (/** @type {number} */ from) => {
     for (let p = from; p + 3 < data.length; p++) {
       if (data[p] === 0 && data[p + 1] === 0) {
         if (data[p + 2] === 1) return p;
@@ -140,7 +231,13 @@ function splitNals(data) {
   return nals;
 }
 
+/**
+ * Annex-B NAL 列表转 AVCC（4 字节大端长度前缀）。
+ * @param {Uint8Array[]} nals
+ * @returns {Uint8Array}
+ */
 function nalsToAvcc(nals) {
+  /** @type {Uint8Array[]} */
   const parts = [];
   for (const nal of nals) {
     parts.push(u32(nal.length), nal);
@@ -148,9 +245,14 @@ function nalsToAvcc(nals) {
   return concat(parts);
 }
 
+/**
+ * 33 位 PTS：首项必须用乘法而非 <<29——JS 位运算是 32 位有符号，
+ * PTS ≥ 2^31（90kHz 下约 6.4 小时，或源流自带大初始偏移）会溢出成负数。
+ * @param {Uint8Array} d
+ * @param {number} off
+ * @returns {number}
+ */
 function parsePts(d, off) {
-  // 33 位 PTS：首项必须用乘法而非 <<29——JS 位运算是 32 位有符号，
-  // PTS ≥ 2^31（90kHz 下约 6.4 小时，或源流自带大初始偏移）会溢出成负数
   return (d[off] & 0x0e) * 536870912 +
     ((d[off + 1] & 0xff) << 22) +
     ((d[off + 2] & 0xfe) << 14) +
@@ -160,11 +262,18 @@ function parsePts(d, off) {
 
 const ADTS_RATES = [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350];
 
+/**
+ * TS 解复用：分离出 AVC 视频样本与 AAC 音频样本及流元数据。
+ * @param {Uint8Array} ts
+ * @returns {Demuxed}
+ */
 function demuxTs(ts) {
+  /** @type {Record<string, { sid: number, pts: number | null, payload: Uint8Array } | null>} */
   const pesAcc = {};
+  /** @type {Record<string, PesStream>} */
   const es = {};
 
-  const finishPes = (pid) => {
+  const finishPes = (/** @type {string} */ pid) => {
     const acc = pesAcc[pid];
     if (!acc || !acc.payload.length) return;
     const sid = acc.sid;
@@ -176,9 +285,9 @@ function demuxTs(ts) {
     pesAcc[pid] = null;
   };
 
-  const pushPes = (pid, payload, pusi) => {
+  const pushPes = (/** @type {number} */ pid, /** @type {Uint8Array} */ payload, /** @type {boolean} */ pusi) => {
     if (pusi) {
-      finishPes(pid);
+      finishPes(String(pid));
       if (payload.length < 9 || payload[0] !== 0 || payload[1] !== 0 || payload[2] !== 1) return;
       const sid = payload[3];
       const hlen = payload[8];
@@ -214,12 +323,19 @@ function demuxTs(ts) {
   }
   for (const pid of Object.keys(pesAcc)) finishPes(pid);
 
-  let sps, pps, width = 0, height = 0, profile = 100, level = 31;
+  /** @type {Uint8Array | undefined} */
+  let sps;
+  /** @type {Uint8Array | undefined} */
+  let pps;
+  let width = 0, height = 0, profile = 100;
+  const level = 31;
   let sampleRate = 44100, channels = 2, aacProfile = 2;
+  /** @type {VideoSample[]} */
   const video = [];
+  /** @type {AudioSample[]} */
   const audio = [];
 
-  const ptsFor = (stream, off, fallback) => {
+  const ptsFor = (/** @type {PesStream} */ stream, /** @type {number} */ off, /** @type {number} */ fallback) => {
     let pts = fallback;
     for (let k = 0; k < stream.ptsAt.length; k++) {
       if (stream.ptsAt[k].off <= off) pts = stream.ptsAt[k].pts;
@@ -233,6 +349,7 @@ function demuxTs(ts) {
     const data = concat(stream.chunks);
     if (stream.sid >= 0xe0 && stream.sid <= 0xef) {
       const nals = splitNals(data);
+      /** @type {Uint8Array[]} */
       let group = [];
       let groupOff = 0;
       let lastPts = stream.ptsAt[0] ? stream.ptsAt[0].pts : 0;
@@ -299,7 +416,15 @@ function demuxTs(ts) {
   };
 }
 
-function stts(samples, timescale, getPts, getDurFallback) {
+/**
+ * @param {{ pts: number }[]} samples
+ * @param {number} _timescale 保留参数（当前实现按相邻 PTS 差计算）
+ * @param {(s: { pts: number }) => number} getPts
+ * @param {number} getDurFallback
+ * @returns {Uint8Array}
+ */
+function stts(samples, _timescale, getPts, getDurFallback) {
+  /** @type {{ cnt: number, dur: number }[]} */
   const entries = [];
   for (let i = 0; i < samples.length; i++) {
     let dur;
@@ -313,16 +438,24 @@ function stts(samples, timescale, getPts, getDurFallback) {
   return fullBox('stts', 0, 0, concat(body));
 }
 
+/**
+ * 复用为扁平 MP4（ftyp + moov + mdat）。
+ * @param {Demuxed} demuxed
+ * @returns {Uint8Array}
+ */
 function muxMp4(demuxed) {
   const { video, audio, meta } = demuxed;
   if (!video.length) throw new Error('没有视频帧');
   if (!meta.sps || !meta.pps) throw new Error('缺少 SPS/PPS');
+  const sps = meta.sps;
+  const pps = meta.pps;
 
   const vTimescale = 90000;
   const aTimescale = meta.sampleRate || 44100;
   const vStart = video[0].pts;
   const aStart = audio.length ? audio[0].pts : vStart;
 
+  /** @type {number[]} */
   const vDurs = [];
   for (let i = 0; i < video.length; i++) {
     const p = video[i].pts - vStart;
@@ -341,6 +474,7 @@ function muxMp4(demuxed) {
     }
   }
 
+  /** @type {number[]} */
   const aDurs = [];
   const aFrameDur = Math.round(1024 * 90000 / aTimescale);
   for (let i = 0; i < audio.length; i++) {
@@ -351,8 +485,11 @@ function muxMp4(demuxed) {
   const aDuration = aDurs.reduce((a, b) => a + b, 0);
   const duration = Math.max(vDuration, aDuration);
 
+  /** @type {Uint8Array[]} */
   const mdats = [];
+  /** @type {number[]} */
   const vOff = [];
+  /** @type {number[]} */
   const aOff = [];
   let cursor = 0;
   let vi = 0, ai = 0;
@@ -373,10 +510,10 @@ function muxMp4(demuxed) {
   const mdatPayload = concat(mdats);
 
   const avcC = concat([
-    new Uint8Array([1, meta.sps[1], meta.sps[2], meta.sps[3], 0xff, 0xe1]),
-    u16(meta.sps.length), meta.sps,
+    new Uint8Array([1, sps[1], sps[2], sps[3], 0xff, 0xe1]),
+    u16(sps.length), sps,
     new Uint8Array([1]),
-    u16(meta.pps.length), meta.pps,
+    u16(pps.length), pps,
   ]);
 
   const avc1 = box('avc1', concat([
@@ -410,6 +547,11 @@ function muxMp4(demuxed) {
     esds,
   ]));
 
+  /**
+   * @param {number} id
+   * @param {boolean} isVideo
+   * @returns {Uint8Array}
+   */
   function trak(id, isVideo) {
     const samples = isVideo ? video : audio;
     const timescale = isVideo ? vTimescale : aTimescale;
@@ -440,8 +582,10 @@ function muxMp4(demuxed) {
         const entries = [{ cnt: audio.length, dur: 1024 }];
         return fullBox('stts', 0, 0, concat([u32(1), u32(entries[0].cnt), u32(1024)]));
       })();
+    /** @type {Uint8Array} */
     let stssBox = new Uint8Array(0);
     if (isVideo) {
+      /** @type {number[]} */
       const keys = [];
       for (let i = 0; i < video.length; i++) if (video[i].isKey) keys.push(i + 1);
       if (!keys.length) keys.push(1);
@@ -482,9 +626,10 @@ function muxMp4(demuxed) {
 
   const mdatHead = 8;
   const mdatOffset = ftyp.length + moov.length + mdatHead;
+  /** @param {Uint8Array} mp4 */
   function patchStco(mp4) {
     const view = new DataView(mp4.buffer, mp4.byteOffset, mp4.byteLength);
-    const walk = (start, end) => {
+    const walk = (/** @type {number} */ start, /** @type {number} */ end) => {
       let off = start;
       while (off + 8 <= end) {
         const size = view.getUint32(off);
@@ -511,7 +656,13 @@ function muxMp4(demuxed) {
   return mp4;
 }
 
+/**
+ * 入口：TS（或分段数组）→ MP4；非 TS 输入原样返回。
+ * @param {Uint8Array[] | Uint8Array | ArrayBuffer} chunksOrTs
+ * @returns {Uint8Array}
+ */
 function remux(chunksOrTs) {
+  /** @type {Uint8Array} */
   let ts;
   if (Array.isArray(chunksOrTs)) ts = concat(chunksOrTs);
   else ts = chunksOrTs instanceof Uint8Array ? chunksOrTs : new Uint8Array(chunksOrTs);

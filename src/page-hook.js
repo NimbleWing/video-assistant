@@ -3,17 +3,27 @@
 // script via window.postMessage. Replaces the userscript's unsafeWindow usage.
 (() => {
   'use strict';
-  if (window.__rvPageHook) return;
-  window.__rvPageHook = true;
+  const w = /** @type {any} */ (window);
+  if (w.__rvPageHook) return;
+  w.__rvPageHook = true;
 
+  /** @type {Set<string>} */
   const sniffed = new Set();
 
+  /**
+   * @param {string} kind
+   * @param {object} [data]
+   */
   function post(kind, data) {
     try {
       window.postMessage(Object.assign({ __rvHook: 1, kind }, data), location.origin);
     } catch {}
   }
 
+  /**
+   * @param {unknown} url
+   * @returns {boolean}
+   */
   function isPlaylistUrl(url) {
     const s = String(url || '');
     if (!s || /^blob:/i.test(s)) return false;
@@ -22,6 +32,10 @@
       || /\/(?:index|master)\.(?:m3u8|jpg|jpeg|png)(\?|#|$)/i.test(s);
   }
 
+  /**
+   * @param {unknown} url
+   * @param {string} via
+   */
   function sniff(url, via) {
     try {
       if (!isPlaylistUrl(url)) return;
@@ -36,34 +50,37 @@
 
   try {
     const origOpen = XMLHttpRequest.prototype.open;
-    XMLHttpRequest.prototype.open = function (method, url) {
+    XMLHttpRequest.prototype.open = function (/** @type {string} */ method, /** @type {string | URL} */ url) {
       sniff(url, 'XHR');
       this.addEventListener('load', () => {
         try { sniff(this.responseURL, 'XHR-final'); } catch {}
       });
-      return origOpen.apply(this, arguments);
+      return origOpen.apply(this, /** @type {any} */ (arguments));
     };
   } catch {}
 
   try {
     const origFetch = window.fetch;
-    window.fetch = function (input) {
+    window.fetch = function (/** @type {any} */ input) {
       const url = typeof input === 'string' ? input : (input && input.url);
       sniff(url, 'fetch');
-      const p = origFetch.apply(this, arguments);
+      const p = origFetch.apply(this, /** @type {any} */ (arguments));
       if (p && typeof p.then === 'function') {
-        p.then((resp) => { try { sniff(resp && resp.url, 'fetch-final'); } catch {} });
+        p.then((/** @type {Response} */ resp) => { try { sniff(resp && resp.url, 'fetch-final'); } catch {} });
       }
       return p;
     };
   } catch {}
 
+  /** @param {'pushState' | 'replaceState'} fn */
   const wrapHistory = (fn) => {
     try {
       const orig = history[fn];
       if (typeof orig !== 'function') return;
-      history[fn] = function () {
-        const r = orig.apply(this, arguments);
+      /** @type {any} */
+      const h = history;
+      h[fn] = function () {
+        const r = orig.apply(this, /** @type {any} */ (arguments));
         post('route', { path: location.pathname });
         return r;
       };

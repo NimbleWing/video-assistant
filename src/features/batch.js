@@ -1,5 +1,6 @@
 import { BATCH_KEY } from '../core/constants.js';
 import { Logger } from '../core/logger.js';
+import { errText } from '../core/utils.js';
 import { getPageProps, videoIdFromPath } from '../site/video-info.js';
 
 // 连续下载编排器。
@@ -11,12 +12,67 @@ import { getPageProps, videoIdFromPath } from '../site/video-info.js';
 //   列表根页 → 收割条目 → 跳播放页 /s/ 汇总页 → 收割集数 → 跳 /v/ → 下载 → 下一项…
 // 侧边栏通过 storage.onChanged 订阅状态，通过 rv-cmd 下发开始/停止命令。
 
+/**
+ * @typedef {Object} BatchItem
+ * @property {string} id
+ * @property {string} name
+ */
+
+/**
+ * @typedef {Object} BatchFailedItem
+ * @property {string} id
+ * @property {string} name
+ * @property {string} error
+ */
+
+/**
+ * @typedef {Object} ListingInfo
+ * @property {'series' | 'single'} kind
+ * @property {number} itemCount
+ * @property {number} totalPage
+ * @property {number} pageNum
+ * @property {number} total
+ * @property {boolean} [fallback] 是否为 DOM 兜底检测（无 Next.js 数据时的粗略结果）
+ */
+
+/**
+ * @typedef {Object} BatchState
+ * @property {boolean} active
+ * @property {'series' | 'single'} mode
+ * @property {number} limit 列表层项数上限（0 = 不限）
+ * @property {string[]} listingPages 待收割列表页（pathname+search）
+ * @property {BatchItem[]} seriesQueue
+ * @property {BatchItem[]} videoQueue
+ * @property {BatchItem | null} current
+ * @property {number} done
+ * @property {BatchFailedItem[]} failed
+ * @property {number} total
+ * @property {string} note
+ * @property {string | null} [expectedPath] 认领标记：只推进自己导航出的页面
+ * @property {string} [lastHarvested] 防刷新重复收割（pathname+search）
+ * @property {number} [seriesTaken] 已收割的剧集数（配合 limit 计算剩余额度）
+ * @property {number} startedAt
+ * @property {number} updatedAt
+ * @property {number} [finishedAt]
+ * @property {number | null} [stoppedAt]
+ */
+
+/**
+ * @typedef {Object} BatchHooks
+ * @property {(msg: string, ms?: number) => void} [toast]
+ * @property {() => void} [abort]
+ * @property {() => Promise<void>} [downloadCurrent]
+ */
+
 const NAV_DELAY = 1200; // 跳转前稍作停顿，让状态落盘、页面稳定
 
+/** @type {BatchHooks} */
 let hooks = {};
 let continuing = false;
+/** @type {ReturnType<typeof setTimeout> | 0} */
 let navTimer = 0;
 
+/** @param {BatchHooks} h */
 export function initBatch(h) {
   hooks = h || {};
 }
@@ -25,6 +81,7 @@ function batchArea() {
   return chrome.storage?.local || null;
 }
 
+/** @returns {Promise<BatchState | null>} */
 export async function getBatch() {
   try {
     const area = batchArea();
@@ -32,14 +89,15 @@ export async function getBatch() {
       Logger.warn('BATCH', '无可用存储区');
       return null;
     }
-    const raw = await area.get(BATCH_KEY);
+    const raw = /** @type {Record<string, any>} */ (await area.get(BATCH_KEY));
     return raw[BATCH_KEY] || null;
   } catch (e) {
-    Logger.warn('BATCH', `读取状态失败: ${e?.message || e}`);
+    Logger.warn('BATCH', `读取状态失败: ${errText(e)}`);
     return null;
   }
 }
 
+/** @param {BatchState} b */
 async function saveBatch(b) {
   b.updatedAt = Date.now();
   try {
@@ -47,22 +105,26 @@ async function saveBatch(b) {
     if (!area) throw new Error('无可用存储区');
     await area.set({ [BATCH_KEY]: b });
   } catch (e) {
-    Logger.warn('BATCH', `状态保存失败: ${e?.message || e}`);
+    Logger.warn('BATCH', `状态保存失败: ${errText(e)}`);
   }
 }
 
+/** @returns {Promise<void>} */
 export async function clearBatch() {
   try { await batchArea()?.remove(BATCH_KEY); } catch {}
 }
 
 // ---------------------------------------------------------------- 页面检测
 
+/** @type {{ path: string | null, result: ListingInfo | null | undefined }} */
 let detectCache = { path: null, result: undefined };
 
 // 判断当前页是不是列表根页，以及是剧集列表还是单片列表。
+/** @returns {ListingInfo | null} */
 export function detectListing() {
   const path = location.pathname;
-  if (detectCache.path === path) return detectCache.result;
+  if (detectCache.path === path) return detectCache.result ?? null;
+  /** @type {ListingInfo | null} */
   let result = null;
   if (!path.startsWith('/v/') && !path.startsWith('/s/')) {
     const pp = getPageProps();
@@ -107,7 +169,13 @@ export function detectListing() {
   return result;
 }
 
+/**
+ * DOM 兜底收割：从链接提取站内 id 列表。
+ * @param {string} prefix '/v/' 或 '/s/'
+ * @returns {string[]}
+ */
 function domLinkIds(prefix) {
+  /** @type {Set<string>} */
   const out = new Set();
   const re = new RegExp(`^${prefix.replace(/\//g, '\\/')}([^/?#]+)`);
   for (const a of document.querySelectorAll(`a[href^="${prefix}"]`)) {
@@ -117,36 +185,47 @@ function domLinkIds(prefix) {
   return Array.from(out);
 }
 
+/**
+ * @param {'series' | 'single'} mode
+ * @param {number} limit
+ * @returns {BatchItem[]}
+ */
 function harvestListingItems(mode, limit) {
   const pp = getPageProps();
+  /** @type {BatchItem[]} */
   let items = [];
   if (mode === 'single') {
     const vids = Array.isArray(pp.videos) ? pp.videos : (Array.isArray(pp.list) ? pp.list : []);
     items = vids
-      .filter((v) => v && v.id && !('totalEpisodes' in v) && !('episodeCount' in v))
-      .map((v) => ({ id: v.id, name: v.nameZh || v.name || v.id }));
+      .filter((/** @type {any} */ v) => v && v.id && !('totalEpisodes' in v) && !('episodeCount' in v))
+      .map((/** @type {any} */ v) => ({ id: String(v.id), name: String(v.nameZh || v.name || v.id) }));
     if (!items.length) items = domLinkIds('/v/').map((id) => ({ id, name: id }));
   } else {
     const list = Array.isArray(pp.list) ? pp.list : [];
     items = list
-      .filter((s) => s && s.id && ('totalEpisodes' in s || 'episodeCount' in s))
-      .map((s) => ({ id: s.id, name: s.nameZh || s.name || s.id }));
+      .filter((/** @type {any} */ s) => s && s.id && ('totalEpisodes' in s || 'episodeCount' in s))
+      .map((/** @type {any} */ s) => ({ id: String(s.id), name: String(s.nameZh || s.name || s.id) }));
     if (!items.length) items = domLinkIds('/s/').map((id) => ({ id, name: id }));
   }
   return Number.isFinite(limit) ? items.slice(0, limit) : items;
 }
 
+/** @returns {BatchItem[]} */
 function harvestSeriesEpisodes() {
   const pp = getPageProps();
   const sname = pp.series?.nameZh || pp.series?.name || '';
   const eps = Array.isArray(pp.episodes) ? pp.episodes : [];
   const out = eps
-    .filter((e) => e && e.id)
-    .map((e) => ({ id: e.id, name: e.nameZh || e.name || (sname ? `${sname} 第${e.episode}集` : e.id) }));
+    .filter((/** @type {any} */ e) => e && e.id)
+    .map((/** @type {any} */ e) => ({ id: String(e.id), name: String(e.nameZh || e.name || (sname ? `${sname} 第${e.episode}集` : e.id)) }));
   if (!out.length) return domLinkIds('/v/').map((id) => ({ id, name: id }));
   return out;
 }
 
+/**
+ * @param {number} page
+ * @returns {string} pathname+search
+ */
 function listingPageUrl(page) {
   const u = new URL(location.href);
   u.searchParams.set('page', String(page));
@@ -160,6 +239,10 @@ function pageKey() {
 
 // 项数上限只约束列表层条目：剧集模式下 1 项 = 1 部剧集（其全部集都会下载），
 // 单片模式下 1 项 = 1 个视频。
+/**
+ * @param {BatchState} b
+ * @returns {number}
+ */
 function remainingSlots(b) {
   if (!b.limit) return Infinity;
   const used = b.mode === 'series'
@@ -168,6 +251,7 @@ function remainingSlots(b) {
   return Math.max(0, b.limit - used);
 }
 
+/** @param {string} url */
 function navTo(url) {
   clearTimeout(navTimer); // 防止连续 advance 排程多次跳转
   navTimer = setTimeout(() => { location.assign(url); }, NAV_DELAY);
@@ -175,6 +259,7 @@ function navTo(url) {
 
 // ---------------------------------------------------------------- 流水线推进
 
+/** @param {BatchState} b */
 async function advance(b) {
   const v = b.videoQueue.shift();
   if (v) {
@@ -215,10 +300,16 @@ async function advance(b) {
 
 // ---------------------------------------------------------------- 对外操作
 
+/**
+ * @param {'series' | 'single'} mode
+ * @param {{ allPages?: boolean, limit?: number }} [scope]
+ * @returns {Promise<void>}
+ */
 export async function startBatch(mode, scope = {}) {
   const det = detectListing();
   if (!det) throw new Error('当前页面不是列表页，无法连续下载');
   const limit = Number(scope.limit) > 0 ? Math.floor(Number(scope.limit)) : 0;
+  /** @type {BatchState} */
   const b = {
     active: true,
     mode,
@@ -257,6 +348,7 @@ export async function startBatch(mode, scope = {}) {
   await advance(b);
 }
 
+/** @returns {Promise<void>} */
 export async function stopBatch() {
   Logger.info('BATCH', '收到停止指令');
   clearTimeout(navTimer); // 停止后不再跳页
@@ -279,11 +371,13 @@ export async function stopBatch() {
 }
 
 // 仅重试上次批次中的失败项（直接用已记录的视频 ID，不重新爬列表）
+/** @returns {Promise<void>} */
 export async function retryFailed() {
   const b = await getBatch();
   if (!b) throw new Error('没有历史批次记录');
   if (b.active) throw new Error('批次进行中，请先停止');
   if (!b.failed?.length) throw new Error('没有失败项');
+  /** @type {BatchState} */
   const nb = {
     active: true,
     mode: b.mode || 'single',
@@ -306,6 +400,7 @@ export async function retryFailed() {
 }
 
 // 停止后续跑剩余队列
+/** @returns {Promise<void>} */
 export async function resumeBatch() {
   const b = await getBatch();
   if (!b) throw new Error('没有历史批次记录');
@@ -322,6 +417,10 @@ export async function resumeBatch() {
 }
 
 // 每个下载结束后由 main 调用；返回是否属于连续下载任务。
+/**
+ * @param {{ ok: boolean, error?: string }} result
+ * @returns {Promise<boolean>} 是否属于连续下载任务
+ */
 export async function onDownloadSettled({ ok, error }) {
   const b = await getBatch();
   if (!b || !b.active || !b.current) return false;
@@ -338,6 +437,7 @@ export async function onDownloadSettled({ ok, error }) {
 }
 
 // 每次页面加载后调用：若存在进行中的任务则继续流水线。
+/** @returns {Promise<void>} */
 export async function maybeContinueBatch() {
   if (continuing) return;
   const b = await getBatch();
@@ -409,6 +509,6 @@ export async function maybeContinueBatch() {
     await saveBatch(b);
     await advance(b);
   } catch (e) {
-    Logger.error('BATCH', `续跑失败: ${e.message}`);
+    Logger.error('BATCH', `续跑失败: ${errText(e)}`);
   }
 }

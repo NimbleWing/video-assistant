@@ -8,22 +8,48 @@
 //   begin（记账经 SW 转发，to:'os'）；chunk/end 由内容脚本广播、本文档直接 ACK。
 import { loadDirHandle } from './net/fsdir.js';
 
+/**
+ * @typedef {Object} PendingSave
+ * @property {Uint8Array[]} chunks
+ * @property {string} mime
+ * @property {boolean} hasHandle
+ * @property {string} filename
+ */
+
+/**
+ * @typedef {Object} ResolveResult
+ * @property {FileSystemFileHandle} [handle]
+ * @property {string} [err]
+ */
+
+/** @type {Map<string, PendingSave>} */
 const saves = new Map();
 
+/**
+ * 按 "a/b/c.mp4" 逐级定位文件句柄（create 时自动建目录）。
+ * @param {string} filename
+ * @param {boolean} create
+ * @returns {Promise<ResolveResult>}
+ */
 async function resolveFileHandle(filename, create) {
   const root = await loadDirHandle();
   if (!root) return { err: 'NOHANDLE' };
   try {
     const segs = filename.split('/').filter(Boolean);
-    const base = segs.pop();
+    const base = /** @type {string} */ (segs.pop());
     let dir = root;
     for (const s of segs) dir = await dir.getDirectoryHandle(s, { create: !!create });
     return { handle: await dir.getFileHandle(base, { create: !!create }) };
   } catch (e) {
-    return { err: e?.name || 'ERROR' };
+    return { err: (/** @type {any} */ (e))?.name || 'ERROR' };
   }
 }
 
+/**
+ * @param {string} saveId
+ * @param {string} b64
+ * @returns {boolean}
+ */
 function pushChunk(saveId, b64) {
   const s = saves.get(saveId);
   if (!s) return false; // 未知 saveId（offscreen 重启丢 Map）必须报错，让内容脚本立刻回退
@@ -34,13 +60,22 @@ function pushChunk(saveId, b64) {
   return true;
 }
 
+/**
+ * @param {PendingSave} s
+ * @param {string} saveId
+ * @param {string} [note]
+ */
 function fallbackBlob(s, saveId, note) {
-  const blob = new Blob(s.chunks, { type: s.mime });
+  const blob = new Blob(/** @type {BlobPart[]} */ (s.chunks), { type: s.mime });
   const url = URL.createObjectURL(blob);
   s.chunks = [];
   chrome.runtime.sendMessage({ to: 'sw', type: 'os-url', saveId, url, size: blob.size, note: note || '' }).catch(() => {});
 }
 
+/**
+ * @param {string} saveId
+ * @returns {Promise<{ ok: boolean, fallback?: boolean, error?: string }>}
+ */
 async function finalizeSave(saveId) {
   const s = saves.get(saveId);
   if (!s) return { ok: false, error: 'no such save' };
@@ -50,15 +85,15 @@ async function finalizeSave(saveId) {
     if (r.handle) {
       try {
         const w = await r.handle.createWritable();
-        await w.write(new Blob(s.chunks, { type: s.mime }));
+        await w.write(new Blob(/** @type {BlobPart[]} */ (s.chunks), { type: s.mime }));
         await w.close();
         s.chunks = [];
         chrome.runtime.sendMessage({ to: 'sw', type: 'os-saved', saveId, ok: true }).catch(() => {});
         return { ok: true };
       } catch (e) {
-        const note = /NotAllowed|Security/.test(e?.name || '')
+        const note = /NotAllowed|Security/.test((/** @type {any} */ (e))?.name || '')
           ? '下载目录未授权，本次已保存到默认下载目录'
-          : `写入自定义目录失败（${e?.message || e}），已保存到默认下载目录`;
+          : `写入自定义目录失败（${(/** @type {any} */ (e))?.message || e}），已保存到默认下载目录`;
         fallbackBlob(s, saveId, note);
         return { ok: true, fallback: true };
       }
@@ -67,7 +102,7 @@ async function finalizeSave(saveId) {
       fallbackBlob(s, saveId, '');
       return { ok: true, fallback: true };
     }
-    const note = /NotAllowed|Security/.test(r.err)
+    const note = /NotAllowed|Security/.test(r.err || '')
       ? '下载目录未授权，本次已保存到默认下载目录'
       : `写入自定义目录失败（${r.err}），已保存到默认下载目录`;
     fallbackBlob(s, saveId, note);
@@ -116,6 +151,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return { ok: true };
   })()
     .then((r) => sendResponse(r || { ok: true }))
-    .catch((e) => sendResponse({ ok: false, error: String(e?.message || e) }));
+    .catch((e) => sendResponse({ ok: false, error: String((/** @type {any} */ (e))?.message || e) }));
   return true;
 });
