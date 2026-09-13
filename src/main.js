@@ -2,7 +2,7 @@ import { RATES } from './core/constants.js';
 import { Logger } from './core/logger.js';
 import { pageVideo, sanitizeName, toAbsolute } from './core/utils.js';
 import { downloadQuality } from './hls/downloader.js';
-import { saveViaExtension } from './net/save.js';
+import { cancelActiveSave, saveViaExtension } from './net/save.js';
 import { isPlaylistUrl, parseMasterPlaylist, parseMediaPlaylist, playlistCandidates } from './hls/playlist.js';
 import { fetchBuffer, fetchText } from './net/http.js';
 import { collectSniffedFromPerformance, installPageHookListener, sniffedUrls } from './net/sniffer.js';
@@ -51,7 +51,7 @@ async function togglePip() {
     if (document.pictureInPictureElement) await document.exitPictureInPicture();
     else await v.requestPictureInPicture();
   } catch {
-    hud.toast('画中画失败');
+    hud.toast('画中画失败', 4000);
   }
 }
 
@@ -66,7 +66,19 @@ function checkDownloaded(filename) {
     .catch(() => ({ exists: false }));
 }
 
+// 入口同步守卫：双击/连点（或面板点击与批次触发同时到达）时只有一个调用能穿过，
+// 否则两个调用会都越过 state.download?.running 检查，同文件被下载两遍
 async function startDownload() {
+  if (state.starting) return false;
+  state.starting = true;
+  try {
+    return await startDownloadInner();
+  } finally {
+    state.starting = false;
+  }
+}
+
+async function startDownloadInner() {
   let quality = currentStream();
   if (!quality && !state.booting) {
     await bootVideo(true);
@@ -105,7 +117,7 @@ async function startDownload() {
     return true;
   } catch (err) {
     const msg = err?.name === 'AbortError' ? '已取消' : (err?.message || '下载失败');
-    hud.toast(msg);
+    hud.toast(msg, err?.name === 'AbortError' ? 1800 : 4000); // 错误信息留足阅读时间
     if (state.download) {
       state.download.running = false;
       state.download.finished = false;
@@ -113,7 +125,7 @@ async function startDownload() {
     }
     return false;
   } finally {
-    state.abort = null;
+    if (state.abort === ctrl) state.abort = null; // 只清自己的 controller，避免清掉新路由上刚开始的下载
     pushState();
   }
 }
@@ -244,7 +256,7 @@ async function bootVideo(force = false) {
     pushState();
   } catch (err) {
     Logger.error('BOOT', `解析失败: ${err.message}`);
-    if (force) hud.toast(`解析失败: ${err.message}`);
+    if (force) hud.toast(`解析失败: ${err.message}`, 4000);
     pushState();
   } finally {
     state.booting = false;
@@ -255,6 +267,7 @@ async function bootVideo(force = false) {
 
 function resetForRoute() {
   endBoost();
+  state.abort?.abort(); // 换页即放弃进行中的下载，避免僵尸下载继续占资源并静默落盘
   state.qualities = [];
   state.page = null;
   state.download = null;
@@ -298,17 +311,17 @@ function onKeyUp(e) {
 
 function runCommand(cmd, value) {
   if (cmd === 'download') startDownload();
-  else if (cmd === 'abort') state.abort?.abort();
+  else if (cmd === 'abort') { state.abort?.abort(); cancelActiveSave(); } // 下载/保存两阶段都可取消
   else if (cmd === 'rescan') { hud.toast('正在解析…'); bootVideo(true); }
   else if (cmd === 'pip') togglePip();
   else if (cmd === 'batch-start') {
-    batch.startBatch(value?.mode, value).catch((e) => hud.toast(e.message));
+    batch.startBatch(value?.mode, value).catch((e) => hud.toast(e.message, 4000));
   }   else if (cmd === 'batch-stop') {
     batch.stopBatch().then(() => hud.toast('已停止（记录已保留）'));
   } else if (cmd === 'batch-retry') {
-    batch.retryFailed().catch((e) => hud.toast(e.message));
+    batch.retryFailed().catch((e) => hud.toast(e.message, 4000));
   } else if (cmd === 'batch-resume') {
-    batch.resumeBatch().catch((e) => hud.toast(e.message));
+    batch.resumeBatch().catch((e) => hud.toast(e.message, 4000));
   } else if (cmd === 'batch-clear') {
     batch.clearBatch().then(() => hud.toast('已清除批次记录'));
   }
@@ -350,7 +363,7 @@ function init() {
 
 async function main() {
   await loadSettings();
-  Logger.info('BOOT', '肉视频助手扩展已加载 (MV3, v1.1.0)');
+  Logger.info('BOOT', `肉视频助手扩展已加载 (MV3, v${chrome.runtime.getManifest().version})`);
   installPageHookListener();
   collectSniffedFromPerformance();
   setTimeout(collectSniffedFromPerformance, 2000);

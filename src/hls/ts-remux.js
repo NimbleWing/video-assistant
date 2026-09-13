@@ -149,7 +149,9 @@ function nalsToAvcc(nals) {
 }
 
 function parsePts(d, off) {
-  return ((d[off] & 0x0e) << 29) +
+  // 33 位 PTS：首项必须用乘法而非 <<29——JS 位运算是 32 位有符号，
+  // PTS ≥ 2^31（90kHz 下约 6.4 小时，或源流自带大初始偏移）会溢出成负数
+  return (d[off] & 0x0e) * 536870912 +
     ((d[off + 1] & 0xff) << 22) +
     ((d[off + 2] & 0xfe) << 14) +
     ((d[off + 3] & 0xff) << 7) +
@@ -451,6 +453,8 @@ function muxMp4(demuxed) {
     const sz = [u32(0), u32(samples.length)];
     for (const s of samples) sz.push(u32(s.data.length));
     const stsz = fullBox('stsz', 0, 0, concat(sz));
+    // stco 偏移为 u32：>4GB 会溢出。该上限由 downloader 的 1.5GB remux 护栏
+    // 保证不可达——护栏阈值若上调，必须同步评估此处（或改 co64）
     const co = [u32(samples.length)];
     const offs = isVideo ? vOff : aOff;
     for (const o of offs) co.push(u32(o));

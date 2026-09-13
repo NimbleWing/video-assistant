@@ -25,7 +25,7 @@ async function withRetry(fn, tries = 3, signal) {
 
 // Downloads every segment of one media playlist (decrypting if needed),
 // remuxes TS → MP4 when possible, and saves the result via a blob download.
-export async function downloadQuality(quality, filename, onProgress, signal) {
+export async function downloadQuality(quality, filename, onProgress, signal, opts = {}) {
   // 播放列表与密钥请求也走重试（一次 CDN 抖动不再导致整个下载失败）
   const text = await withRetry(() => fetchText(quality.url, { signal }), 3, signal);
   const media = parseMediaPlaylist(text, quality.url);
@@ -93,10 +93,18 @@ export async function downloadQuality(quality, filename, onProgress, signal) {
 
   await Promise.all(workers);
   onProgress({ done: total, total, bytes, speed: 0, eta: 0, pct: 99 });
+  // 护栏：估算过大时跳过 remux 直接存 .ts——remux 全程驻留内存，
+  // 峰值约 4–5× 文件大小，GB 级视频会让标签页 OOM 崩溃（.ts 可被 VLC 等正常播放）
+  const REMUX_GUARD = 1.5 * 1024 * 1024 * 1024;
   let payload = chunks;
   let outName = filename;
+  let saveNote = '';
   try {
-    if (chunks[0] && TsRemux.isMpegTs(chunks[0])) {
+    if (bytes > REMUX_GUARD) {
+      Logger.warn('REMUX', `文件约 ${Math.round(bytes / 1073741824 * 10) / 10}GB，超出护栏，跳过 remux 直接保存 TS`);
+      outName = filename.replace(/\.mp4$/i, '.ts');
+      saveNote = '文件过大，已跳过 MP4 封装直接保存为 TS';
+    } else if (chunks[0] && TsRemux.isMpegTs(chunks[0])) {
       const mp4 = TsRemux.remux(chunks);
       payload = [mp4];
       bytes = mp4.byteLength;
@@ -105,13 +113,19 @@ export async function downloadQuality(quality, filename, onProgress, signal) {
   } catch (err) {
     Logger.warn('REMUX', err && err.message ? err.message : err);
     outName = filename.replace(/\.mp4$/i, '.ts');
+    saveNote = 'MP4 封装失败，已保存为 TS';
   }
   const mime = outName.endsWith('.ts') ? 'video/MP2T' : 'video/mp4';
   const totalBytes = payload.reduce((sum, p) => sum + p.byteLength, 0);
 
   // 首选扩展保存管线（downloads API 的 filename 支持子目录，剧集归目录依赖它）
-  const saved = await saveViaExtension(payload, outName, mime, { conflictAction: opts.conflictAction });
-  if (saved.ok) return { mode: 'downloads-api', filename: outName, bytes: totalBytes, note: saved.note || '' };
+  const saved = await saveViaExtension(payload, outName, mime, {
+    conflictAction: opts.conflictAction,
+    // 保存阶段进度透传：面板显示"保存到磁盘 x%"，大文件不再假死
+    onProgress: (p) => onProgress?.({ done: total, total, bytes, speed: 0, eta: 0, pct: 99, saving: true, savePct: p.pct }),
+  });
+  if (saved.ok) return { mode: 'downloads-api', filename: outName, bytes: totalBytes, note: saved.note || saveNote };
+  if (saved.cancelled) throw new DOMException('aborted', 'AbortError'); // 用户取消：不回退落盘
 
   // 回退：页面锚点下载（不支持子目录，"/" 会被替换为 "_"）
   Logger.warn('SAVE', `扩展保存失败（${saved.error}），回退锚点下载`);

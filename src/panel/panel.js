@@ -20,11 +20,11 @@ let modeSel = null;   // 'series' | 'single' | null(=跟随检测结果)
 let scopeSel = 'page'; // 'page' | 'all'
 let limitVal = '';
 
-function toast(msg) {
+function toast(msg, ms = 1800) {
   toastEl.textContent = msg;
   toastEl.classList.add('on');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => toastEl.classList.remove('on'), 1800);
+  toastTimer = setTimeout(() => toastEl.classList.remove('on'), ms);
 }
 
 async function pull() {
@@ -97,7 +97,7 @@ async function recordDirPath() {
   });
   try { await chrome.downloads.removeFile(id); } catch {}
   try { await chrome.downloads.erase({ id }); } catch {}
-  if (!item || !item.filename) { toast('路径记录失败'); return; }
+  if (!item || !item.filename) { toast('路径记录失败', 4000); return; }
   const abs = item.filename;
   const dir = abs.slice(0, Math.max(abs.lastIndexOf('\\'), abs.lastIndexOf('/')));
   if (dir.split(/[\\/]/).pop() !== dirState.name) {
@@ -143,7 +143,7 @@ async function onDirAction(act) {
       await syncDirFlag();
       toast(`下载目录已设为「${h.name}」`);
     } catch (e) {
-      if (e?.name !== 'AbortError') toast('选择目录失败: ' + (e?.message || e));
+      if (e?.name !== 'AbortError') toast('选择目录失败: ' + (e?.message || e), 4000);
       await pullDir();
       await syncDirFlag();
     }
@@ -163,7 +163,7 @@ async function onDirAction(act) {
       await syncDirFlag();
       toast(p === 'granted' ? '已重新授权' : '未授权');
     } catch (e) {
-      toast('授权失败: ' + (e?.message || e));
+      toast('授权失败: ' + (e?.message || e), 4000);
     }
     render();
   }
@@ -288,10 +288,12 @@ function render() {
   const dur = stream?.duration || snap.page?.duration || 0;
   const title = snap.page?.name || '当前视频';
   const pct = d?.running ? Math.max(0, Math.min(100, d.pct || 0)) : 0;
+  const barPct = d?.saving ? Math.max(0, Math.min(100, d.savePct || 0)) : pct; // 保存阶段进度条复用
   const segInfo = stream?.segments ? `<span>·</span><span>${stream.segments} 段</span>` : '';
 
   const dlLabel = d?.running
-    ? (d.pct >= 99 ? '正在封装 MP4…' : `下载中 ${pct.toFixed(0)}% · 点按取消`)
+    ? (d.saving ? `保存到磁盘 ${Math.round(d.savePct || 0)}% · 点按取消`
+      : (d.pct >= 99 ? '正在封装 MP4…' : `下载中 ${pct.toFixed(0)}% · 点按取消`))
     : (stream ? '下载视频' : (snap.booting ? '解析中…' : '解析并下载'));
 
   app.innerHTML = `
@@ -303,15 +305,15 @@ function render() {
     </div>
     <div class="dirbox">${dirHtml()}</div>
     <button class="dl" data-act="${d?.running ? 'abort' : 'download'}" ${!d?.running && !stream && snap.booting ? 'disabled' : ''}>
-      <i class="dl-fill" style="width:${d?.running ? pct : 0}%"></i>
+      <i class="dl-fill" style="width:${d?.running ? barPct : 0}%"></i>
       ${d?.running ? ICONS.abort : ICONS.down}<span>${dlLabel}</span>
     </button>
     <div class="row">
       <button class="ghost" data-act="copy-m3u8" ${!stream ? 'disabled' : ''}>${ICONS.copy}复制地址</button>
       <button class="ghost" data-act="pip">${ICONS.pip}画中画</button>
     </div>
-    ${d?.running ? `<div class="stats"><span>${d.done}/${d.total} · ${formatBytes(d.bytes)}</span><span>${formatBytes(d.speed)}/s · ${formatEta(d.eta)}</span></div>` : ''}
-    ${d?.finished && !d.running ? `<div class="ok">${d.skipped ? '本地已存在，已跳过下载' : '已保存到浏览器下载目录'}</div>` : ''}
+    ${d?.running ? `<div class="stats"><span>${d.done}/${d.total} · ${formatBytes(d.bytes)}</span><span>${d.saving ? '正在写入磁盘…' : `${formatBytes(d.speed)}/s · ${formatEta(d.eta)}`}</span></div>` : ''}
+    ${d?.finished && !d.running ? `<div class="ok">${d.skipped ? '本地已存在，已跳过下载' : (dirState.name ? `已保存到「${escapeHtml(dirState.name)}」` : '已保存到浏览器下载目录')}</div>` : ''}
     ${!stream && !snap.booting ? '<button class="ghost" data-act="rescan" style="width:100%;margin-top:8px">重新解析</button>' : ''}
     <div class="boost">
       <div class="boost-top">
@@ -334,10 +336,16 @@ function renderProgress(d) {
   const fill = app.querySelector('.dl-fill');
   const label = app.querySelector('.dl:not(.batch-start) span');
   const stats = app.querySelector('.stats');
-  if (fill) fill.style.width = `${pct}%`;
-  if (label) label.textContent = d.pct >= 99 ? '正在封装 MP4…' : `下载中 ${pct.toFixed(0)}% · 点按取消`;
+  if (fill) fill.style.width = `${d.saving ? Math.max(0, Math.min(100, d.savePct || 0)) : pct}%`;
+  if (label) {
+    label.textContent = d.saving
+      ? `保存到磁盘 ${Math.round(d.savePct || 0)}% · 点按取消`
+      : (d.pct >= 99 ? '正在封装 MP4…' : `下载中 ${pct.toFixed(0)}% · 点按取消`);
+  }
   if (stats) {
-    stats.innerHTML = `<span>${d.done}/${d.total} · ${formatBytes(d.bytes)}</span><span>${formatBytes(d.speed)}/s · ${formatEta(d.eta)}</span>`;
+    stats.innerHTML = d.saving
+      ? `<span>${formatBytes(d.bytes)}</span><span>正在写入磁盘…</span>`
+      : `<span>${d.done}/${d.total} · ${formatBytes(d.bytes)}</span><span>${formatBytes(d.speed)}/s · ${formatEta(d.eta)}</span>`;
   } else {
     render();
   }
@@ -361,7 +369,7 @@ app.addEventListener('click', (ev) => {
     if (!q) return toast('还没有解析到地址');
     navigator.clipboard.writeText(q.url)
       .then(() => toast('已复制'))
-      .catch(() => toast('复制失败'));
+      .catch(() => toast('复制失败', 4000));
   } else if (bkind === 'mode') {
     modeSel = act.dataset.mode;
     render();

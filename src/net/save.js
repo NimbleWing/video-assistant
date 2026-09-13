@@ -2,6 +2,13 @@
 // 仅在 begin 时记账并确保 offscreen 存在）→ 组装 → chrome.downloads / 文件句柄写入。
 // 大文件优化：16MB 分块减少往返；FileReader 原生 base64（比 JS 循环快 ~2x）。
 
+// 当前进行中的保存：让 99% 之后的"取消"按钮仍然有效（释放内存、立即复位 UI）
+let activeSave = null; // { saveId, cancel }
+
+export function cancelActiveSave() {
+  activeSave?.cancel();
+}
+
 async function toBase64(u8) {
   const blob = new Blob([u8]);
   const url = await new Promise((resolve, reject) => {
@@ -13,33 +20,53 @@ async function toBase64(u8) {
   return url.slice(url.indexOf(',') + 1);
 }
 
-export function saveViaExtension(chunks, filename, mime, { conflictAction = 'uniquify' } = {}) {
+export function saveViaExtension(chunks, filename, mime, { conflictAction = 'uniquify', onProgress } = {}) {
   const saveId = `s${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
   const CHUNK = 16 * 1024 * 1024;
+  const totalToSend = chunks.reduce((s, p) => s + p.length, 0);
   return new Promise((resolve) => {
     let settled = false;
-    const finish = (ok, error, note, finalFilename) => {
+    const finish = (ok, error, note, finalFilename, cancelled = false) => {
       if (settled) return;
       settled = true;
+      if (activeSave?.saveId === saveId) activeSave = null;
       chrome.runtime.onMessage.removeListener(onMsg);
       clearTimeout(timer);
-      resolve({ ok, error: error || '', note: note || '', filename: finalFilename || filename });
+      resolve({ ok, error: error || '', note: note || '', filename: finalFilename || filename, cancelled });
     };
     const onMsg = (msg) => {
       if (msg?.type === 'dl-settled' && msg.saveId === saveId) finish(!!msg.ok, msg.error, msg.note, msg.finalFilename);
     };
     chrome.runtime.onMessage.addListener(onMsg);
     const timer = setTimeout(() => finish(false, '保存超时'), 20 * 60 * 1000);
+    activeSave = {
+      saveId,
+      cancel: () => {
+        // offscreen 丢弃该 saveId 的 chunks（释放内存）；随后进行中的 chunk ACK
+        // 会返回 ok:false 使发送循环立即抛出，finish 幂等不会二次 resolve
+        chrome.runtime.sendMessage({ to: 'os', type: 'os-abort', saveId }).catch(() => {});
+        finish(false, '已取消', '', null, true);
+      },
+    };
     (async () => {
       try {
-        await chrome.runtime.sendMessage({ type: 'rv-save-begin', saveId, filename, mime, conflictAction });
+        // 每个环节都校验 ACK：offscreen 死亡/重启时 sendMessage 会静默 resolve
+        // undefined 或得到错误应答，必须在第一时间抛错走回退，而不是挂到超时
+        const begin = await chrome.runtime.sendMessage({ type: 'rv-save-begin', saveId, filename, mime, conflictAction });
+        if (!begin || begin.ok === false) throw new Error(begin?.error || '保存通道不可用');
+        let sent = 0;
         for (const piece of chunks) {
           for (let off = 0; off < piece.length; off += CHUNK) {
-            const b64 = await toBase64(piece.subarray(off, off + CHUNK));
-            await chrome.runtime.sendMessage({ type: 'rv-save-chunk', saveId, b64 });
+            const end = Math.min(off + CHUNK, piece.length);
+            const b64 = await toBase64(piece.subarray(off, end));
+            const ack = await chrome.runtime.sendMessage({ type: 'rv-save-chunk', saveId, b64 });
+            if (!ack || ack.ok === false) throw new Error(ack?.error || '保存通道中断');
+            sent += end - off;
+            onProgress?.({ sent, total: totalToSend, pct: totalToSend ? (sent / totalToSend) * 100 : 0 });
           }
         }
-        await chrome.runtime.sendMessage({ type: 'rv-save-end', saveId });
+        const fin = await chrome.runtime.sendMessage({ type: 'rv-save-end', saveId });
+        if (!fin || fin.ok === false) throw new Error(fin?.error || '保存收尾失败');
       } catch (e) {
         finish(false, String(e?.message || e));
       }

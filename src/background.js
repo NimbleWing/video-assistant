@@ -190,9 +190,16 @@ async function probeOne(filename) {
     return false; // 探测通道不可用，按不存在处理（走正常下载）
   }
   const item = await waitComplete(id);
+  if (!item) {
+    // 超时：取消探测下载并抹除记录——否则 0 字节占位会随后落盘，
+    // 被后续探测/历史误判为"已存在"，真实下载被永远跳过（用户只剩空文件）
+    try { await chrome.downloads.cancel(id); } catch {}
+    try { await chrome.downloads.erase({ id }); } catch {}
+    return false;
+  }
   try { await chrome.downloads.removeFile(id); } catch {}
   try { await chrome.downloads.erase({ id }); } catch {}
-  if (!item || !item.filename) return false;
+  if (!item.filename) return false;
   // Chrome 仅在目标名被占用时才改名（name (1).ext），落点名 ≠ 目标名 → 已存在
   return item.filename.split(/[\\/]/).pop() !== base;
 }

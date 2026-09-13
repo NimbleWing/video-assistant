@@ -15,6 +15,7 @@ const NAV_DELAY = 1200; // 跳转前稍作停顿，让状态落盘、页面稳�
 
 let hooks = {};
 let continuing = false;
+let navTimer = 0;
 
 export function initBatch(h) {
   hooks = h || {};
@@ -168,7 +169,8 @@ function remainingSlots(b) {
 }
 
 function navTo(url) {
-  setTimeout(() => { location.assign(url); }, NAV_DELAY);
+  clearTimeout(navTimer); // 防止连续 advance 排程多次跳转
+  navTimer = setTimeout(() => { location.assign(url); }, NAV_DELAY);
 }
 
 // ---------------------------------------------------------------- 流水线推进
@@ -178,28 +180,32 @@ async function advance(b) {
   if (v) {
     b.current = v;
     b.note = `下载中：${v.name}`;
+    b.expectedPath = `/v/${encodeURIComponent(v.id)}`; // 认领标记：只推进自己导航出的页面
     await saveBatch(b);
-    navTo(`/v/${encodeURIComponent(v.id)}`);
+    navTo(b.expectedPath);
     return;
   }
   const s = b.seriesQueue.shift();
   if (s) {
     b.current = null;
     b.note = `读取剧集：${s.name}`;
+    b.expectedPath = `/s/${encodeURIComponent(s.id)}`;
     await saveBatch(b);
-    navTo(`/s/${encodeURIComponent(s.id)}`);
+    navTo(b.expectedPath);
     return;
   }
   const lp = b.listingPages.shift();
   if (lp) {
     b.current = null;
     b.note = `翻页收割：${lp}`;
+    b.expectedPath = lp;
     await saveBatch(b);
     navTo(lp);
     return;
   }
   b.active = false;
   b.current = null;
+  b.expectedPath = null;
   b.note = 'done';
   b.finishedAt = Date.now();
   await saveBatch(b);
@@ -253,8 +259,10 @@ export async function startBatch(mode, scope = {}) {
 
 export async function stopBatch() {
   Logger.info('BATCH', '收到停止指令');
-  hooks.abort?.();
-  // 不清空：保留队列/进度/失败记录，供"重试失败项"与"继续剩余"使用
+  clearTimeout(navTimer); // 停止后不再跳页
+  navTimer = 0;
+  // 先落盘 inactive 再 abort：abort 触发的 onDownloadSettled 读到 inactive 会直接
+  // early-return——被取消的项不会误入失败列表，也不会再 advance（修复竞态）
   const b = await getBatch();
   if (b) {
     if (b.current) {
@@ -267,6 +275,7 @@ export async function stopBatch() {
     b.note = '已停止（可继续或重试失败项）';
     await saveBatch(b);
   }
+  hooks.abort?.();
 }
 
 // 仅重试上次批次中的失败项（直接用已记录的视频 ID，不重新爬列表）
@@ -336,6 +345,12 @@ export async function maybeContinueBatch() {
   continuing = true;
   const path = location.pathname;
   Logger.info('BATCH', `续跑 @${path}：${b.note || ''}`);
+  // 认领制：批次只推进自己导航出来的页面；用户手动打开的页面与 expectedPath
+  // 不匹配 → 批次原地暂停（面板可停止/继续），不跳页、不收割、不污染队列
+  if (b.expectedPath && b.expectedPath !== pageKey()) {
+    Logger.info('BATCH', `非流水线页面，批次暂停（等待 ${b.expectedPath}）`);
+    return;
+  }
   try {
     if (path.startsWith('/v/')) {
       const id = videoIdFromPath();

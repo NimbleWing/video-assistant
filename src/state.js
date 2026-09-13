@@ -3,6 +3,7 @@ import { storage } from './core/storage.js';
 
 export const state = {
   booting: false,
+  starting: false, // startDownload 入口同步守卫（防双击并发下载）
   ready: false,
   open: false,
   qualities: [],

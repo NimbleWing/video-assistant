@@ -26,11 +26,12 @@ async function resolveFileHandle(filename, create) {
 
 function pushChunk(saveId, b64) {
   const s = saves.get(saveId);
-  if (!s) return;
+  if (!s) return false; // 未知 saveId（offscreen 重启丢 Map）必须报错，让内容脚本立刻回退
   const bin = atob(b64);
   const u8 = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
   s.chunks.push(u8);
+  return true;
 }
 
 function fallbackBlob(s, saveId, note) {
@@ -91,14 +92,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return { ok: true };
     }
     if (msg.type === 'rv-save-chunk') {
-      pushChunk(msg.saveId, msg.b64);
-      return { ok: true };
+      return pushChunk(msg.saveId, msg.b64) ? { ok: true } : { ok: false, error: 'unknown save' };
     }
     if (msg.type === 'rv-save-end' || msg.type === 'os-save-end') {
       return await finalizeSave(msg.saveId);
     }
     if (msg.type === 'os-revoke') {
       try { URL.revokeObjectURL(msg.url); } catch {}
+      return { ok: true };
+    }
+    if (msg.type === 'os-abort') {
+      // 用户取消保存：丢弃 chunks 释放内存（内容脚本下一包会得到 ok:false 并停止）
+      const s = saves.get(msg.saveId);
+      if (s) { s.chunks = []; saves.delete(msg.saveId); }
       return { ok: true };
     }
     if (msg.type === 'os-file-exists') {

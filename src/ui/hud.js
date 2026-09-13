@@ -25,12 +25,12 @@ export function mount() {
   };
 }
 
-export function toast(msg) {
+export function toast(msg, ms = 1800) {
   if (!ui.toast) return;
   ui.toast.textContent = msg;
   ui.toast.classList.add('on');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => ui.toast.classList.remove('on'), 1800);
+  toastTimer = setTimeout(() => ui.toast.classList.remove('on'), ms);
 }
 
 export function showSpeedHud(on, dir = 1) {
