@@ -1,30 +1,27 @@
-// 扩展保存管线：内容脚本 →(分块 base64)→ offscreen 直接 ACK（SW 不在数据路径上，
-// 仅在 begin 时记账并确保 offscreen 存在）→ 组装 → chrome.downloads / 文件句柄写入。
-// 大文件优化：16MB 分块减少往返；FileReader 原生 base64（比 JS 循环快 ~2x）。
+// 流式保存通道：内容脚本 → offscreen（begin 经 SW 确保 offscreen + 转发；
+// chunk/end 由 offscreen 直接 ACK，SW 不在数据路径上）。
+// 分段直发（>16MB 内部切片），ACK 即背压：offscreen 死亡/重启时 sendMessage
+// 静默 resolve undefined 或得到错误应答，第一时间抛错而不是挂到超时。
+// 取消/失败均保留 .part+sidecar（断点续传凭据），重试自动续传。
 
 /**
- * @typedef {Object} SaveProgress
- * @property {number} sent
- * @property {number} total
- * @property {number} pct
- */
-
-/**
- * @typedef {Object} SaveOptions
- * @property {'uniquify' | 'overwrite' | 'prompt'} [conflictAction]
- * @property {(p: SaveProgress) => void} [onProgress]
- */
-
-/**
- * @typedef {Object} SaveResult
+ * @typedef {Object} SaveBegin
  * @property {boolean} ok
- * @property {string} error
- * @property {string} note
- * @property {string} filename
- * @property {boolean} cancelled
+ * @property {string} [code] NOHANDLE / REAUTH
+ * @property {string} [error]
+ * @property {boolean} [done] 最终文件已存在
+ * @property {number} [resumeFrom]
+ * @property {SaveWriter} [session]
  */
 
-// 当前进行中的保存：让 99% 之后的"取消"按钮仍然有效（释放内存、立即复位 UI）
+/**
+ * @typedef {Object} SaveWriter
+ * @property {(u8: Uint8Array) => Promise<void>} write 发送一个分段（ACK 背压）
+ * @property {() => Promise<{ ok: boolean, finalName: string, note: string, code?: string, error?: string }>} finalize
+ * @property {() => Promise<void>} abort 中止（offscreen 保留 .part+sidecar）
+ */
+
+/** 当前进行中的保存：让"取消"按钮在保存阶段仍然有效 */
 /** @type {{ saveId: string, cancel: () => void } | null} */
 let activeSave = null;
 
@@ -49,71 +46,93 @@ async function toBase64(u8) {
 }
 
 /**
- * 经扩展管线保存文件（offscreen 组装 → chrome.downloads 或自定义目录句柄写入）。
- * @param {Uint8Array[]} chunks
- * @param {string} filename 可含子目录（剧集归目录依赖此能力）
- * @param {string} mime
- * @param {SaveOptions} [opts]
- * @returns {Promise<SaveResult>}
+ * @param {string} message
+ * @param {string} [code]
+ * @returns {Error & { code?: string }}
  */
-export function saveViaExtension(chunks, filename, mime, { conflictAction = 'uniquify', onProgress } = {}) {
+function codedError(message, code) {
+  const e = /** @type {Error & { code?: string }} */ (new Error(message));
+  if (code) e.code = code;
+  return e;
+}
+
+const CHUNK = 16 * 1024 * 1024;
+
+/**
+ * 打开保存会话。
+ * @param {{ filename: string, fingerprint: string, segTotal: number }} p
+ * @returns {Promise<SaveBegin>}
+ */
+export async function openSaveSession({ filename, fingerprint, segTotal }) {
   const saveId = `s${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-  const CHUNK = 16 * 1024 * 1024;
-  const totalToSend = chunks.reduce((s, p) => s + p.length, 0);
-  return new Promise((resolve) => {
-    let settled = false;
+  let cancelled = false;
+  let aborted = false;
+  /** @returns {Error} */
+  const abortErr = () => new DOMException('aborted', 'AbortError');
+
+  const begin = await chrome.runtime.sendMessage({
+    type: 'rv-save-begin', saveId, filename, fingerprint, segTotal,
+  }).catch((e) => ({ ok: false, error: String(/** @type {any} */ (e)?.message || e) }));
+  if (!begin || begin.ok === false) {
+    return { ok: false, code: begin?.code, error: begin?.error || '保存通道不可用' };
+  }
+  if (begin.done) return { ok: true, done: true, resumeFrom: 0 };
+
+  const session = {
     /**
-     * @param {boolean} ok
-     * @param {string} [error]
-     * @param {string} [note]
-     * @param {string | null} [finalFilename]
-     * @param {boolean} [cancelled]
+     * @param {Uint8Array} u8
+     * @returns {Promise<void>}
      */
-    const finish = (ok, error, note, finalFilename, cancelled = false) => {
-      if (settled) return;
-      settled = true;
-      if (activeSave?.saveId === saveId) activeSave = null;
-      chrome.runtime.onMessage.removeListener(onMsg);
-      clearTimeout(timer);
-      resolve({ ok, error: error || '', note: note || '', filename: finalFilename || filename, cancelled });
-    };
-    /** @param {any} msg */
-    const onMsg = (msg) => {
-      if (msg?.type === 'dl-settled' && msg.saveId === saveId) finish(!!msg.ok, msg.error, msg.note, msg.finalFilename);
-    };
-    chrome.runtime.onMessage.addListener(onMsg);
-    const timer = setTimeout(() => finish(false, '保存超时'), 20 * 60 * 1000);
-    activeSave = {
-      saveId,
-      cancel: () => {
-        // offscreen 丢弃该 saveId 的 chunks（释放内存）；随后进行中的 chunk ACK
-        // 会返回 ok:false 使发送循环立即抛出，finish 幂等不会二次 resolve
-        chrome.runtime.sendMessage({ to: 'os', type: 'os-abort', saveId }).catch(() => {});
-        finish(false, '已取消', '', null, true);
-      },
-    };
-    (async () => {
-      try {
-        // 每个环节都校验 ACK：offscreen 死亡/重启时 sendMessage 会静默 resolve
-        // undefined 或得到错误应答，必须在第一时间抛错走回退，而不是挂到超时
-        const begin = await chrome.runtime.sendMessage({ type: 'rv-save-begin', saveId, filename, mime, conflictAction });
-        if (!begin || begin.ok === false) throw new Error(begin?.error || '保存通道不可用');
-        let sent = 0;
-        for (const piece of chunks) {
-          for (let off = 0; off < piece.length; off += CHUNK) {
-            const end = Math.min(off + CHUNK, piece.length);
-            const b64 = await toBase64(piece.subarray(off, end));
-            const ack = await chrome.runtime.sendMessage({ type: 'rv-save-chunk', saveId, b64 });
-            if (!ack || ack.ok === false) throw new Error(ack?.error || '保存通道中断');
-            sent += end - off;
-            onProgress?.({ sent, total: totalToSend, pct: totalToSend ? (sent / totalToSend) * 100 : 0 });
-          }
-        }
-        const fin = await chrome.runtime.sendMessage({ type: 'rv-save-end', saveId });
-        if (!fin || fin.ok === false) throw new Error(fin?.error || '保存收尾失败');
-      } catch (e) {
-        finish(false, String(/** @type {any} */ (e)?.message || e));
+    async write(u8) {
+      if (cancelled) throw abortErr();
+      for (let off = 0; off < u8.length; off += CHUNK) {
+        const end = Math.min(off + CHUNK, u8.length);
+        const b64 = await toBase64(u8.subarray(off, end));
+        const ack = await chrome.runtime.sendMessage({ type: 'rv-save-chunk', saveId, b64 })
+          .catch((e) => ({ ok: false, error: String(/** @type {any} */ (e)?.message || e) }));
+        if (cancelled) throw abortErr();
+        if (!ack || ack.ok === false) throw codedError(ack?.error || '保存通道中断', ack?.code);
       }
-    })();
-  });
+    },
+    /** @returns {Promise<{ ok: boolean, finalName: string, note: string, code?: string, error?: string }>} */
+    async finalize() {
+      if (cancelled) throw abortErr();
+      const fin = await chrome.runtime.sendMessage({ type: 'rv-save-end', saveId })
+        .catch((e) => ({ ok: false, error: String(/** @type {any} */ (e)?.message || e) }));
+      if (cancelled) throw abortErr();
+      if (!fin || fin.ok === false) return { ok: false, finalName: filename, note: '', code: fin?.code, error: fin?.error || '保存收尾失败' };
+      return { ok: true, finalName: fin.finalName || filename, note: fin.note || '' };
+    },
+    /** @returns {Promise<void>} */
+    async abort() {
+      if (aborted) return;
+      aborted = true;
+      await chrome.runtime.sendMessage({ to: 'os', type: 'os-abort', saveId }).catch(() => {});
+    },
+  };
+
+  activeSave = {
+    saveId,
+    cancel: () => {
+      if (cancelled) return;
+      cancelled = true;
+      // offscreen 落盘 sidecar 并关闭 .part（续传凭据）；进行中的 write 下一拍抛 AbortError
+      session.abort();
+    },
+  };
+  return { ok: true, resumeFrom: begin.resumeFrom || 0, session };
+}
+
+/**
+ * 小文件直写（封面等）：经 SW 确保 offscreen 后转发，整文件一条消息。
+ * @param {Uint8Array} u8
+ * @param {string} filename 可含子目录
+ * @returns {Promise<{ ok: boolean, error?: string, code?: string }>}
+ */
+export async function saveSmallFile(u8, filename) {
+  const b64 = await toBase64(u8);
+  const r = await chrome.runtime.sendMessage({ type: 'rv-save-cover', filename, b64 })
+    .catch((e) => ({ ok: false, error: String(/** @type {any} */ (e)?.message || e) }));
+  if (!r || r.ok === false) return { ok: false, error: r?.error || '保存失败', code: r?.code };
+  return { ok: true };
 }

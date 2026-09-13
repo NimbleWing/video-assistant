@@ -259,15 +259,20 @@ function navTo(url) {
 
 // ---------------------------------------------------------------- 流水线推进
 
-/** @param {BatchState} b */
-async function advance(b) {
+/**
+ * @param {BatchState} b
+ * @param {'self' | 'worker'} drive self = 当前标签页自驱（工作标签页内）；
+ *   worker = 交给 SW 打开/复用后台标签页（面板/发起页调用，不劫持当前页）
+ */
+async function advance(b, drive) {
   const v = b.videoQueue.shift();
   if (v) {
     b.current = v;
     b.note = `下载中：${v.name}`;
     b.expectedPath = `/v/${encodeURIComponent(v.id)}`; // 认领标记：只推进自己导航出的页面
     await saveBatch(b);
-    navTo(b.expectedPath);
+    if (drive === 'worker') await requestWorker(b.expectedPath);
+    else navTo(b.expectedPath);
     return;
   }
   const s = b.seriesQueue.shift();
@@ -276,7 +281,8 @@ async function advance(b) {
     b.note = `读取剧集：${s.name}`;
     b.expectedPath = `/s/${encodeURIComponent(s.id)}`;
     await saveBatch(b);
-    navTo(b.expectedPath);
+    if (drive === 'worker') await requestWorker(b.expectedPath);
+    else navTo(b.expectedPath);
     return;
   }
   const lp = b.listingPages.shift();
@@ -285,7 +291,8 @@ async function advance(b) {
     b.note = `翻页收割：${lp}`;
     b.expectedPath = lp;
     await saveBatch(b);
-    navTo(lp);
+    if (drive === 'worker') await requestWorker(b.expectedPath);
+    else navTo(b.expectedPath);
     return;
   }
   b.active = false;
@@ -296,6 +303,24 @@ async function advance(b) {
   await saveBatch(b);
   hooks.toast?.(`连续下载完成：成功 ${b.done} · 失败 ${b.failed.length}`);
   Logger.info('BATCH', `完成：成功 ${b.done}，失败 ${b.failed.length}`, b.failed);
+}
+
+/**
+ * 让 SW 打开/复用后台工作标签页（认领制：标签页加载后自行续跑流水线）。
+ * @param {string} url
+ */
+async function requestWorker(url) {
+  const r = await chrome.runtime.sendMessage({ type: 'rv-batch-open', url }).catch(() => null);
+  if (!r?.ok) Logger.warn('BATCH', `打开后台标签页失败: ${r?.error || '无应答'}`);
+}
+
+/** 面板"恢复后台下载"：为进行中的批次重新打开工作标签页（被手动关闭后恢复） */
+/** @returns {Promise<void>} */
+export async function spawnWorker() {
+  const b = await getBatch();
+  if (!b?.active || !b.expectedPath) throw new Error('没有进行中的批次');
+  const r = await chrome.runtime.sendMessage({ type: 'rv-batch-open', url: b.expectedPath }).catch(() => null);
+  if (!r?.ok) throw new Error(r?.error || '打开后台标签页失败');
 }
 
 // ---------------------------------------------------------------- 对外操作
@@ -345,7 +370,7 @@ export async function startBatch(mode, scope = {}) {
   }
   Logger.info('BATCH', `开始：视频队列 ${b.videoQueue.length}，剧集队列 ${b.seriesQueue.length}，翻页 ${b.listingPages.length}`);
   await saveBatch(b);
-  await advance(b);
+  await advance(b, 'worker'); // 后台标签页接管，当前页不被劫持
 }
 
 /** @returns {Promise<void>} */
@@ -396,7 +421,7 @@ export async function retryFailed() {
   };
   Logger.info('BATCH', `重试失败项：${nb.videoQueue.length} 个`);
   await saveBatch(nb);
-  await advance(nb);
+  await advance(nb, 'worker');
 }
 
 // 停止后续跑剩余队列
@@ -413,17 +438,30 @@ export async function resumeBatch() {
   b.note = '继续剩余项';
   await saveBatch(b);
   Logger.info('BATCH', `继续剩余：视频 ${b.videoQueue.length}，剧集 ${b.seriesQueue.length}，翻页 ${b.listingPages.length}`);
-  await advance(b);
+  await advance(b, 'worker');
 }
 
 // 每个下载结束后由 main 调用；返回是否属于连续下载任务。
 /**
- * @param {{ ok: boolean, error?: string }} result
+ * @param {{ ok: boolean, error?: string, code?: string }} result
  * @returns {Promise<boolean>} 是否属于连续下载任务
  */
-export async function onDownloadSettled({ ok, error }) {
+export async function onDownloadSettled({ ok, error, code }) {
   const b = await getBatch();
   if (!b || !b.active || !b.current) return false;
+  if (code === 'REAUTH' || code === 'NOHANDLE') {
+    // 授权失效/未选目录：当前项放回队首，批次暂停——面板重新授权/选目录后继续
+    const cur = b.current;
+    b.videoQueue.unshift(cur);
+    b.current = null;
+    b.active = false;
+    b.stoppedAt = Date.now();
+    b.note = code === 'REAUTH' ? '下载目录授权失效，已暂停——请在侧边栏重新授权后继续' : '未选择下载目录，已暂停——请在侧边栏选择后继续';
+    await saveBatch(b);
+    hooks.toast?.(b.note);
+    Logger.warn('BATCH', `${b.note}（${cur.name}）`);
+    return true;
+  }
   if (ok) {
     b.done += 1;
     Logger.info('BATCH', `完成 ${b.done}：${b.current.name}`);
@@ -432,7 +470,7 @@ export async function onDownloadSettled({ ok, error }) {
     Logger.warn('BATCH', `跳过失败项：${b.current.name}（${error}）`);
   }
   b.current = null;
-  await advance(b);
+  await advance(b, 'self'); // 下载发生在工作标签页内，自驱推进
   return true;
 }
 
@@ -460,11 +498,11 @@ export async function maybeContinueBatch() {
         await hooks.downloadCurrent?.();
         return;
       }
-      await advance(b); // 队列外的播放页，直接推进
+      await advance(b, 'self'); // 队列外的播放页，直接推进
       return;
     }
     if (path.startsWith('/s/') && b.mode === 'series') {
-      if (b.lastHarvested === pageKey()) { await advance(b); return; } // 防刷新重复收割
+      if (b.lastHarvested === pageKey()) { await advance(b, 'self'); return; } // 防刷新重复收割
       const eps = harvestSeriesEpisodes();
       b.seriesTaken = (b.seriesTaken || 0) + 1;
       b.videoQueue.push(...eps); // 剧集中的每一集都下载，不受列表项数上限约束
@@ -473,7 +511,7 @@ export async function maybeContinueBatch() {
       const sname = getPageProps().series?.nameZh || getPageProps().series?.name || path;
       b.note = `剧集「${sname}」共 ${eps.length} 集`;
       await saveBatch(b);
-      await advance(b);
+      await advance(b, 'self');
       return;
     }
     // 列表根页
@@ -489,11 +527,11 @@ export async function maybeContinueBatch() {
     if (take <= 0) {
       b.listingPages = [];
       await saveBatch(b);
-      await advance(b);
+      await advance(b, 'self');
       return;
     }
     if (b.lastHarvested === pageKey() && (b.videoQueue.length || b.seriesQueue.length)) {
-      await advance(b); // 防刷新重复收割
+      await advance(b, 'self'); // 防刷新重复收割
       return;
     }
     if (b.mode === 'single') {
@@ -507,7 +545,7 @@ export async function maybeContinueBatch() {
     b.lastHarvested = pageKey();
     b.note = `收割列表 ${path}（第 ${det.pageNum}/${det.totalPage} 页）`;
     await saveBatch(b);
-    await advance(b);
+    await advance(b, 'self');
   } catch (e) {
     Logger.error('BATCH', `续跑失败: ${errText(e)}`);
   }

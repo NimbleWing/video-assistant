@@ -2,8 +2,8 @@ import { RATES } from './core/constants.js';
 import { Logger } from './core/logger.js';
 import { errText, isAbortError, pageVideo, sanitizeName, toAbsolute } from './core/utils.js';
 import { downloadQuality } from './hls/downloader.js';
-import { cancelActiveSave, saveViaExtension } from './net/save.js';
-import { isPlaylistUrl, parseMasterPlaylist, parseMediaPlaylist, playlistCandidates } from './hls/playlist.js';
+import { cancelActiveSave, saveSmallFile } from './net/save.js';
+import { isPlaylistUrl, parseMasterPlaylist, parseMediaPlaylist, pickVariant, playlistCandidates } from './hls/playlist.js';
 import { fetchBuffer, fetchText } from './net/http.js';
 import { collectSniffedFromPerformance, installPageHookListener, sniffedUrls } from './net/sniffer.js';
 import { getVideoInfoFresh, videoIdFromPath } from './site/video-info.js';
@@ -25,8 +25,10 @@ function snapshot() {
     ready: state.ready,
     page: state.page ? { name: state.page.name, duration: state.page.duration || 0 } : null,
     qualities: state.qualities.map((q) => ({
-      label: q.label, url: q.url, duration: q.duration || 0, segments: q.segments || 0,
+      label: q.label, url: q.url, height: q.height || 0, duration: q.duration || 0, segments: q.segments || 0,
     })),
+    selectedHeight: currentStream()?.height || 0,
+    qualityHeight: state.qualityHeight,
     download: state.download ? { ...state.download } : null,
     holdBoost: state.holdBoost,
     holdRate: state.holdRate,
@@ -56,17 +58,29 @@ async function togglePip() {
 }
 
 function currentStream() {
-  return state.qualities[0] || null;
+  return pickVariant(state.qualities, state.qualityHeight);
 }
 
-// 查询 SW：目标文件是否已在本地（历史/账本快路径 + 0 字节占位磁盘探测兜底）
+/** 懒加载变体的媒体列表信息（时长/分段数，仅展示用；下载时总是重新拉取） */
+/** @param {import('./hls/playlist.js').Variant} v */
+async function fillMediaInfo(v) {
+  if (v.segments) return;
+  try {
+    const mediaText = await fetchText(v.url);
+    const media = parseMediaPlaylist(mediaText, v.url);
+    v.duration = media.duration || 0;
+    v.segments = media.segments.length;
+  } catch { v.duration = 0; }
+}
+
+// 查询 SW：目标文件是否已在本地（自定义目录句柄直查 .mp4/.ts 双查）
 /**
  * @param {string} filename
- * @returns {Promise<{ exists: boolean }>}
+ * @returns {Promise<{ exists: boolean, noHandle?: boolean }>}
  */
 function checkDownloaded(filename) {
   return chrome.runtime.sendMessage({ type: 'rv-file-exists', filename })
-    .then((r) => ({ exists: !!r?.exists }))
+    .then((r) => ({ exists: !!r?.exists, noHandle: !!r?.noHandle }))
     .catch(() => ({ exists: false }));
 }
 
@@ -93,6 +107,12 @@ async function startDownloadInner() {
   const seriesDir = state.page?.seriesName ? `${sanitizeName(state.page.seriesName)}/` : '';
   const filename = `${seriesDir}${sanitizeName(state.page?.name || 'rouvideo')}.mp4`;
   const verdict = await checkDownloaded(filename);
+  if (verdict.noHandle) {
+    hud.toast('请先在侧边栏选择下载目录', 4000);
+    state.download = { running: false, finished: false, error: '未选择下载目录', errorCode: 'NOHANDLE' };
+    pushState();
+    return false;
+  }
   if (verdict.exists) {
     Logger.info('DL', `本地已存在，跳过：${filename}`);
     hud.toast('本地已存在，已跳过下载');
@@ -101,7 +121,6 @@ async function startDownloadInner() {
     saveCover(state.page); // 封面仍补齐（覆盖写，代价极小）
     return true;
   }
-  // 探测确认不存在 → overwrite 落盘（自愈探测占位的任何残留）
   const ctrl = new AbortController();
   state.abort = ctrl;
   state.download = { running: true, finished: false, done: 0, total: 0, bytes: 0, speed: 0, eta: 0, pct: 0 };
@@ -110,7 +129,15 @@ async function startDownloadInner() {
     const result = await downloadQuality(quality, filename, (info) => {
       state.download = { running: true, finished: false, ...info };
       pushState();
-    }, ctrl.signal, { conflictAction: 'overwrite' });
+    }, ctrl.signal);
+    if (result.mode === 'skip') {
+      // 与 begin 双查竞态命中：按已存在处理
+      state.download = { running: false, finished: true, pct: 100, skipped: true, filename };
+      pushState();
+      await saveCover(state.page);
+      hud.toast('本地已存在，已跳过下载');
+      return true;
+    }
     state.download = {
       running: false, finished: true, pct: 100,
       bytes: result.bytes || state.download.bytes || 0,
@@ -121,12 +148,17 @@ async function startDownloadInner() {
     return true;
   } catch (err) {
     const aborted = isAbortError(err);
-    const msg = aborted ? '已取消' : (errText(err) || '下载失败');
+    const code = /** @type {any} */ (err)?.code;
+    const msg = aborted ? '已取消'
+      : code === 'REAUTH' ? '下载目录未授权，请在侧边栏重新授权'
+      : code === 'NOHANDLE' ? '请先在侧边栏选择下载目录'
+      : (errText(err) || '下载失败');
     hud.toast(msg, aborted ? 1800 : 4000); // 错误信息留足阅读时间
     if (state.download) {
       state.download.running = false;
       state.download.finished = false;
       state.download.error = aborted ? 'aborted' : msg;
+      state.download.errorCode = code;
     }
     return false;
   } finally {
@@ -157,7 +189,7 @@ async function saveCover(page) {
     const base = isSeries
       ? `${sanitizeName(page.seriesName)}/${sanitizeName(page.seriesName)}`
       : sanitizeName(page?.name || 'rouvideo');
-    const r = await saveViaExtension([buf], `${base}.${ext}`, `image/${ext === 'jpg' ? 'jpeg' : ext}`, { conflictAction: 'overwrite' });
+    const r = await saveSmallFile(buf, `${base}.${ext}`);
     if (!r.ok) Logger.warn('COVER', `封面保存失败: ${r.error}`);
   } catch (e) {
     Logger.warn('COVER', `封面下载失败: ${errText(e)}`);
@@ -178,7 +210,7 @@ async function batchDownloadCurrent() {
   }
   const ok = await startDownload();
   const errMsg = ok ? '' : (state.download?.error === 'aborted' ? '已取消' : (state.download?.error || '下载失败'));
-  await batch.onDownloadSettled({ ok, error: errMsg });
+  await batch.onDownloadSettled({ ok, error: errMsg, code: state.download?.errorCode });
 }
 
 async function bootVideo(force = false) {
@@ -241,14 +273,10 @@ async function bootVideo(force = false) {
     if (text.includes('#EXT-X-STREAM-INF')) {
       const variants = parseMasterPlaylist(text, /** @type {string} */ (usedUrl));
       if (!variants.length) throw new Error('播放列表为空');
-      const best = variants[0];
-      try {
-        const mediaText = await fetchText(best.url);
-        const media = parseMediaPlaylist(mediaText, best.url);
-        best.duration = media.duration || 0;
-        best.segments = media.segments.length;
-      } catch { best.duration = 0; }
-      state.qualities = [best];
+      state.qualities = variants;
+      pushState(); // 先亮出全部档位（时长/分段数随后补齐）
+      const pick = pickVariant(variants, state.qualityHeight);
+      if (pick) await fillMediaInfo(pick);
     } else if (text.includes('#EXTINF')) {
       const media = parseMediaPlaylist(text, /** @type {string} */ (usedUrl));
       if (!media.segments.length) throw new Error('播放列表为空');
@@ -353,6 +381,16 @@ function runCommand(cmd, value) {
     saveSetting('holdRate', n);
     updateActiveRate(n);
     pushState();
+  } else if (cmd === 'quality') {
+    // 清晰度偏好：≤所选档取最高（pickVariant），批量下载沿用同一偏好
+    const h = Math.max(0, Number(value) || 0);
+    state.qualityHeight = h;
+    saveSetting('qualityHeight', h);
+    const pick = currentStream();
+    if (pick) fillMediaInfo(pick).then(pushState);
+    else pushState();
+  } else if (cmd === 'batch-spawn') {
+    batch.spawnWorker().catch((e) => hud.toast(e.message, 4000));
   }
 }
 

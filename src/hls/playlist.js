@@ -105,6 +105,23 @@ export function parseMasterPlaylist(text, baseUrl) {
 }
 
 /**
+ * 按偏好高度挑选变体：≤偏好的最高档；全部更高时取可用最低档；偏好 0/无效 → 最高档。
+ * @param {Variant[]} variants 已按高度降序
+ * @param {number} prefHeight 偏好高度（0 = 最高）
+ * @returns {Variant | null}
+ */
+export function pickVariant(variants, prefHeight) {
+  if (!variants.length) return null;
+  if (!prefHeight) return variants[0];
+  /** @type {Variant | null} */
+  let best = null;
+  for (const v of variants) {
+    if (v.height && v.height <= prefHeight && (!best || v.height > best.height)) best = v;
+  }
+  return best || variants[variants.length - 1];
+}
+
+/**
  * 解析媒体播放列表为分段数组（含每段 IV 与解密钥地址）。
  * @param {string} text
  * @param {string} baseUrl

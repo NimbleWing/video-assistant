@@ -1,16 +1,9 @@
-// Service worker：侧边栏开关、offscreen 生命周期、下载中转（downloads API 支持子目录）。
-
-/**
- * @typedef {Object} ActiveSaveMeta
- * @property {string} filename
- * @property {number} tabId
- * @property {string | null} url
- * @property {string} note
- * @property {string | undefined} conflictAction
- */
+// Service worker：侧边栏开关、offscreen 生命周期、保存/封面消息转发、
+// 已下载判定（自定义目录句柄直查）、连续下载后台标签页管理。
 
 const OFFSCREEN_URL = 'src/offscreen.html';
 const BATCH_KEY = 'rv-hud:batch';
+const BATCH_TAB_KEY = 'rv-batch-tab';
 
 // ---------------------------------------------------------------- 侧边栏
 
@@ -30,30 +23,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return false;
 });
 
-// Batch downloads save one file per video without user gestures; allow
-// automatic multiple downloads on rou.video as a fallback for the anchor
-// save path. Idempotent — safe to run on every worker boot.
-async function allowAutoDownloads() {
-  try {
-    await chrome.contentSettings.automaticDownloads.set({
-      primaryPattern: 'https://rou.video/*',
-      setting: 'allow',
-    });
-  } catch (e) {
-    console.warn('[RouVideo] 设置自动多文件下载权限失败', (/** @type {any} */ (e))?.message || e);
-  }
-}
-allowAutoDownloads();
-chrome.runtime.onInstalled.addListener(() => { allowAutoDownloads(); });
-
 // Batch state lives in storage.local (content scripts can't use the session
 // area); clear leftovers on browser start so an interrupted batch never
 // resumes unexpectedly.
 chrome.runtime.onStartup.addListener(() => {
   chrome.storage.local.remove(BATCH_KEY).catch(() => {});
+  chrome.storage.session.remove(BATCH_TAB_KEY).catch(() => {});
 });
 
-// ---------------------------------------------------------------- 下载中转
+// 旧版遗物清理（1.8.0 起已下载判定改为句柄直查，下载账本废弃）
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.storage.local.remove('rv-hud:dl-ledger').catch(() => {});
+});
+
+// ---------------------------------------------------------------- offscreen
 
 /** @type {Promise<void> | null} */
 let ensureChain = null;
@@ -68,7 +51,7 @@ async function ensureOffscreen() {
     ensureChain = chrome.offscreen.createDocument({
       url: OFFSCREEN_URL,
       reasons: ['BLOBS'],
-      justification: '将下载完成的视频数据封装为 Blob URL，交给 chrome.downloads 保存到剧集子目录',
+      justification: '将下载的视频数据流式写入用户选择的下载目录（File System Access）',
     }).catch((e) => {
       if (!/single offscreen|Only a single/.test(String((/** @type {any} */ (e))?.message || e))) throw e;
     }).finally(() => { ensureChain = null; });
@@ -76,244 +59,114 @@ async function ensureOffscreen() {
   await ensureChain;
 }
 
-/** @type {Map<string, ActiveSaveMeta>} saveId -> 保存元数据 */
-const activeSaves = new Map();
-
-/**
- * @param {(delta: chrome.downloads.DownloadDelta) => void} listener
- */
-function onDownloadChanged(listener) {
-  chrome.downloads.onChanged.addListener(listener);
-}
-
-/** @param {any} msg os-url 消息 */
-async function onOSUrl(msg) {
-  const meta = activeSaves.get(msg.saveId);
-  if (!meta) return;
-  meta.url = msg.url;
-  meta.note = msg.note || '';
-  try {
-    const conflictAction = /** @type {chrome.downloads.FilenameConflictAction} */ (meta.conflictAction === 'overwrite' ? 'overwrite' : 'uniquify');
-    const downloadId = await chrome.downloads.download({
-      url: msg.url,
-      filename: meta.filename,
-      saveAs: false,
-      conflictAction,
-    });
-    const listener = (/** @type {chrome.downloads.DownloadDelta} */ delta) => {
-      if (delta.id !== downloadId) return;
-      const st = delta.state;
-      if (!st || (st.current !== 'complete' && st.current !== 'interrupted')) return;
-      chrome.downloads.onChanged.removeListener(listener);
-      chrome.runtime.sendMessage({ to: 'os', type: 'os-revoke', saveId: msg.saveId, url: msg.url }).catch(() => {});
-      const ok = st.current === 'complete';
-      if (ok) ledgerPut(/** @type {string} */ (meta.filename.split(/[\\/]/).pop()), downloadId);
-      chrome.tabs.sendMessage(meta.tabId, {
-        type: 'dl-settled',
-        saveId: msg.saveId,
-        ok,
-        error: ok ? '' : (delta.error?.current || 'download interrupted'),
-        note: meta.note || '',
-      }).catch(() => {});
-      activeSaves.delete(msg.saveId);
-    };
-    onDownloadChanged(listener);
-  } catch (e) {
-    chrome.runtime.sendMessage({ to: 'os', type: 'os-revoke', saveId: msg.saveId, url: msg.url }).catch(() => {});
-    chrome.tabs.sendMessage(meta.tabId, {
-      type: 'dl-settled', saveId: msg.saveId, ok: false, error: String((/** @type {any} */ (e))?.message || e),
-    }).catch(() => {});
-    activeSaves.delete(msg.saveId);
-  }
-}
-
-// ---------------------------------------------------------------- 已下载判断
-
-// 判定优先级：
-//   1) 账本（basename → downloadId，扩展自己保存的记录，O(1) 命中）
-//   2) 下载历史精确搜索（覆盖账本之前的下载）
-//   3) 磁盘探测（权威兜底）：向目标路径下 0 字节占位，uniquify 改名 → 已存在；
-//      原名落盘 → 不存在，随即删除占位并抹除历史。不依赖任何历史记录。
-const LEDGER_KEY = 'rv-hud:dl-ledger';
-
-/** @returns {Promise<Record<string, { id: number, at: number }>>} */
-async function ledgerGet() {
-  try {
-    const raw = /** @type {Record<string, any>} */ (await chrome.storage.local.get(LEDGER_KEY));
-    return raw[LEDGER_KEY] || {};
-  } catch {
-    return {};
-  }
-}
-
-/**
- * @param {string} basename
- * @param {number} id
- */
-async function ledgerPut(basename, id) {
-  try {
-    const ledger = await ledgerGet();
-    ledger[basename] = { id, at: Date.now() };
-    await chrome.storage.local.set({ [LEDGER_KEY]: ledger });
-  } catch {}
-}
-
-/**
- * @param {string} basename
- * @returns {Promise<boolean>}
- */
-async function historyExists(basename) {
-  const rec = (await ledgerGet())[basename];
-  if (rec) {
-    try {
-      const [item] = await chrome.downloads.search({ id: rec.id });
-      if (item && item.state === 'complete' && item.exists !== false) return true;
-    } catch {}
-  }
-  try {
-    const items = await chrome.downloads.search({ query: [basename], limit: 200 });
-    const hit = items.find((d) => d.state === 'complete' && d.exists !== false && (d.filename || '').endsWith(basename));
-    if (hit) {
-      ledgerPut(basename, hit.id);
-      return true;
-    }
-  } catch {}
-  return false;
-}
-
-/**
- * @param {number} downloadId
- * @param {number} [timeoutMs]
- * @returns {Promise<chrome.downloads.DownloadItem | null>}
- */
-function waitComplete(downloadId, timeoutMs = 8000) {
-  return new Promise((resolve) => {
-    const timer = setTimeout(async () => {
-      chrome.downloads.onChanged.removeListener(listener);
-      try { const [it] = await chrome.downloads.search({ id: downloadId }); resolve(it || null); } catch { resolve(null); }
-    }, timeoutMs);
-    const listener = async (/** @type {chrome.downloads.DownloadDelta} */ delta) => {
-      if (delta.id !== downloadId || !delta.state) return;
-      const st = delta.state.current;
-      if (st !== 'complete' && st !== 'interrupted') return;
-      clearTimeout(timer);
-      chrome.downloads.onChanged.removeListener(listener);
-      try { const [it] = await chrome.downloads.search({ id: downloadId }); resolve(it || null); } catch { resolve(null); }
-    };
-    chrome.downloads.onChanged.addListener(listener);
-  });
-}
-
-/**
- * 磁盘探测：向目标路径下 0 字节占位，uniquify 改名 → 已存在。
- * @param {string} filename
- * @returns {Promise<boolean>}
- */
-async function probeOne(filename) {
-  const base = /** @type {string} */ (filename.split('/').pop());
-  let id;
-  try {
-    id = await chrome.downloads.download({
-      url: 'data:application/octet-stream,',
-      filename,
-      conflictAction: 'uniquify',
-      saveAs: false,
-    });
-  } catch {
-    return false; // 探测通道不可用，按不存在处理（走正常下载）
-  }
-  const item = await waitComplete(id);
-  if (!item) {
-    // 超时：取消探测下载并抹除记录——否则 0 字节占位会随后落盘，
-    // 被后续探测/历史误判为"已存在"，真实下载被永远跳过（用户只剩空文件）
-    try { await chrome.downloads.cancel(id); } catch {}
-    try { await chrome.downloads.erase({ id }); } catch {}
-    return false;
-  }
-  try { await chrome.downloads.removeFile(id); } catch {}
-  try { await chrome.downloads.erase({ id }); } catch {}
-  if (!item.filename) return false;
-  // Chrome 仅在目标名被占用时才改名（name (1).ext），落点名 ≠ 目标名 → 已存在
-  return item.filename.split(/[\\/]/).pop() !== base;
-}
-
-/**
- * @param {string} filename
- * @returns {Promise<boolean>}
- */
-async function probeExists(filename) {
-  // 先探测根目录同名（兼容 1.3.0 之前的平铺文件，且不产生目录副作用）
-  const base = /** @type {string} */ (filename.split('/').pop());
-  if (!filename.includes('/')) return probeOne(base);
-  if (await probeOne(base)) return true;
-  return probeOne(filename);
-}
-
-/**
- * @param {string} filename
- * @returns {Promise<{ exists: boolean, via?: string }>}
- */
-async function fileExists(filename) {
-  // 自定义目录模式：经 offscreen 直接查磁盘句柄（不依赖任何下载历史）
-  try {
-    const flag = (/** @type {Record<string, any>} */ (await chrome.storage.local.get('rv-hud:fsdir')))['rv-hud:fsdir'];
-    if (flag?.name) {
-      await ensureOffscreen();
-      const r = await chrome.runtime.sendMessage({ to: 'os', type: 'os-file-exists', filename });
-      if (r?.handled) return { exists: !!r.exists, via: 'fs' };
-    }
-  } catch {}
-  const basename = /** @type {string} */ (filename.split('/').pop());
-  if (await historyExists(basename)) return { exists: true, via: 'history' };
-  if (await probeExists(filename)) return { exists: true, via: 'probe' };
-  return { exists: false };
-}
+// ---------------------------------------------------------------- 消息转发与已下载判定
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message !== 'object') return false;
 
-  if (message.type === 'os-url') {
-    onOSUrl(message);
-    return false;
-  }
-
-  if (message.type === 'os-saved') {
-    const meta = activeSaves.get(message.saveId);
-    if (meta) {
-      chrome.tabs.sendMessage(meta.tabId, {
-        type: 'dl-settled',
-        saveId: message.saveId,
-        ok: !!message.ok,
-        error: message.ok ? '' : (message.error || 'save failed'),
-        note: message.note || '',
-      }).catch(() => {});
-      activeSaves.delete(message.saveId);
-    }
-    return false;
-  }
-
-  if (message.type === 'rv-file-exists') {
-    fileExists(String(message.filename || String(message.basename || '')))
-      .then((r) => sendResponse(r))
-      .catch(() => sendResponse({ exists: false, via: 'error' }));
+  // 保存会话开始：确保 offscreen 并转发（元数据小，SW 经手无妨；数据分块不经过 SW）
+  if (message.type === 'rv-save-begin') {
+    ensureOffscreen()
+      .then(() => chrome.runtime.sendMessage({
+        to: 'os', type: 'os-save-begin',
+        saveId: message.saveId, filename: message.filename,
+        fingerprint: message.fingerprint, segTotal: message.segTotal,
+      }))
+      .then((r) => sendResponse(r || { ok: false, error: 'offscreen 无应答' }))
+      .catch((e) => sendResponse({ ok: false, error: String((/** @type {any} */ (e))?.message || e) }));
     return true;
   }
 
-  if (message.type === 'rv-save-begin' && sender.tab) {
-    activeSaves.set(message.saveId, {
-      filename: message.filename,
-      tabId: /** @type {number} */ (sender.tab.id),
-      url: null,
-      note: '',
-      conflictAction: message.conflictAction,
-    });
+  // 封面等小文件直写
+  if (message.type === 'rv-save-cover') {
     ensureOffscreen()
-      .then(() => chrome.runtime.sendMessage({ to: 'os', type: 'os-save-begin', saveId: message.saveId, filename: message.filename, mime: message.mime, conflictAction: message.conflictAction }))
-      .then(() => sendResponse({ ok: true }))
+      .then(() => chrome.runtime.sendMessage({ to: 'os', type: 'os-write-file', filename: message.filename, b64: message.b64 }))
+      .then((r) => sendResponse(r || { ok: false, error: 'offscreen 无应答' }))
       .catch((e) => sendResponse({ ok: false, error: String((/** @type {any} */ (e))?.message || e) }));
-    return true; // begin 由 SW 应答（记账 + 确保 offscreen）；
+    return true;
   }
-  // rv-save-chunk / rv-save-end 由 offscreen 直接应答（SW 不在数据路径上，减半消息开销）
+
+  // 已下载判定：自定义目录句柄直查（无句柄 = 尚未选择下载目录）
+  if (message.type === 'rv-file-exists') {
+    (async () => {
+      const flag = (/** @type {Record<string, any>} */ (await chrome.storage.local.get('rv-hud:fsdir')))['rv-hud:fsdir'];
+      if (!flag?.name) return { exists: false, noHandle: true };
+      await ensureOffscreen();
+      const r = await chrome.runtime.sendMessage({ to: 'os', type: 'os-file-exists', filename: String(message.filename || '') });
+      if (r?.handled) return { exists: !!r.exists };
+      if (r?.code === 'NOHANDLE') return { exists: false, noHandle: true };
+      return { exists: false, code: r?.code };
+    })()
+      .then((r) => sendResponse(r))
+      .catch(() => sendResponse({ exists: false }));
+    return true;
+  }
+
+  // 连续下载：打开/复用后台工作标签页
+  if (message.type === 'rv-batch-open') {
+    openBatchTab(String(message.url || ''))
+      .then((r) => sendResponse(r))
+      .catch((e) => sendResponse({ ok: false, error: String((/** @type {any} */ (e))?.message || e) }));
+    return true;
+  }
 
   return false;
+});
+
+// ---------------------------------------------------------------- 连续下载后台标签页
+
+/**
+ * 打开或复用后台工作标签页（标签页 id 存 storage.session，SW 重启不丢）。
+ * expectedPath 为站内相对路径，此处统一绝对化；已在目标页时不重导航
+ * （避免"恢复"按钮打断进行中的下载）。
+ * @param {string} url
+ * @returns {Promise<{ ok: boolean, tabId?: number, error?: string }>}
+ */
+async function openBatchTab(url) {
+  if (!url) return { ok: false, error: '缺少目标地址' };
+  const abs = url.startsWith('http') ? url : `https://rou.video${url}`;
+  try {
+    const raw = /** @type {Record<string, any>} */ (await chrome.storage.session.get(BATCH_TAB_KEY));
+    const tabId = raw[BATCH_TAB_KEY];
+    if (tabId != null) {
+      try {
+        const tab = await chrome.tabs.get(tabId);
+        if (tab && (tab.url === abs || tab.pendingUrl === abs)) return { ok: true, tabId };
+        await chrome.tabs.update(tabId, { url: abs });
+        return { ok: true, tabId };
+      } catch { /* 标签页已不在，开新的 */ }
+    }
+    const tab = await chrome.tabs.create({ url: abs, active: false });
+    await chrome.storage.session.set({ [BATCH_TAB_KEY]: tab.id });
+    return { ok: true, tabId: tab.id };
+  } catch (e) {
+    return { ok: false, error: String((/** @type {any} */ (e))?.message || e) };
+  }
+}
+
+/** 关闭后台工作标签页（批次终态时调用） */
+async function closeBatchTab() {
+  try {
+    const raw = /** @type {Record<string, any>} */ (await chrome.storage.session.get(BATCH_TAB_KEY));
+    const tabId = raw[BATCH_TAB_KEY];
+    await chrome.storage.session.remove(BATCH_TAB_KEY);
+    if (tabId != null) await chrome.tabs.remove(tabId).catch(() => {});
+  } catch {}
+}
+
+// 批次进入终态（完成/停止/授权失效暂停）→ 关闭后台标签页
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local' || !changes[BATCH_KEY]) return;
+  const wasActive = !!(/** @type {any} */ (changes[BATCH_KEY].oldValue)?.active);
+  const nowActive = !!(/** @type {any} */ (changes[BATCH_KEY].newValue)?.active);
+  if (wasActive && !nowActive) closeBatchTab();
+});
+
+// 用户手动关闭了工作标签页 → 清掉记录（批次本身暂停，面板可一键恢复）
+chrome.tabs.onRemoved.addListener((tabId) => {
+  chrome.storage.session.get(BATCH_TAB_KEY).then((raw) => {
+    if (/** @type {Record<string, any>} */ (raw)[BATCH_TAB_KEY] === tabId) {
+      chrome.storage.session.remove(BATCH_TAB_KEY).catch(() => {});
+    }
+  }).catch(() => {});
 });

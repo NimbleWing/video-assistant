@@ -25,13 +25,27 @@ export function resolveUrl(base, path) {
   } catch { return path; }
 }
 
+// Windows 保留设备名（按主名判定，CON.mp4 同样被保留）
+const WIN_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+
 /**
  * 清洗文件/目录名：去除非法字符并压缩空白，最长 120 字符。
+ * 尾部点/空格会被 Windows 静默剥除（不处理会导致已下载判定名与落盘名不一致），
+ * 保留设备名加下划线前缀。
  * @param {unknown} name
  * @returns {string}
  */
 export function sanitizeName(name) {
-  return String(name || 'video').replace(/[\\/:*?"<>|\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120) || 'video';
+  let s = String(name || 'video')
+    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[. ]+$/, '')
+    .slice(0, 120)
+    .replace(/[. ]+$/, '');
+  if (!s) s = 'video';
+  if (WIN_RESERVED.test(s.split('.')[0])) s = `_${s}`;
+  return s;
 }
 
 /**

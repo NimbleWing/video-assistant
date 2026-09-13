@@ -13,7 +13,9 @@ import { ICONS } from '../ui/icons.js';
  * @property {boolean} booting
  * @property {boolean} ready
  * @property {{ name: string, duration: number } | null} page
- * @property {{ label: string, url: string, duration: number, segments: number }[]} qualities
+ * @property {{ label: string, url: string, height: number, duration: number, segments: number }[]} qualities
+ * @property {number} selectedHeight
+ * @property {number} qualityHeight
  * @property {import('../state.js').DownloadUiState | null} download
  * @property {boolean} holdBoost
  * @property {number} holdRate
@@ -22,6 +24,9 @@ import { ICONS } from '../ui/icons.js';
 
 const app = /** @type {HTMLElement} */ (document.getElementById('app'));
 const toastEl = /** @type {HTMLElement} */ (document.getElementById('toast'));
+
+// 版本号直接读 manifest——面板所见即真实安装版本
+const EXT_VERSION = chrome.runtime.getManifest().version;
 /** @type {ReturnType<typeof setTimeout> | 0} */
 let toastTimer = 0;
 
@@ -206,7 +211,8 @@ function cmd(name, value) {
 }
 
 function currentStream() {
-  return snap?.qualities?.[0] || null;
+  const qs = snap?.qualities || [];
+  return qs.find((q) => q.height === snap?.selectedHeight) || qs[0] || null;
 }
 
 /** @param {Snapshot} s */
@@ -246,13 +252,16 @@ function batchHtml() {
     return `
       <div class="batch">
         <div class="batch-top">
-          <span class="batch-k">连续下载进行中</span>
+          <span class="batch-k">连续下载进行中（后台标签页）</span>
           <span class="batch-mode">${b.mode === 'series' ? '剧集' : '单片'}</span>
         </div>
         <div class="batch-s">${escapeHtml(b.note || '')}</div>
         <div class="batch-stats"><span>已完成 ${b.done}</span><span>失败 ${b.failed?.length || 0}</span><span>待处理 ${pending}</span></div>
         ${b.failed?.length ? `<div class="batch-failed">跳过：${b.failed.map((f) => escapeHtml(f.name)).join('、')}</div>` : ''}
-        <button class="ghost batch-stop" data-bact="stop">停止连续下载</button>
+        <div class="batch-btns">
+          <button class="ghost mini" data-bact="spawn">恢复后台下载</button>
+          <button class="ghost mini" data-bact="stop">停止连续下载</button>
+        </div>
       </div>`;
   }
 
@@ -292,7 +301,7 @@ function render() {
     app.innerHTML = `
       <div class="head">
         <div class="who">
-          <div class="title">肉视频助手</div>
+          <div class="title">肉视频助手 <span class="ver">v${EXT_VERSION}</span></div>
           <div class="meta"><i class="dot wait"></i><span>未在视频页</span></div>
         </div>
       </div>
@@ -305,7 +314,7 @@ function render() {
     app.innerHTML = `
       <div class="head">
         <div class="who">
-          <div class="title">肉视频助手</div>
+          <div class="title">肉视频助手 <span class="ver">v${EXT_VERSION}</span></div>
           <div class="meta"><i class="dot ${snap.listing ? '' : 'wait'}"></i><span>${snap.listing ? '列表页已就绪' : '打开视频页后可单独下载'}</span></div>
         </div>
       </div>
@@ -319,6 +328,8 @@ function render() {
   const st = statusLabel(snap);
   const dur = stream?.duration || snap.page?.duration || 0;
   const title = snap.page?.name || '当前视频';
+  const qualities = snap.qualities;
+  const selectedHeight = snap.selectedHeight;
   const pct = d?.running ? Math.max(0, Math.min(100, d.pct || 0)) : 0;
   const barPct = d?.saving ? Math.max(0, Math.min(100, d.savePct || 0)) : pct; // 保存阶段进度条复用
   const segInfo = stream?.segments ? `<span>·</span><span>${stream.segments} 段</span>` : '';
@@ -333,7 +344,7 @@ function render() {
     <div class="head">
       <div class="who">
         <div class="title">${escapeHtml(title)}</div>
-        <div class="meta"><i class="dot ${st.dot}"></i><span>${st.text}</span>${dur ? `<span>·</span><span>${formatDuration(dur)}</span>` : ''}${segInfo}</div>
+        <div class="meta"><i class="dot ${st.dot}"></i><span>${st.text}</span>${dur ? `<span>·</span><span>${formatDuration(dur)}</span>` : ''}${segInfo}<span>·</span><span class="ver">v${EXT_VERSION}</span></div>
       </div>
     </div>
     <div class="dirbox">${dirHtml()}</div>
@@ -345,6 +356,13 @@ function render() {
       <button class="ghost" data-act="copy-m3u8" ${!stream ? 'disabled' : ''}>${ICONS.copy}复制地址</button>
       <button class="ghost" data-act="pip">${ICONS.pip}画中画</button>
     </div>
+    ${qualities.length > 1 ? `
+    <div class="boost">
+      <div class="boost-k">清晰度</div>
+      <div class="seg">
+        ${qualities.map((q) => `<button data-act="quality" data-height="${q.height}" class="${selectedHeight === q.height ? 'on' : ''}">${escapeHtml(q.label || (q.height ? `${q.height}p` : '源'))}</button>`).join('')}
+      </div>
+    </div>` : ''}
     ${d?.running ? `<div class="stats"><span>${d.done}/${d.total} · ${formatBytes(d.bytes || 0)}</span><span>${d.saving ? '正在写入磁盘…' : `${formatBytes(d.speed || 0)}/s · ${formatEta(d.eta || 0)}`}</span></div>` : ''}
     ${d?.finished && !d.running ? `<div class="ok">${d.skipped ? '本地已存在，已跳过下载' : (dirState.name ? `已保存到「${escapeHtml(dirState.name)}」` : '已保存到浏览器下载目录')}</div>` : ''}
     ${!stream && !snap.booting ? '<button class="ghost" data-act="rescan" style="width:100%;margin-top:8px">重新解析</button>' : ''}
@@ -387,17 +405,27 @@ function renderProgress(d) {
 
 // ------------------------------------------------------------------ 事件
 
-app.addEventListener('click', (ev) => {
+// 下载前置：无下载目录则先弹选择器（所有下载都走自定义目录直写）
+/** @returns {Promise<boolean>} 有可用目录 */
+async function ensureDir() {
+  if (dirState.name) return true;
+  toast('请先选择下载目录');
+  await onDirAction('pickdir');
+  return !!dirState.name;
+}
+
+app.addEventListener('click', async (ev) => {
   const act = (/** @type {HTMLElement | null} */ (ev.target))?.closest('[data-act],[data-bact]');
   if (!act) return;
   const kind = (/** @type {HTMLElement} */ (act)).dataset.act;
   const bkind = (/** @type {HTMLElement} */ (act)).dataset.bact;
-  if (kind === 'download') cmd('download');
+  if (kind === 'download') { if (await ensureDir()) cmd('download'); }
   else if (kind === 'abort') cmd('abort');
   else if (kind === 'rescan') { toast('正在解析…'); cmd('rescan'); }
   else if (kind === 'pip') cmd('pip');
   else if (kind === 'toggle-boost') cmd('toggle-boost');
   else if (kind === 'rate') cmd('rate', Number((/** @type {HTMLElement} */ (act)).dataset.rate));
+  else if (kind === 'quality') cmd('quality', Number((/** @type {HTMLElement} */ (act)).dataset.height));
   else if (kind === 'copy-m3u8') {
     const q = currentStream();
     if (!q) return toast('还没有解析到地址');
@@ -413,12 +441,16 @@ app.addEventListener('click', (ev) => {
   } else if (bkind === 'start') {
     const mode = modeSel || snap?.listing?.kind;
     if (!mode) return toast('请先选择 剧集 或 单片');
+    if (!(await ensureDir())) return;
     const limit = Number(limitVal) > 0 ? Number(limitVal) : 0;
     cmd('batch-start', { mode, allPages: scopeSel === 'all', limit });
-    toast('连续下载已启动…');
+    toast('连续下载已在后台标签页启动…');
   } else if (bkind === 'stop') {
     cmd('batch-stop');
     toast('正在停止…');
+  } else if (bkind === 'spawn') {
+    cmd('batch-spawn');
+    toast('正在恢复后台标签页…');
   } else if (bkind === 'retry') {
     toast('开始重试失败项…');
     cmd('batch-retry');

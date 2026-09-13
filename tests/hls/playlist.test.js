@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
-import { isPlaylistUrl, parseMasterPlaylist, parseMediaPlaylist, playlistCandidates } from '../../src/hls/playlist.js';
+import { isPlaylistUrl, parseMasterPlaylist, parseMediaPlaylist, pickVariant, playlistCandidates } from '../../src/hls/playlist.js';
 
 describe('isPlaylistUrl', () => {
   it('识别 m3u8 / api / 伪装图片', () => {
@@ -117,5 +117,31 @@ describe('parseMediaPlaylist', () => {
     const text = '#EXTM3U\n#EXTINF:1.0,\n#EXT-X-BITRATE:100\ns0.ts';
     const m = parseMediaPlaylist(text, 'https://cdn.example.com/v/i.m3u8');
     expect(m.segments.length).toBe(1);
+  });
+});
+
+describe('pickVariant', () => {
+  const variants = parseMasterPlaylist([
+    '#EXTM3U',
+    '#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=1280x720,NAME="720p"',
+    '720/index.m3u8',
+    '#EXT-X-STREAM-INF:BANDWIDTH=2000000,RESOLUTION=1920x1080,NAME="1080p"',
+    '1080/index.m3u8',
+    '#EXT-X-STREAM-INF:BANDWIDTH=300000,RESOLUTION=854x480,NAME="480p"',
+    '480/index.m3u8',
+  ].join('\n'), 'https://cdn.example.com/v/abc/master.m3u8');
+  it('偏好 0 → 最高档', () => {
+    expect(pickVariant(variants, 0)?.height).toBe(1080);
+  });
+  it('≤偏好的最高档', () => {
+    expect(pickVariant(variants, 720)?.height).toBe(720);
+    expect(pickVariant(variants, 900)?.height).toBe(720);
+    expect(pickVariant(variants, 1080)?.height).toBe(1080);
+  });
+  it('全部更高时取可用最低档', () => {
+    expect(pickVariant(variants, 360)?.height).toBe(480);
+  });
+  it('空列表返回 null', () => {
+    expect(pickVariant([], 720)).toBeNull();
   });
 });

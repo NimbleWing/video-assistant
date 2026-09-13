@@ -12,6 +12,7 @@ import { storage } from './core/storage.js';
  * @property {number} [eta]
  * @property {number} [pct]
  * @property {string} [error]
+ * @property {string} [errorCode] REAUTH / NOHANDLE 等机器可读错误码
  * @property {string} [filename]
  * @property {boolean} [skipped]
  * @property {boolean} [saving]
@@ -30,6 +31,7 @@ import { storage } from './core/storage.js';
  * @property {import('./site/video-info.js').PageInfo | null} page
  * @property {boolean} holdBoost
  * @property {number} holdRate
+ * @property {number} qualityHeight 清晰度偏好（0 = 最高）
  * @property {string} lastPath
  */
 
@@ -45,6 +47,7 @@ export const state = {
   page: null,
   holdBoost: false,
   holdRate: 2,
+  qualityHeight: 0,
   lastPath: location.pathname,
 };
 
@@ -53,6 +56,7 @@ export async function loadSettings() {
   state.holdBoost = (await storage.get('holdBoost', false)) === true;
   const rate = Number(await storage.get('holdRate', 2));
   state.holdRate = RATES.includes(rate) ? rate : 2;
+  state.qualityHeight = Math.max(0, Number(await storage.get('qualityHeight', 0)) || 0);
 }
 
 /**

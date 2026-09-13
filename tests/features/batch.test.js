@@ -343,3 +343,60 @@ describe('maybeContinueBatch（认领制）', () => {
     expect(toast).toHaveBeenCalledWith('连续下载中断：页面无法识别');
   });
 });
+
+describe('后台标签页驱动（advance worker 模式）', () => {
+  it('startBatch 请求 SW 开后台标签页，当前页不跳转', async () => {
+    setPage('/v', SINGLES);
+    await batch.startBatch('single');
+    const calls = mock.sendMessage.mock.calls.map((c) => c[0]);
+    const open = calls.find((m) => m.type === 'rv-batch-open');
+    expect(open).toMatchObject({ url: '/v/v1' });
+    expect(location.pathname).toBe('/v'); // 未被劫持
+  });
+
+  it('resumeBatch 也走后台标签页', async () => {
+    await seedBatch({ active: false, videoQueue: [{ id: 'v2', name: '视频2' }], stoppedAt: Date.now() });
+    await batch.resumeBatch();
+    const open = mock.sendMessage.mock.calls.map((c) => c[0]).find((m) => m.type === 'rv-batch-open');
+    expect(open).toMatchObject({ url: '/v/v2' });
+  });
+
+  it('onDownloadSettled 在工作标签页内自驱（不发 rv-batch-open）', async () => {
+    await seedBatch({ current: { id: 'v1', name: '视频1' }, videoQueue: [{ id: 'v2', name: '视频2' }] });
+    await batch.onDownloadSettled({ ok: true });
+    const open = mock.sendMessage.mock.calls.map((c) => c[0]).find((m) => m.type === 'rv-batch-open');
+    expect(open).toBeUndefined();
+  });
+
+  it('spawnWorker：进行中批次重开标签页；无批次抛错', async () => {
+    await expect(batch.spawnWorker()).rejects.toThrow('没有进行中的批次');
+    await seedBatch({ expectedPath: '/v/v2', videoQueue: [{ id: 'v2', name: '视频2' }] });
+    await batch.spawnWorker();
+    const open = mock.sendMessage.mock.calls.map((c) => c[0]).find((m) => m.type === 'rv-batch-open');
+    expect(open).toMatchObject({ url: '/v/v2' });
+  });
+});
+
+describe('onDownloadSettled 授权暂停', () => {
+  it('REAUTH：当前项回队首，批次暂停', async () => {
+    await seedBatch({ current: { id: 'v1', name: '视频1' }, videoQueue: [{ id: 'v2', name: '视频2' }] });
+    const handled = await batch.onDownloadSettled({ ok: false, error: '授权失效', code: 'REAUTH' });
+    expect(handled).toBe(true);
+    const b = await stored();
+    expect(b.active).toBe(false);
+    expect(b.current).toBeNull();
+    expect(b.videoQueue.map((/** @type {any} */ v) => v.id)).toEqual(['v1', 'v2']);
+    expect(b.failed).toEqual([]); // 不算失败
+    expect(b.stoppedAt).toBeGreaterThan(0);
+    expect(b.note).toContain('重新授权');
+    expect(toast).toHaveBeenCalledOnce();
+  });
+
+  it('NOHANDLE：同样暂停且提示选目录', async () => {
+    await seedBatch({ current: { id: 'v1', name: '视频1' }, videoQueue: [] });
+    await batch.onDownloadSettled({ ok: false, error: '未选择下载目录', code: 'NOHANDLE' });
+    const b = await stored();
+    expect(b.active).toBe(false);
+    expect(b.note).toContain('选择');
+  });
+});

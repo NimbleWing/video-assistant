@@ -60,6 +60,14 @@ body {
   flex-wrap: wrap;
 }
 
+.ver {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--muted);
+  opacity: .8;
+}
+
 .dot {
   width: 4px;
   height: 4px;
