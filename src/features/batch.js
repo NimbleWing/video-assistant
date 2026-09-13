@@ -254,7 +254,62 @@ export async function startBatch(mode, scope = {}) {
 export async function stopBatch() {
   Logger.info('BATCH', '收到停止指令');
   hooks.abort?.();
-  await clearBatch();
+  // 不清空：保留队列/进度/失败记录，供"重试失败项"与"继续剩余"使用
+  const b = await getBatch();
+  if (b) {
+    if (b.current) {
+      // 被中止的当前项未完成，放回队首
+      b.videoQueue.unshift(b.current);
+      b.current = null;
+    }
+    b.active = false;
+    b.stoppedAt = Date.now();
+    b.note = '已停止（可继续或重试失败项）';
+    await saveBatch(b);
+  }
+}
+
+// 仅重试上次批次中的失败项（直接用已记录的视频 ID，不重新爬列表）
+export async function retryFailed() {
+  const b = await getBatch();
+  if (!b) throw new Error('没有历史批次记录');
+  if (b.active) throw new Error('批次进行中，请先停止');
+  if (!b.failed?.length) throw new Error('没有失败项');
+  const nb = {
+    active: true,
+    mode: b.mode || 'single',
+    limit: 0,
+    listingPages: [],
+    seriesQueue: [],
+    videoQueue: b.failed.map((f) => ({ id: f.id, name: f.name })),
+    current: null,
+    done: 0,
+    failed: [],
+    total: b.failed.length,
+    note: `重试 ${b.failed.length} 个失败项`,
+    lastHarvested: '',
+    startedAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+  Logger.info('BATCH', `重试失败项：${nb.videoQueue.length} 个`);
+  await saveBatch(nb);
+  await advance(nb);
+}
+
+// 停止后续跑剩余队列
+export async function resumeBatch() {
+  const b = await getBatch();
+  if (!b) throw new Error('没有历史批次记录');
+  if (b.active) throw new Error('批次已在进行中');
+  if (!b.videoQueue?.length && !b.seriesQueue?.length && !b.listingPages?.length) {
+    throw new Error('没有剩余项可继续');
+  }
+  b.active = true;
+  b.stoppedAt = null;
+  b.note = '继续剩余项';
+  await saveBatch(b);
+  Logger.info('BATCH', `继续剩余：视频 ${b.videoQueue.length}，剧集 ${b.seriesQueue.length}，翻页 ${b.listingPages.length}`);
+  await advance(b);
 }
 
 // 每个下载结束后由 main 调用；返回是否属于连续下载任务。

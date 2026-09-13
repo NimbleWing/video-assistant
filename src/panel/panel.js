@@ -187,6 +187,26 @@ function statusLabel() {
 
 // ------------------------------------------------------------------ 连续下载
 
+// 历史批次报告：失败原因明细 + 重试/继续/清除
+function reportHtml() {
+  const b = batchState;
+  if (!b || b.active) return '';
+  const failedN = b.failed?.length || 0;
+  const remaining = (b.videoQueue?.length || 0) + (b.seriesQueue?.length || 0) + (b.listingPages?.length || 0);
+  if (!b.finishedAt && !b.stoppedAt) return '';
+  const head = b.finishedAt
+    ? `上次完成：成功 ${b.done} · 失败 ${failedN}`
+    : `已停止：成功 ${b.done} · 失败 ${failedN} · 剩余 ${remaining}`;
+  const failedList = failedN
+    ? `<div class="batch-failed">${b.failed.slice(0, 8).map((f) => `<div title="${escapeHtml(f.error || '')}">${escapeHtml((f.name || '').slice(0, 26))} — ${escapeHtml((f.error || '').slice(0, 34))}</div>`).join('')}${failedN > 8 ? `<div>…共 ${failedN} 项</div>` : ''}</div>`
+    : '';
+  const btns = [];
+  if (failedN) btns.push(`<button class="ghost mini" data-bact="retry">重试失败 (${failedN})</button>`);
+  if (b.stoppedAt && remaining) btns.push(`<button class="ghost mini" data-bact="resume">继续剩余 (${remaining})</button>`);
+  btns.push('<button class="ghost mini" data-bact="clear">清除记录</button>');
+  return `<div class="batch-report"><div class="batch-s">${head}</div>${failedList}<div class="batch-btns">${btns.join('')}</div></div>`;
+}
+
 function batchHtml() {
   const b = batchState;
   if (b?.active) {
@@ -204,17 +224,13 @@ function batchHtml() {
       </div>`;
   }
 
-  const report = b && !b.active && b.finishedAt
-    ? `<div class="batch-s">上次完成：成功 ${b.done} · 失败 ${b.failed?.length || 0}</div>`
-    : '';
-
   const det = snap?.listing || null;
   if (!det) {
     return `
       <div class="batch">
         <div class="batch-k">连续下载</div>
         <div class="batch-s">到列表根页（剧集库 / 视频库 / 首页 / 搜索页）可批量收割并连续下载。</div>
-        ${report}
+        ${reportHtml()}
       </div>`;
   }
 
@@ -233,7 +249,7 @@ function batchHtml() {
       </div>
       <input class="batch-lim" id="batchLimit" type="number" min="1" step="1" placeholder="项数上限（默认不限）" value="${escapeHtml(limitVal)}">
       <button class="dl batch-start" data-bact="start" ${!kind ? 'disabled' : ''}>${ICONS.down}<span>开始连续下载</span></button>
-      ${report}
+      ${reportHtml()}
     </div>`;
 }
 
@@ -361,6 +377,14 @@ app.addEventListener('click', (ev) => {
   } else if (bkind === 'stop') {
     cmd('batch-stop');
     toast('正在停止…');
+  } else if (bkind === 'retry') {
+    toast('开始重试失败项…');
+    cmd('batch-retry');
+  } else if (bkind === 'resume') {
+    toast('继续剩余项…');
+    cmd('batch-resume');
+  } else if (bkind === 'clear') {
+    cmd('batch-clear');
   } else if (bkind === 'recordpath') {
     recordDirPath();
   } else if (bkind === 'pickdir' || bkind === 'cleardir' || bkind === 'reauth') {

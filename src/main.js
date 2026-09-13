@@ -303,8 +303,14 @@ function runCommand(cmd, value) {
   else if (cmd === 'pip') togglePip();
   else if (cmd === 'batch-start') {
     batch.startBatch(value?.mode, value).catch((e) => hud.toast(e.message));
-  } else if (cmd === 'batch-stop') {
-    batch.stopBatch().then(() => hud.toast('已停止连续下载'));
+  }   else if (cmd === 'batch-stop') {
+    batch.stopBatch().then(() => hud.toast('已停止（记录已保留）'));
+  } else if (cmd === 'batch-retry') {
+    batch.retryFailed().catch((e) => hud.toast(e.message));
+  } else if (cmd === 'batch-resume') {
+    batch.resumeBatch().catch((e) => hud.toast(e.message));
+  } else if (cmd === 'batch-clear') {
+    batch.clearBatch().then(() => hud.toast('已清除批次记录'));
   }
   else if (cmd === 'toggle-boost') {
     state.holdBoost = !state.holdBoost;
