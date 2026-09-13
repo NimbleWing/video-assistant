@@ -256,26 +256,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       filename: message.filename,
       tabId: sender.tab.id,
       url: null,
+      note: '',
       conflictAction: message.conflictAction,
     });
     ensureOffscreen()
-      .then(() => chrome.runtime.sendMessage({ to: 'os', type: 'os-save-begin', saveId: message.saveId, filename: message.filename, mime: message.mime }))
+      .then(() => chrome.runtime.sendMessage({ to: 'os', type: 'os-save-begin', saveId: message.saveId, filename: message.filename, mime: message.mime, conflictAction: message.conflictAction }))
       .then(() => sendResponse({ ok: true }))
       .catch((e) => sendResponse({ ok: false, error: String(e?.message || e) }));
-    return true; // 分块必须严格有序：逐条 ACK
+    return true; // begin 由 SW 应答（记账 + 确保 offscreen）；
   }
-  if (message.type === 'rv-save-chunk') {
-    chrome.runtime.sendMessage({ to: 'os', type: 'os-save-chunk', saveId: message.saveId, b64: message.b64 })
-      .then(() => sendResponse({ ok: true }))
-      .catch((e) => sendResponse({ ok: false, error: String(e?.message || e) }));
-    return true;
-  }
-  if (message.type === 'rv-save-end') {
-    chrome.runtime.sendMessage({ to: 'os', type: 'os-save-end', saveId: message.saveId })
-      .then(() => sendResponse({ ok: true }))
-      .catch((e) => sendResponse({ ok: false, error: String(e?.message || e) }));
-    return true;
-  }
+  // rv-save-chunk / rv-save-end 由 offscreen 直接应答（SW 不在数据路径上，减半消息开销）
 
   return false;
 });

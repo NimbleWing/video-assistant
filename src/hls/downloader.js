@@ -83,6 +83,7 @@ export async function downloadQuality(quality, filename, onProgress, signal, opt
       const mp4 = TsRemux.remux(chunks);
       payload = [mp4];
       bytes = mp4.byteLength;
+      chunks.length = 0; // 立即释放分段缓冲（大文件内存峰值减半）
     }
   } catch (err) {
     Logger.warn('REMUX', err && err.message ? err.message : err);
