@@ -23,7 +23,7 @@ import { openSaveSession } from '../net/save.js';
 
 /**
  * @typedef {Object} DownloadResult
- * @property {'fs' | 'skip'} mode
+ * @property {'downloads'} mode
  * @property {string} filename
  * @property {number} bytes
  * @property {string} [note]
@@ -54,7 +54,8 @@ async function withRetry(fn, tries = 3, signal) {
 }
 
 /**
- * 流式下载一个清晰度的全部分段：页面侧解密后按序发往 offscreen（remux+写盘）。
+ * 流式下载一个清晰度的全部分段：页面侧解密后按序发往 offscreen（OPFS 暂存 +
+ * remux），完成后经 chrome.downloads 落到浏览器下载目录。
  * 分段不落内存全量——发送窗口背压，内存峰值 ≈ 并发窗口而非整文件。
  * 指纹 = 播放列表地址+分段数+首尾分段地址，断点续传凭它防止串片。
  * @param {Variant} quality
@@ -81,7 +82,6 @@ export async function downloadQuality(quality, filename, onProgress, signal, opt
   const fingerprint = `${quality.url}|${total}|${media.segments[0].url}|${media.segments[total - 1].url}`;
 
   const begin = await openSaveSession({ filename, fingerprint, segTotal: total });
-  if (begin.done) return { mode: 'skip', filename, bytes: 0, note: '本地已存在' };
   if (!begin.ok || !begin.session) {
     const e = /** @type {Error & { code?: string }} */ (new Error(begin.error || '保存通道不可用'));
     if (begin.code) e.code = begin.code;
@@ -170,7 +170,7 @@ export async function downloadQuality(quality, filename, onProgress, signal, opt
       throw e;
     }
     return {
-      mode: 'fs',
+      mode: 'downloads',
       filename: fin.finalName,
       bytes,
       note: (resumeFrom > 0 ? `断点续传完成（自第 ${resumeFrom + 1} 段）。` : '') + (fin.note || ''),

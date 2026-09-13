@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import {
-  FsStreamWriter, fsFileExists, fsReadJson, fsRemove, fsWriteJson, resolveDir,
+  FsStreamWriter, fsReadJson, fsRemove, fsWriteJson, resolveDir,
 } from '../../src/net/fswriter.js';
 import { makeFsMock } from '../helpers/fs-mock.js';
 
@@ -11,16 +11,28 @@ function nn(v) {
   return v;
 }
 
-describe('resolveDir / fsFileExists', () => {
+/** @param {any} root @param {string} name @returns {Promise<boolean>} */
+async function exists(root, name) {
+  try {
+    const e = await resolveDir(root, name, false);
+    if (!e) return false;
+    await e.dir.getFileHandle(e.base, { create: false });
+    return true;
+  } catch (err) {
+    if ((/** @type {any} */ (err))?.name === 'NotFoundError') return false;
+    throw err;
+  }
+}
+describe('resolveDir', () => {
   it('逐级建目录并判定存在性', async () => {
     const { root } = makeFsMock();
-    expect(await fsFileExists(root, 'a/b/c.mp4')).toBe(false);
+    expect(await exists(root, 'a/b/c.mp4')).toBe(false);
     const e = nn(await resolveDir(root, 'a/b/c.mp4', true));
     expect(e.base).toBe('c.mp4');
     await e.dir.getFileHandle('c.mp4', { create: true });
-    expect(await fsFileExists(root, 'a/b/c.mp4')).toBe(true);
-    expect(await fsFileExists(root, 'a/b/x.mp4')).toBe(false);
-    expect(await fsFileExists(root, 'a/x/c.mp4')).toBe(false);
+    expect(await exists(root, 'a/b/c.mp4')).toBe(true);
+    expect(await exists(root, 'a/b/x.mp4')).toBe(false);
+    expect(await exists(root, 'a/x/c.mp4')).toBe(false);
   });
 });
 
@@ -75,7 +87,7 @@ describe('FsStreamWriter', () => {
     const w = await FsStreamWriter.create(root, 'x.part');
     await w.write(new Uint8Array([7, 7, 7]));
     await w.moveTo('x.mp4');
-    expect(await fsFileExists(root, 'x.part')).toBe(false);
+    expect(await exists(root, 'x.part')).toBe(false);
     expect(await fsReadBytes(root, 'x.mp4')).toEqual([7, 7, 7]);
   });
 
@@ -87,7 +99,7 @@ describe('FsStreamWriter', () => {
     const handle = /** @type {any} */ (w.handle);
     handle.move = undefined;
     await w.moveTo('x.mp4');
-    expect(await fsFileExists(root, 'x.part')).toBe(false);
+    expect(await exists(root, 'x.part')).toBe(false);
     expect(await fsReadBytes(root, 'x.mp4')).toEqual([8]);
   });
 
@@ -96,7 +108,7 @@ describe('FsStreamWriter', () => {
     const w = await FsStreamWriter.create(root, 'x.part');
     await w.write(new Uint8Array([1]));
     await w.discard();
-    expect(await fsFileExists(root, 'x.part')).toBe(false);
+    expect(await exists(root, 'x.part')).toBe(false);
   });
 });
 

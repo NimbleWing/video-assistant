@@ -73,14 +73,14 @@ async function fillMediaInfo(v) {
   } catch { v.duration = 0; }
 }
 
-// 查询 SW：目标文件是否已在本地（自定义目录句柄直查 .mp4/.ts 双查）
+// 查询 SW：目标文件是否已在本地（下载历史精确校验）
 /**
  * @param {string} filename
- * @returns {Promise<{ exists: boolean, noHandle?: boolean }>}
+ * @returns {Promise<{ exists: boolean }>}
  */
 function checkDownloaded(filename) {
   return chrome.runtime.sendMessage({ type: 'rv-file-exists', filename })
-    .then((r) => ({ exists: !!r?.exists, noHandle: !!r?.noHandle }))
+    .then((r) => ({ exists: !!r?.exists }))
     .catch(() => ({ exists: false }));
 }
 
@@ -107,12 +107,6 @@ async function startDownloadInner() {
   const seriesDir = state.page?.seriesName ? `${sanitizeName(state.page.seriesName)}/` : '';
   const filename = `${seriesDir}${sanitizeName(state.page?.name || 'rouvideo')}.mp4`;
   const verdict = await checkDownloaded(filename);
-  if (verdict.noHandle) {
-    hud.toast('请先在侧边栏选择下载目录', 4000);
-    state.download = { running: false, finished: false, error: '未选择下载目录', errorCode: 'NOHANDLE' };
-    pushState();
-    return false;
-  }
   if (verdict.exists) {
     Logger.info('DL', `本地已存在，跳过：${filename}`);
     hud.toast('本地已存在，已跳过下载');
@@ -130,14 +124,6 @@ async function startDownloadInner() {
       state.download = { running: true, finished: false, ...info };
       pushState();
     }, ctrl.signal);
-    if (result.mode === 'skip') {
-      // 与 begin 双查竞态命中：按已存在处理
-      state.download = { running: false, finished: true, pct: 100, skipped: true, filename };
-      pushState();
-      await saveCover(state.page);
-      hud.toast('本地已存在，已跳过下载');
-      return true;
-    }
     state.download = {
       running: false, finished: true, pct: 100,
       bytes: result.bytes || state.download.bytes || 0,
@@ -148,17 +134,12 @@ async function startDownloadInner() {
     return true;
   } catch (err) {
     const aborted = isAbortError(err);
-    const code = /** @type {any} */ (err)?.code;
-    const msg = aborted ? '已取消'
-      : code === 'REAUTH' ? '下载目录未授权，请在侧边栏重新授权'
-      : code === 'NOHANDLE' ? '请先在侧边栏选择下载目录'
-      : (errText(err) || '下载失败');
+    const msg = aborted ? '已取消' : (errText(err) || '下载失败');
     hud.toast(msg, aborted ? 1800 : 4000); // 错误信息留足阅读时间
     if (state.download) {
       state.download.running = false;
       state.download.finished = false;
       state.download.error = aborted ? 'aborted' : msg;
-      state.download.errorCode = code;
     }
     return false;
   } finally {
@@ -210,7 +191,7 @@ async function batchDownloadCurrent() {
   }
   const ok = await startDownload();
   const errMsg = ok ? '' : (state.download?.error === 'aborted' ? '已取消' : (state.download?.error || '下载失败'));
-  await batch.onDownloadSettled({ ok, error: errMsg, code: state.download?.errorCode });
+  await batch.onDownloadSettled({ ok, error: errMsg });
 }
 
 async function bootVideo(force = false) {

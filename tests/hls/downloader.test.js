@@ -72,7 +72,7 @@ describe('downloadQuality 流式链路', () => {
     /** @type {number[]} */
     const pcts = [];
     const r = await downloadQuality(QUALITY, 'x.mp4', (p) => pcts.push(p.pct));
-    expect(r.mode).toBe('fs');
+    expect(r.mode).toBe('downloads');
     expect(r.filename).toBe('x.mp4');
     expect(r.bytes).toBe(9);
     // 按序：write 的内容必须是 1,2,3
@@ -84,13 +84,6 @@ describe('downloadQuality 流式链路', () => {
     expect(fp).toContain('index.m3u8|3|');
     expect(fp).toContain('s0.ts');
     expect(fp).toContain('s2.ts');
-  });
-
-  it('begin done → skip', async () => {
-    vi.mocked(openSaveSession).mockResolvedValue({ ok: true, done: true, resumeFrom: 0 });
-    const r = await downloadQuality(QUALITY, 'x.mp4', () => {});
-    expect(r.mode).toBe('skip');
-    expect(vi.mocked(fetchBuffer)).not.toHaveBeenCalled();
   });
 
   it('begin 失败带码 → 抛带码错误', async () => {

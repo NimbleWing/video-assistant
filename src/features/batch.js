@@ -55,7 +55,6 @@ import { getPageProps, videoIdFromPath } from '../site/video-info.js';
  * @property {number} updatedAt
  * @property {number} [finishedAt]
  * @property {number | null} [stoppedAt]
- * @property {string | null} [stoppedReason] 'REAUTH' | 'NOHANDLE' | 'manual'——面板据此给出针对性修复入口
  */
 
 /**
@@ -396,7 +395,6 @@ export async function stopBatch() {
     }
     b.active = false;
     b.stoppedAt = Date.now();
-    b.stoppedReason = 'manual';
     b.note = '已停止（可继续或重试失败项）';
     await saveBatch(b);
   }
@@ -443,7 +441,6 @@ export async function resumeBatch() {
   }
   b.active = true;
   b.stoppedAt = null;
-  b.stoppedReason = null;
   b.note = '继续剩余项';
   await saveBatch(b);
   Logger.info('BATCH', `继续剩余：视频 ${b.videoQueue.length}，剧集 ${b.seriesQueue.length}，翻页 ${b.listingPages.length}`);
@@ -452,26 +449,12 @@ export async function resumeBatch() {
 
 // 每个下载结束后由 main 调用；返回是否属于连续下载任务。
 /**
- * @param {{ ok: boolean, error?: string, code?: string }} result
+ * @param {{ ok: boolean, error?: string }} result
  * @returns {Promise<boolean>} 是否属于连续下载任务
  */
-export async function onDownloadSettled({ ok, error, code }) {
+export async function onDownloadSettled({ ok, error }) {
   const b = await getBatch();
   if (!b || !b.active || !b.current) return false;
-  if (code === 'REAUTH' || code === 'NOHANDLE') {
-    // 授权失效/未选目录：当前项放回队首，批次暂停——面板重新授权/选目录后继续
-    const cur = b.current;
-    b.videoQueue.unshift(cur);
-    b.current = null;
-    b.active = false;
-    b.stoppedAt = Date.now();
-    b.stoppedReason = code;
-    b.note = code === 'REAUTH' ? '下载目录授权失效，已暂停——重新授权后可继续' : '未选择下载目录，已暂停——请在侧边栏选择后继续';
-    await saveBatch(b);
-    hooks.toast?.(b.note);
-    Logger.warn('BATCH', `${b.note}（${cur.name}）`);
-    return true;
-  }
   if (ok) {
     b.done += 1;
     Logger.info('BATCH', `完成 ${b.done}：${b.current.name}`);

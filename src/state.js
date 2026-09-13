@@ -12,7 +12,6 @@ import { storage } from './core/storage.js';
  * @property {number} [eta]
  * @property {number} [pct]
  * @property {string} [error]
- * @property {string} [errorCode] REAUTH / NOHANDLE 等机器可读错误码
  * @property {string} [filename]
  * @property {boolean} [skipped]
  * @property {boolean} [saving]

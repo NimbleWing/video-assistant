@@ -58,12 +58,6 @@ describe('openSaveSession 正常链路', () => {
     expect(chunks.length).toBe(2);
   });
 
-  it('begin done → 已存在直接跳过', async () => {
-    mock.sendMessage.mockImplementation(async () => ({ ok: true, done: true }));
-    const b = await mod.openSaveSession(BEGIN);
-    expect(b.ok).toBe(true);
-    expect(b.done).toBe(true);
-  });
 
   it('begin 携带 resumeFrom（断点续传）', async () => {
     mock.sendMessage.mockImplementation(async () => ({ ok: true, resumeFrom: 5 }));

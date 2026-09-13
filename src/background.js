@@ -1,5 +1,5 @@
 // Service worker：侧边栏开关、offscreen 生命周期、保存/封面消息转发、
-// 已下载判定（自定义目录句柄直查）、连续下载后台标签页管理。
+// 已下载判定（账本 + 下载历史校验）、连续下载后台标签页管理。
 
 const OFFSCREEN_URL = 'src/offscreen.html';
 const BATCH_KEY = 'rv-hud:batch';
@@ -31,11 +31,6 @@ chrome.runtime.onStartup.addListener(() => {
   chrome.storage.session.remove(BATCH_TAB_KEY).catch(() => {});
 });
 
-// 旧版遗物清理（1.8.0 起已下载判定改为句柄直查，下载账本废弃）
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.storage.local.remove('rv-hud:dl-ledger').catch(() => {});
-});
-
 // ---------------------------------------------------------------- offscreen
 
 /** @type {Promise<void> | null} */
@@ -51,7 +46,7 @@ async function ensureOffscreen() {
     ensureChain = chrome.offscreen.createDocument({
       url: OFFSCREEN_URL,
       reasons: ['BLOBS'],
-      justification: '将下载的视频数据流式写入用户选择的下载目录（File System Access）',
+      justification: '将下载的视频数据流式暂存到扩展私有存储（OPFS），完成后交给 chrome.downloads 落盘',
     }).catch((e) => {
       if (!/single offscreen|Only a single/.test(String((/** @type {any} */ (e))?.message || e))) throw e;
     }).finally(() => { ensureChain = null; });
@@ -59,7 +54,70 @@ async function ensureOffscreen() {
   await ensureChain;
 }
 
-// ---------------------------------------------------------------- 消息转发与已下载判定
+// ---------------------------------------------------------------- 下载中转与已下载判定
+
+/**
+ * 等待下载进入终态。
+ * @param {number} downloadId
+ * @param {number} timeoutMs
+ * @returns {Promise<chrome.downloads.DownloadItem | null>}
+ */
+function waitDownload(downloadId, timeoutMs) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(async () => {
+      chrome.downloads.onChanged.removeListener(listener);
+      try { const [it] = await chrome.downloads.search({ id: downloadId }); resolve(it || null); } catch { resolve(null); }
+    }, timeoutMs);
+    const listener = async (/** @type {chrome.downloads.DownloadDelta} */ delta) => {
+      if (delta.id !== downloadId || !delta.state) return;
+      const st = delta.state.current;
+      if (st !== 'complete' && st !== 'interrupted') return;
+      clearTimeout(timer);
+      chrome.downloads.onChanged.removeListener(listener);
+      try { const [it] = await chrome.downloads.search({ id: downloadId }); resolve(it || null); } catch { resolve(null); }
+    };
+    chrome.downloads.onChanged.addListener(listener);
+  });
+}
+
+/**
+ * 经 chrome.downloads 落盘（objectURL / dataURL）。
+ * @param {string} url
+ * @param {string} filename 可含子目录
+ * @returns {Promise<{ ok: boolean, error?: string }>}
+ */
+async function downloadToDisk(url, filename) {
+  if (!url || !filename) return { ok: false, error: '缺少落盘参数' };
+  const downloadId = await chrome.downloads.download({
+    url, filename, saveAs: false, conflictAction: 'overwrite',
+  });
+  // 大文件 objectURL → 磁盘的复制可能耗时，给足窗口
+  const item = await waitDownload(downloadId, 15 * 60 * 1000);
+  if (!item || item.state !== 'complete') {
+    try { await chrome.downloads.removeFile(downloadId); } catch {}
+    try { await chrome.downloads.erase({ id: downloadId }); } catch {}
+    return { ok: false, error: '落盘中断' };
+  }
+  return { ok: true };
+}
+
+/**
+ * 已下载判定：下载历史精确校验（basename 匹配且文件仍在）。
+ * @param {string} filename 可含子目录
+ * @returns {Promise<boolean>}
+ */
+async function fileExists(filename) {
+  const basename = /** @type {string} */ (filename.split(/[\\/]/).pop());
+  try {
+    const items = await chrome.downloads.search({ query: [basename], limit: 200 });
+    return items.some((d) => d.state === 'complete' && d.exists !== false
+      && (d.filename || '').endsWith(basename));
+  } catch {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------- 消息路由
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message !== 'object') return false;
@@ -77,27 +135,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  // 封面等小文件直写
-  if (message.type === 'rv-save-cover') {
-    ensureOffscreen()
-      .then(() => chrome.runtime.sendMessage({ to: 'os', type: 'os-write-file', filename: message.filename, b64: message.b64 }))
-      .then((r) => sendResponse(r || { ok: false, error: 'offscreen 无应答' }))
+  // OPFS 完成文件 / 封面：objectURL 或 dataURL → chrome.downloads
+  if (message.type === 'os-url') {
+    downloadToDisk(String(message.dataUrl || message.url || ''), String(message.filename || ''))
+      .then((r) => sendResponse(r))
       .catch((e) => sendResponse({ ok: false, error: String((/** @type {any} */ (e))?.message || e) }));
     return true;
   }
 
-  // 已下载判定：自定义目录句柄直查（无句柄 = 尚未选择下载目录）
-  if (message.type === 'rv-file-exists') {
-    (async () => {
-      const flag = (/** @type {Record<string, any>} */ (await chrome.storage.local.get('rv-hud:fsdir')))['rv-hud:fsdir'];
-      if (!flag?.name) return { exists: false, noHandle: true };
-      await ensureOffscreen();
-      const r = await chrome.runtime.sendMessage({ to: 'os', type: 'os-file-exists', filename: String(message.filename || '') });
-      if (r?.handled) return { exists: !!r.exists };
-      if (r?.code === 'NOHANDLE') return { exists: false, noHandle: true };
-      return { exists: false, code: r?.code };
-    })()
+  // 封面等小文件直写：data URL 直接落盘（不经 offscreen）
+  if (message.type === 'rv-save-cover') {
+    downloadToDisk(`data:application/octet-stream;base64,${String(message.b64 || '')}`, String(message.filename || ''))
       .then((r) => sendResponse(r))
+      .catch((e) => sendResponse({ ok: false, error: String((/** @type {any} */ (e))?.message || e) }));
+    return true;
+  }
+
+  // 已下载判定（账本 + 下载历史，无需 offscreen）
+  if (message.type === 'rv-file-exists') {
+    fileExists(String(message.filename || ''))
+      .then((exists) => sendResponse({ exists }))
       .catch(() => sendResponse({ exists: false }));
     return true;
   }
@@ -154,7 +211,7 @@ async function closeBatchTab() {
   } catch {}
 }
 
-// 批次进入终态（完成/停止/授权失效暂停）→ 关闭后台标签页
+// 批次进入终态（完成/停止）→ 关闭后台标签页
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local' || !changes[BATCH_KEY]) return;
   const wasActive = !!(/** @type {any} */ (changes[BATCH_KEY].oldValue)?.active);

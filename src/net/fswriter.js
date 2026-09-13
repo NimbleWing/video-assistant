@@ -1,5 +1,5 @@
-// 自定义目录流式写入器：.part 半成品 + sidecar 快照 + 完成后 rename。
-// 句柄经 fsdir.js 的 IDB 共享；本模块不碰 chrome.*，纯 FS Access 逻辑（可单测）。
+// 流式文件写入器（OPFS 专用）：.part 半成品 + sidecar 快照 + 完成后 rename。
+// OPFS 为扩展私有磁盘存储，永不需要授权；本模块不碰 chrome.*，纯句柄逻辑（可单测）。
 // 半成品布局（stem = 去掉 .mp4 的路径）：
 //   写入中：<stem>.part（mp4 模式：ftyp|mdat头|mdat…；ts 透传：裸 TS）
 //   快照：  <stem>.part.json（指纹/进度/remux 元数据，断点续传凭据）
@@ -26,24 +26,6 @@ export async function resolveDir(root, filename, create) {
     dir = await dir.getDirectoryHandle(s, { create });
   }
   return { dir, base };
-}
-
-/**
- * 文件是否存在。
- * @param {FileSystemDirectoryHandle} root
- * @param {string} filename
- * @returns {Promise<boolean>}
- */
-export async function fsFileExists(root, filename) {
-  try {
-    const e = await resolveDir(root, filename, false);
-    if (!e) return false;
-    await e.dir.getFileHandle(e.base, { create: false });
-    return true;
-  } catch (e) {
-    if ((/** @type {any} */ (e))?.name === 'NotFoundError') return false;
-    throw e; // NotAllowedError 等向上抛（调用方映射 REAUTH）
-  }
 }
 
 /**

@@ -1,26 +1,15 @@
 // Offscreen document：保存会话的消息管线（逻辑全在 net/save-session.js）。
-// 自定义目录句柄存 IDB（面板挑选/授权）；无句柄即 NOHANDLE，权限失效即 REAUTH
-// （不信任 queryPermission——对 IDB 回读句柄会虚报，写入抛 NotAllowedError 才算数）。
-// 数据链路：begin 经 SW 转发（确保本文档存在）；chunk/end 由内容脚本广播、本文档直接 ACK。
+// 落盘链路：OPFS 流式暂存（免授权）→ 完成文件 objectURL → SW chrome.downloads
+// 落到浏览器下载目录。数据链路：begin 经 SW 转发（确保本文档存在）；
+// chunk/end 由内容脚本广播、本文档直接 ACK。
 
-import { loadDirHandle } from './net/fsdir.js';
 import { SaveSession } from './net/save-session.js';
-import { FsStreamWriter, fsFileExists } from './net/fswriter.js';
 
 /** @type {Map<string, SaveSession>} saveId -> 保存会话 */
 const sessions = new Map();
 
-/**
- * FS 错误映射：权限类 → REAUTH。
- * @param {any} e
- * @returns {{ ok: false, code?: string, error: string }}
- */
-function mapErr(e) {
-  const name = e?.name || '';
-  const error = String(e?.message || e);
-  if (/NotAllowed|Security/.test(name)) return { ok: false, code: 'REAUTH', error };
-  return { ok: false, error };
-}
+// OPFS 为磁盘级存储，请求持久化免回收（尽力而为）
+navigator.storage?.persist?.().catch(() => {});
 
 /**
  * @param {string} b64
@@ -34,45 +23,49 @@ function fromBase64(b64) {
 }
 
 /**
+ * OPFS 完成文件的落盘钩子：objectURL → SW os-url → chrome.downloads → 回执。
+ * @param {string} filename
+ * @param {Blob} file
+ * @returns {Promise<{ ok: boolean, error?: string }>}
+ */
+async function finalizeViaDownloads(filename, file) {
+  const url = URL.createObjectURL(file);
+  try {
+    const r = await chrome.runtime.sendMessage({ to: 'sw', type: 'os-url', url, filename });
+    if (!r || r.ok === false) return { ok: false, error: r?.error || '落盘失败' };
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String((/** @type {any} */ (e))?.message || e) };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+/**
  * @param {any} msg
  * @returns {Promise<any>}
  */
 async function handle(msg) {
   if (msg.type === 'os-save-begin') {
-    const root = await loadDirHandle();
-    if (!root) return { ok: false, code: 'NOHANDLE', error: '未选择下载目录' };
-    try {
-      const b = await SaveSession.begin(root, String(msg.filename || ''), {
-        fingerprint: String(msg.fingerprint || ''),
-        segTotal: Number(msg.segTotal) || 0,
-      });
-      if (b.done) return { ok: true, done: true };
-      sessions.set(msg.saveId, b.session);
-      return { ok: true, resumeFrom: b.resumeFrom };
-    } catch (e) {
-      return mapErr(e);
-    }
+    const b = await SaveSession.begin(String(msg.filename || ''), {
+      fingerprint: String(msg.fingerprint || ''),
+      segTotal: Number(msg.segTotal) || 0,
+    }, { finalizeViaDownloads });
+    sessions.set(msg.saveId, b.session);
+    return { ok: true, resumeFrom: b.resumeFrom };
   }
   if (msg.type === 'rv-save-chunk') {
     const s = sessions.get(msg.saveId);
     if (!s) return { ok: false, error: 'unknown save' };
-    try {
-      await s.pushSegment(fromBase64(String(msg.b64 || '')));
-      return { ok: true };
-    } catch (e) {
-      return mapErr(e);
-    }
+    await s.pushSegment(fromBase64(String(msg.b64 || '')));
+    return { ok: true };
   }
   if (msg.type === 'rv-save-end' || msg.type === 'os-save-end') {
     const s = sessions.get(msg.saveId);
     if (!s) return { ok: false, error: 'unknown save' };
     sessions.delete(msg.saveId);
-    try {
-      const fin = await s.finalize();
-      return { ok: true, finalName: fin.finalName, note: fin.note };
-    } catch (e) {
-      return mapErr(e);
-    }
+    const fin = await s.finalize();
+    return { ok: true, finalName: fin.finalName, note: fin.note };
   }
   if (msg.type === 'os-abort') {
     // 中止：保留 .part+sidecar（断点续传凭据）
@@ -80,31 +73,6 @@ async function handle(msg) {
     sessions.delete(msg.saveId);
     if (s) await s.abort().catch(() => {});
     return { ok: true };
-  }
-  if (msg.type === 'os-file-exists') {
-    // dedup 直查：最终名 .mp4/.ts 双查（透传产物也算已下载）
-    const root = await loadDirHandle();
-    if (!root) return { handled: false, code: 'NOHANDLE' };
-    const stem = String(msg.filename || '').replace(/\.mp4$/i, '');
-    try {
-      const exists = await fsFileExists(root, `${stem}.mp4`) || await fsFileExists(root, `${stem}.ts`);
-      return { handled: true, exists };
-    } catch (e) {
-      return { handled: false, ...mapErr(e) };
-    }
-  }
-  if (msg.type === 'os-write-file') {
-    // 小文件直写（封面）：整文件一次落盘（覆盖写）
-    const root = await loadDirHandle();
-    if (!root) return { ok: false, code: 'NOHANDLE', error: '未选择下载目录' };
-    try {
-      const w = await FsStreamWriter.create(root, String(msg.filename || ''));
-      await w.write(fromBase64(String(msg.b64 || '')));
-      await w.close();
-      return { ok: true };
-    } catch (e) {
-      return mapErr(e);
-    }
   }
   return { ok: true };
 }
@@ -118,6 +86,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!isOs && !isDirectData) return false;
   handle(msg)
     .then((r) => sendResponse(r || { ok: true }))
-    .catch((e) => sendResponse({ ok: false, error: String(/** @type {any} */ (e)?.message || e) }));
+    .catch((e) => sendResponse({ ok: false, error: String((/** @type {any} */ (e))?.message || e) }));
   return true;
 });
