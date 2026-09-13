@@ -150,7 +150,7 @@ function dirHtml() {
       </div>`;
   }
   const label = dirState.path || dirState.name;
-  const mark = dirState.granted ? '' : '（待授权，暂存默认目录）';
+  const mark = dirState.granted ? '' : '（待重新授权）';
   const authBtn = dirState.granted ? '' : '<button class="ghost mini" data-bact="reauth">重新授权</button>';
   const recBtn = dirState.path ? '' : '<button class="ghost mini" data-bact="recordpath">记录路径</button>';
   return `
@@ -225,7 +225,7 @@ function statusLabel(s) {
 
 // ------------------------------------------------------------------ 连续下载
 
-// 历史批次报告：失败原因明细 + 重试/继续/清除
+// 历史批次报告：暂停原因（note）+ 失败明细 + 针对性修复/重试/继续/清除
 function reportHtml() {
   const b = batchState;
   if (!b || b.active) return '';
@@ -234,21 +234,33 @@ function reportHtml() {
   if (!b.finishedAt && !b.stoppedAt) return '';
   const head = b.finishedAt
     ? `上次完成：成功 ${b.done} · 失败 ${failedN}`
-    : `已停止：成功 ${b.done} · 失败 ${failedN} · 剩余 ${remaining}`;
+    : `已暂停：成功 ${b.done} · 失败 ${failedN} · 剩余 ${remaining}`;
+  // 暂停原因必须可见（授权失效/未选目录等——否则表现为"没反应"）
+  const noteLine = (b.stoppedAt && b.note && b.note !== '已停止（可继续或重试失败项）')
+    ? `<div class="batch-s" style="color:var(--warn,#e6a23c)">${escapeHtml(b.note)}</div>`
+    : '';
   const failedList = failedN
     ? `<div class="batch-failed">${b.failed.slice(0, 8).map((f) => `<div title="${escapeHtml(f.error || '')}">${escapeHtml((f.name || '').slice(0, 26))} — ${escapeHtml((f.error || '').slice(0, 34))}</div>`).join('')}${failedN > 8 ? `<div>…共 ${failedN} 项</div>` : ''}</div>`
     : '';
   const btns = [];
+  // 兼容旧状态（无 stoppedReason）：按 note 文本推断
+  const isReauth = b.stoppedReason === 'REAUTH' || (!b.stoppedReason && /授权/.test(b.note || ''));
+  const isNoHandle = b.stoppedReason === 'NOHANDLE' || (!b.stoppedReason && /选择下载目录|未选择下载目录/.test(b.note || ''));
+  if (isReauth) btns.push('<button class="ghost mini" data-bact="reauth-resume">重新授权并继续</button>');
+  if (isNoHandle) btns.push('<button class="ghost mini" data-bact="pickdir">选择下载目录</button>');
   if (failedN) btns.push(`<button class="ghost mini" data-bact="retry">重试失败 (${failedN})</button>`);
   if (b.stoppedAt && remaining) btns.push(`<button class="ghost mini" data-bact="resume">继续剩余 (${remaining})</button>`);
   btns.push('<button class="ghost mini" data-bact="clear">清除记录</button>');
-  return `<div class="batch-report"><div class="batch-s">${head}</div>${failedList}<div class="batch-btns">${btns.join('')}</div></div>`;
+  return `<div class="batch-report"><div class="batch-s">${head}</div>${noteLine}${failedList}<div class="batch-btns">${btns.join('')}</div></div>`;
 }
 
 function batchHtml() {
   const b = batchState;
   if (b?.active) {
     const pending = (b.videoQueue?.length || 0) + (b.seriesQueue?.length || 0) + (b.listingPages?.length || 0);
+    // 停滞检测：批次活着但长时间无推进（工作标签页被关/扩展出错）时给出可见提示
+    const staleMs = Date.now() - (b.updatedAt || Date.now());
+    const stale = staleMs > 90 * 1000;
     return `
       <div class="batch">
         <div class="batch-top">
@@ -256,6 +268,7 @@ function batchHtml() {
           <span class="batch-mode">${b.mode === 'series' ? '剧集' : '单片'}</span>
         </div>
         <div class="batch-s">${escapeHtml(b.note || '')}</div>
+        ${stale ? `<div class="batch-s" style="color:var(--warn,#e6a23c)">长时间无推进——可点"恢复后台下载"重开工作标签页</div>` : ''}
         <div class="batch-stats"><span>已完成 ${b.done}</span><span>失败 ${b.failed?.length || 0}</span><span>待处理 ${pending}</span></div>
         ${b.failed?.length ? `<div class="batch-failed">跳过：${b.failed.map((f) => escapeHtml(f.name)).join('、')}</div>` : ''}
         <div class="batch-btns">
@@ -405,13 +418,42 @@ function renderProgress(d) {
 
 // ------------------------------------------------------------------ 事件
 
-// 下载前置：无下载目录则先弹选择器（所有下载都走自定义目录直写）
+// 请求目录写权限（必须在用户手势内调用；requestPermission 会弹系统授权框）
+/** @returns {Promise<boolean>} 是否获得授权 */
+async function tryReauth() {
+  const h = await loadDirHandle();
+  if (!h) return false;
+  try {
+    const p = await (/** @type {any} */ (h)).requestPermission({ mode: 'readwrite' });
+    await pullDir();
+    await syncDirFlag();
+    if (p !== 'granted') toast('未授权');
+    return p === 'granted';
+  } catch (e) {
+    toast('授权失败: ' + ((/** @type {any} */ (e))?.message || e), 4000);
+    return false;
+  }
+}
+
+// 下载前置：目录可用性检查——没选过则弹选择器；选过但授权失效（浏览器重启会吊销）
+// 则借本次点击的手势直接弹重授权，绝大多数场景用户不会再看到 REAUTH 失败
 /** @returns {Promise<boolean>} 有可用目录 */
 async function ensureDir() {
-  if (dirState.name) return true;
-  toast('请先选择下载目录');
-  await onDirAction('pickdir');
-  return !!dirState.name;
+  if (!dirState.name) {
+    toast('请先选择下载目录');
+    await onDirAction('pickdir');
+    return !!dirState.name;
+  }
+  if (!dirState.granted) {
+    toast('下载目录需要重新授权…');
+    if (!(await tryReauth())) {
+      toast('未授权，无法下载', 4000);
+      return false;
+    }
+    toast('已重新授权');
+    render();
+  }
+  return true;
 }
 
 app.addEventListener('click', async (ev) => {
@@ -445,12 +487,25 @@ app.addEventListener('click', async (ev) => {
     const limit = Number(limitVal) > 0 ? Number(limitVal) : 0;
     cmd('batch-start', { mode, allPages: scopeSel === 'all', limit });
     toast('连续下载已在后台标签页启动…');
+    // 启动自检：内容脚本侧 startBatch 抛错只会在页面 HUD 提示，面板复查兜底
+    setTimeout(async () => {
+      await pullBatch();
+      if (!batchState?.active) toast('批次未能启动——请查看页面上的错误提示', 4000);
+      else render();
+    }, 1000);
   } else if (bkind === 'stop') {
     cmd('batch-stop');
     toast('正在停止…');
   } else if (bkind === 'spawn') {
     cmd('batch-spawn');
     toast('正在恢复后台标签页…');
+  } else if (bkind === 'reauth-resume') {
+    // 授权失效暂停的一键修复：借点击手势重授权 → 自动继续批次
+    toast('请求目录授权…');
+    if (await tryReauth()) {
+      cmd('batch-resume');
+      toast('已重新授权，继续批次');
+    }
   } else if (bkind === 'retry') {
     toast('开始重试失败项…');
     cmd('batch-retry');

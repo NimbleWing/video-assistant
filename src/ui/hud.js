@@ -33,7 +33,11 @@ export function mount() {
  */
 export function toast(msg, ms = 1800) {
   const el = ui.toast;
-  if (!el) return;
+  if (!el) {
+    // HUD 未挂载（极端时序）时至少落到控制台，错误不至于完全不可见
+    console.warn('[RouVideo]', msg);
+    return;
+  }
   el.textContent = msg;
   el.classList.add('on');
   clearTimeout(toastTimer);

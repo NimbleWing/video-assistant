@@ -55,6 +55,7 @@ import { getPageProps, videoIdFromPath } from '../site/video-info.js';
  * @property {number} updatedAt
  * @property {number} [finishedAt]
  * @property {number | null} [stoppedAt]
+ * @property {string | null} [stoppedReason] 'REAUTH' | 'NOHANDLE' | 'manual'——面板据此给出针对性修复入口
  */
 
 /**
@@ -271,8 +272,8 @@ async function advance(b, drive) {
     b.note = `下载中：${v.name}`;
     b.expectedPath = `/v/${encodeURIComponent(v.id)}`; // 认领标记：只推进自己导航出的页面
     await saveBatch(b);
-    if (drive === 'worker') await requestWorker(b.expectedPath);
-    else navTo(b.expectedPath);
+    if (drive === 'worker' && await requestWorker(b.expectedPath)) return;
+    navTo(b.expectedPath);
     return;
   }
   const s = b.seriesQueue.shift();
@@ -281,8 +282,8 @@ async function advance(b, drive) {
     b.note = `读取剧集：${s.name}`;
     b.expectedPath = `/s/${encodeURIComponent(s.id)}`;
     await saveBatch(b);
-    if (drive === 'worker') await requestWorker(b.expectedPath);
-    else navTo(b.expectedPath);
+    if (drive === 'worker' && await requestWorker(b.expectedPath)) return;
+    navTo(b.expectedPath);
     return;
   }
   const lp = b.listingPages.shift();
@@ -291,8 +292,8 @@ async function advance(b, drive) {
     b.note = `翻页收割：${lp}`;
     b.expectedPath = lp;
     await saveBatch(b);
-    if (drive === 'worker') await requestWorker(b.expectedPath);
-    else navTo(b.expectedPath);
+    if (drive === 'worker' && await requestWorker(b.expectedPath)) return;
+    navTo(b.expectedPath);
     return;
   }
   b.active = false;
@@ -307,11 +308,17 @@ async function advance(b, drive) {
 
 /**
  * 让 SW 打开/复用后台工作标签页（认领制：标签页加载后自行续跑流水线）。
+ * 失败必须可见并降级为当前页驱动——否则批次停在 active 却无人推进（静默失败）。
  * @param {string} url
+ * @returns {Promise<boolean>} 是否成功交给后台标签页
  */
 async function requestWorker(url) {
-  const r = await chrome.runtime.sendMessage({ type: 'rv-batch-open', url }).catch(() => null);
-  if (!r?.ok) Logger.warn('BATCH', `打开后台标签页失败: ${r?.error || '无应答'}`);
+  const r = await chrome.runtime.sendMessage({ type: 'rv-batch-open', url }).catch((e) => ({ ok: false, error: String(/** @type {any} */ (e)?.message || e) }));
+  if (r?.ok) return true;
+  const msg = `后台标签页打开失败（${r?.error || '无应答'}），改为当前页驱动`;
+  Logger.warn('BATCH', msg);
+  hooks.toast?.(msg, 4000);
+  return false;
 }
 
 /** 面板"恢复后台下载"：为进行中的批次重新打开工作标签页（被手动关闭后恢复） */
@@ -389,6 +396,7 @@ export async function stopBatch() {
     }
     b.active = false;
     b.stoppedAt = Date.now();
+    b.stoppedReason = 'manual';
     b.note = '已停止（可继续或重试失败项）';
     await saveBatch(b);
   }
@@ -435,6 +443,7 @@ export async function resumeBatch() {
   }
   b.active = true;
   b.stoppedAt = null;
+  b.stoppedReason = null;
   b.note = '继续剩余项';
   await saveBatch(b);
   Logger.info('BATCH', `继续剩余：视频 ${b.videoQueue.length}，剧集 ${b.seriesQueue.length}，翻页 ${b.listingPages.length}`);
@@ -456,7 +465,8 @@ export async function onDownloadSettled({ ok, error, code }) {
     b.current = null;
     b.active = false;
     b.stoppedAt = Date.now();
-    b.note = code === 'REAUTH' ? '下载目录授权失效，已暂停——请在侧边栏重新授权后继续' : '未选择下载目录，已暂停——请在侧边栏选择后继续';
+    b.stoppedReason = code;
+    b.note = code === 'REAUTH' ? '下载目录授权失效，已暂停——重新授权后可继续' : '未选择下载目录，已暂停——请在侧边栏选择后继续';
     await saveBatch(b);
     hooks.toast?.(b.note);
     Logger.warn('BATCH', `${b.note}（${cur.name}）`);
@@ -481,15 +491,15 @@ export async function maybeContinueBatch() {
   const b = await getBatch();
   if (!b || !b.active) return;
   continuing = true;
-  const path = location.pathname;
-  Logger.info('BATCH', `续跑 @${path}：${b.note || ''}`);
-  // 认领制：批次只推进自己导航出来的页面；用户手动打开的页面与 expectedPath
-  // 不匹配 → 批次原地暂停（面板可停止/继续），不跳页、不收割、不污染队列
-  if (b.expectedPath && b.expectedPath !== pageKey()) {
-    Logger.info('BATCH', `非流水线页面，批次暂停（等待 ${b.expectedPath}）`);
-    return;
-  }
   try {
+    const path = location.pathname;
+    Logger.info('BATCH', `续跑 @${path}：${b.note || ''}`);
+    // 认领制：批次只推进自己导航出来的页面；用户手动打开的页面与 expectedPath
+    // 不匹配 → 批次原地暂停（面板可停止/继续），不跳页、不收割、不污染队列
+    if (b.expectedPath && b.expectedPath !== pageKey()) {
+      Logger.info('BATCH', `非流水线页面，批次暂停（等待 ${b.expectedPath}）`);
+      return;
+    }
     if (path.startsWith('/v/')) {
       const id = videoIdFromPath();
       if (b.current && b.current.id === id) {
@@ -548,5 +558,8 @@ export async function maybeContinueBatch() {
     await advance(b, 'self');
   } catch (e) {
     Logger.error('BATCH', `续跑失败: ${errText(e)}`);
+  } finally {
+    // 复位认领闸门：否则本页内后续（如 SPA 路由后重试）永远无法再认领
+    continuing = false;
   }
 }

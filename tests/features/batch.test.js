@@ -389,6 +389,7 @@ describe('onDownloadSettled 授权暂停', () => {
     expect(b.failed).toEqual([]); // 不算失败
     expect(b.stoppedAt).toBeGreaterThan(0);
     expect(b.note).toContain('重新授权');
+    expect(b.stoppedReason).toBe('REAUTH');
     expect(toast).toHaveBeenCalledOnce();
   });
 
@@ -398,5 +399,46 @@ describe('onDownloadSettled 授权暂停', () => {
     const b = await stored();
     expect(b.active).toBe(false);
     expect(b.note).toContain('选择');
+    expect(b.stoppedReason).toBe('NOHANDLE');
+  });
+});
+describe('worker 驱动失败降级', () => {
+  it('rv-batch-open 失败 → toast 提示并降级为当前页跳转', async () => {
+    mock.sendMessage.mockImplementation(async (msg) => {
+      if (msg.type === 'rv-batch-open') return { ok: false, error: 'SW 未响应' };
+      return { ok: true };
+    });
+    setPage('/v', SINGLES);
+    await batch.startBatch('single');
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining('当前页驱动'), 4000);
+    const b = await stored();
+    expect(b.active).toBe(true); // 批次照常推进
+    // NAV_DELAY 后当前页被导航（老行为兜底）
+    await vi.advanceTimersByTimeAsync(1300);
+    expect(location.pathname).toBe('/v/v1');
+  });
+
+  it('sendMessage 直接拒绝同样降级', async () => {
+    mock.sendMessage.mockImplementation(async (msg) => {
+      if (msg.type === 'rv-batch-open') throw new Error('Could not establish connection');
+      return { ok: true };
+    });
+    setPage('/v', SINGLES);
+    await batch.startBatch('single');
+    await vi.advanceTimersByTimeAsync(1300);
+    expect(location.pathname).toBe('/v/v1');
+  });
+});
+
+describe('continuing 闸门复位', () => {
+  it('认领失败（非流水线页面）后可再次认领', async () => {
+    await seedBatch({ expectedPath: '/v/v2', videoQueue: [{ id: 'v2', name: '视频2' }] });
+    setPage('/v/OTHER', null);
+    await batch.maybeContinueBatch(); // 暂停返回
+    // 导航到认领页后（模拟同页 SPA 重载内容脚本再触发）
+    setPage('/v/v2', null);
+    await seedBatch({ expectedPath: '/v/v2', current: { id: 'v2', name: '视频2' } });
+    await batch.maybeContinueBatch();
+    expect(downloadCurrent).toHaveBeenCalledOnce();
   });
 });
