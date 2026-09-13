@@ -7,16 +7,33 @@ import { TsRemux } from './ts-remux.js';
 
 import { saveViaExtension } from '../net/save.js';
 
+// 可重试的网络读取：瞬态挂起/超时重试，用户主动中止不重试
+async function withRetry(fn, tries = 3, signal) {
+  let lastErr;
+  for (let i = 0; i < tries; i++) {
+    if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
+    try {
+      return await fn();
+    } catch (e) {
+      if (e?.name === 'AbortError') throw e; // 用户取消
+      lastErr = e;
+      await new Promise((r) => setTimeout(r, 800 * (i + 1)));
+    }
+  }
+  throw lastErr || new Error('重试耗尽');
+}
+
 // Downloads every segment of one media playlist (decrypting if needed),
 // remuxes TS → MP4 when possible, and saves the result via a blob download.
-export async function downloadQuality(quality, filename, onProgress, signal, opts = {}) {
-  const text = await fetchText(quality.url, { signal });
+export async function downloadQuality(quality, filename, onProgress, signal) {
+  // 播放列表与密钥请求也走重试（一次 CDN 抖动不再导致整个下载失败）
+  const text = await withRetry(() => fetchText(quality.url, { signal }), 3, signal);
   const media = parseMediaPlaylist(text, quality.url);
   if (!media.segments.length) throw new Error('播放列表为空');
 
   let keyBytes = null;
   if (media.keyUri) {
-    keyBytes = new Uint8Array(await fetchBuffer(media.keyUri, { signal }));
+    keyBytes = new Uint8Array(await withRetry(() => fetchBuffer(media.keyUri, { signal }), 3, signal));
   }
 
   const total = media.segments.length;
