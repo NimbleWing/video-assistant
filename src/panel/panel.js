@@ -53,13 +53,13 @@ function srvInfo() {
   const off = srv === false;
   const cls = srv === null ? 'wait' : (srv ? '' : 'err');
   const txt = srv === null ? '本地库…' : (srv ? `本地库在线 · ${srv.videos}` : '本地库离线 · 点击启动');
-  const tip = srv ? '本地媒体库服务运行中（127.0.0.1:17321）' : (off ? '点击经 native messaging 启动本地服务；或手动运行 server/start.bat' : '探测中');
+  const tip = srv ? '本地媒体库运行中（127.0.0.1:17321）· 点击打开管理页' : (off ? '点击经 native messaging 启动本地服务；或手动运行 server/start.bat' : '探测中');
   return { cls, txt, tip, off };
 }
 
 function srvBadge() {
   const i = srvInfo();
-  return `<span class="srv-s"${i.off ? ' data-act="srv-start" role="button"' : ''} title="${i.tip}"><i class="dot ${i.cls}"></i>${i.txt}</span>`;
+  return `<span class="srv-s"${i.off ? ' data-act="srv-start" role="button"' : (srv ? ' data-act="srv-open" role="button"' : '')} title="${i.tip}"><i class="dot ${i.cls}"></i>${i.txt}</span>`;
 }
 
 async function pingServer() {
@@ -78,9 +78,15 @@ async function pingServer() {
   for (const el of document.querySelectorAll('.srv-s')) {
     /** @type {HTMLElement} */ (el).title = i.tip;
     if (i.off) el.setAttribute('data-act', 'srv-start');
+    else if (srv) el.setAttribute('data-act', 'srv-open');
     else el.removeAttribute('data-act');
     el.innerHTML = `<i class="dot ${i.cls}"></i>${i.txt}`;
   }
+}
+
+// 新标签页打开管理页（在线指示灯点击）
+function openSrvPage() {
+  chrome.tabs.create({ url: 'http://127.0.0.1:17321/' });
 }
 
 // native messaging 引导启动本地服务（需先运行 server/install-native.bat）
@@ -356,6 +362,7 @@ app.addEventListener('click', (ev) => {
   if (kind === 'download') cmd('download');
   else if (kind === 'download-force') cmd('download-force');
   else if (kind === 'srv-start') startSrvFromPanel();
+  else if (kind === 'srv-open') openSrvPage();
   else if (kind === 'abort') cmd('abort');
   else if (kind === 'rescan') { toast('正在解析…'); cmd('rescan'); }
   else if (kind === 'pip') cmd('pip');
