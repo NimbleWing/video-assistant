@@ -106,9 +106,11 @@
       <div class="bar" style="margin-top:10px">
         <button type="button" class="act primary" id="s-save">保存目录</button>
         <button type="button" class="act" id="s-scan">立即扫描</button>
+        <button type="button" class="act" id="s-log">查看日志</button>
         <span class="hint" id="s-warn"></span>
       </div>
       <div class="scan-result" id="s-result"></div>
+      <pre id="s-logview" class="warn-list" style="display:none;max-height:260px;overflow:auto;user-select:text"></pre>
     </fieldset>
     <p class="hint">服务运行于 127.0.0.1:17321，仅供本机使用；扩展会自动调用判定接口，服务未启动时扩展自动回退浏览器下载历史判定。</p>
   </section>
@@ -298,6 +300,15 @@ $('s-scan').addEventListener('click', async () => {
       + (r.warnings?.length ? `<div class="warn-list">${r.warnings.join('\n')}</div>` : '');
     loadVideos();
   } catch (e) { $('s-result').textContent = `扫描失败：${String(/** @type {Error} */ (e).message)}`; }
+});
+$('s-log').addEventListener('click', async () => {
+  const view = $('s-logview');
+  view.style.display = 'block';
+  view.textContent = '加载日志…';
+  try {
+    const j = await api('/api/log');
+    view.textContent = j.tail || '(空)';
+  } catch (e) { view.textContent = `读取失败：${String(/** @type {Error} */ (e).message)}`; }
 });
 
 loadVideos().catch((e) => { $('stat').textContent = `加载失败：${String(/** @type {Error} */ (e).message)}`; });

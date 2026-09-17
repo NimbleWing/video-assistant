@@ -52,6 +52,19 @@ async function handle(req, res) {
     return;
   }
 
+  if (req.method === 'GET' && pathname === '/api/log') {
+    // 本服务自身日志尾部（native 启动时重定向到 server.log）
+    try {
+      const text = await fs.readFile(path.join(ROOT, 'server.log'), 'utf8');
+      const lines = text.trimEnd().split('\n');
+      const tail = lines.slice(-200).join('\n');
+      json(res, 200, { ok: true, lines: tail ? tail.split('\n').length : 0, tail });
+    } catch {
+      json(res, 200, { ok: true, lines: 0, tail: '(暂无日志——服务可能由 start.bat 启动，日志在控制台窗口)' });
+    }
+    return;
+  }
+
   if (req.method === 'GET' && pathname === '/api/ping') {
     const s = stats();
     json(res, 200, { ok: true, uptime: Math.round(process.uptime()), videos: s.videos, covers: s.covers, downloads: s.downloads });

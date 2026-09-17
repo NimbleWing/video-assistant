@@ -1,6 +1,7 @@
 // Native messaging 引导 host：接收扩展消息，detached 启动媒体库服务后即退出。
 // 协议：4 字节小端长度前缀 + JSON（Chrome native messaging 标准）。
 import { spawn } from 'node:child_process';
+import { openSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -40,10 +41,12 @@ function sendMessage(obj) {
 
 const msg = await readMessage();
 if (msg?.cmd === 'start') {
-  // detached：独立于本 host 与扩展连接存活（sendNativeMessage 一次性，host 随即退出）
+  // detached：独立于本 host 与扩展连接存活（sendNativeMessage 一次性，host 随即退出）。
+  // stdio 重定向到 server.log（隐藏窗口无控制台，日志落盘可查）
+  const logFd = openSync(path.join(ROOT, 'server.log'), 'a');
   const child = spawn(process.execPath, ['--no-warnings', '--experimental-sqlite', path.join(ROOT, 'server.js')], {
     detached: true,
-    stdio: 'ignore',
+    stdio: ['ignore', logFd, logFd],
     cwd: ROOT,
     windowsHide: true,
   });

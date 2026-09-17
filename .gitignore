@@ -150,3 +150,4 @@ server/media.db*
 
 # Native messaging install artifact
 server/com.rouvideo.media.json
+server/server.log
