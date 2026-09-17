@@ -7,9 +7,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   db, setMeta, queryExists, listVideos, listVolumes, stats,
-  upsertFileRecorded, upsertDownload, listDownloads,
+  upsertFileRecorded, upsertDownload, listDownloads, setFileDuration,
 } from './db.js';
 import { scanAll, scanDirs } from './scanner.js';
+import { mp4Duration } from './mp4.js';
 
 const PORT = 17321;
 const HOST = '127.0.0.1';
@@ -88,11 +89,18 @@ async function handle(req, res) {
   if (req.method === 'POST' && pathname === '/api/files') {
     const body = await readJson(req);
     if (!body?.absPath) { json(res, 400, { ok: false, error: '缺少 absPath' }); return; }
+    const ext = String(body.absPath).split('.').pop() || '';
+    // 登记时解析 mp4 时长（moov 置尾/largesize 均兼容）；.ts 无全局时长头
+    let duration = body.duration != null ? Number(body.duration) || undefined : undefined;
+    if (duration == null && ext.toLowerCase() === 'mp4') {
+      const d = await mp4Duration(String(body.absPath));
+      if (d != null) duration = d;
+    }
     upsertFileRecorded({
       path: String(body.absPath),
       size: body.size != null ? Number(body.size) || 0 : 0,
       videoId: body.videoId ? String(body.videoId) : undefined,
-      duration: body.duration != null ? Number(body.duration) || undefined : undefined,
+      duration,
     });
     json(res, 200, { ok: true });
     return;
@@ -128,17 +136,24 @@ async function handle(req, res) {
   }
 
   if (req.method === 'GET' && pathname === '/api/videos') {
-    json(res, 200, {
-      ok: true,
-      ...listVideos({
-        page: Number(u.searchParams.get('page')) || 1,
-        size: Number(u.searchParams.get('size')) || 50,
-        q: u.searchParams.get('q') || undefined,
-        volume: u.searchParams.get('volume') || undefined,
-        type: u.searchParams.get('type') || undefined,
-      }),
-      volumes: listVolumes(),
+    const r = listVideos({
+      page: Number(u.searchParams.get('page')) || 1,
+      size: Number(u.searchParams.get('size')) || 50,
+      q: u.searchParams.get('q') || undefined,
+      volume: u.searchParams.get('volume') || undefined,
+      type: u.searchParams.get('type') || undefined,
     });
+    // 惰性补时长：当前页 mp4 视频无时长则解析并回写（存量渐进补齐，幂等）
+    for (const it of r.items) {
+      if (it.duration == null && it.type === 'video' && it.ext === 'mp4') {
+        const d = await mp4Duration(it.path);
+        if (d != null) {
+          it.duration = d;
+          setFileDuration(it.id, d);
+        }
+      }
+    }
+    json(res, 200, { ok: true, ...r, volumes: listVolumes() });
     return;
   }
 

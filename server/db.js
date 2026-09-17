@@ -199,6 +199,12 @@ export function stats() {
   return { videos: Number(f?.videos) || 0, covers: Number(f?.covers) || 0, downloads };
 }
 
+/** 回填时长（列表页惰性解析后缓存，避免重复解析）。 */
+/** @param {number} id @param {number} duration */
+export function setFileDuration(id, duration) {
+  db.prepare('UPDATE files SET duration = ? WHERE id = ?').run(duration, id);
+}
+
 // ---------------------------------------------------------------- downloads
 
 /**
