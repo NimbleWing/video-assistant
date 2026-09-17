@@ -8,7 +8,7 @@ interface PagerProps {
 
 export function Pager({ page, pages, total, onPrev, onNext }: PagerProps) {
   return (
-    <div className="mt-3 flex items-center gap-2 text-dim">
+    <div className="mt-4 flex items-center gap-2.5 text-[13px] text-dim">
       <button type="button" className="act" disabled={page <= 1} onClick={onPrev}>
         上一页
       </button>

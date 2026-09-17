@@ -43,16 +43,16 @@ export function PlayerDialog({ item, onClose }: Props) {
     <dialog ref={dlgRef} onClose={onClose} closedby="any">
       {item && (
         <>
-          <div className="mb-2 max-w-[86vw] text-[13px] text-dim [overflow-wrap:anywhere]">{item.path}</div>
+          <div className="mb-3 max-w-[86vw] text-[13px] text-dim [overflow-wrap:anywhere]">{item.path}</div>
           <video
             ref={videoRef}
             controls
             preload="metadata"
             width={960}
             height={540}
-            className="block max-h-[78vh] max-w-[86vw] bg-black"
+            className="block max-h-[78vh] max-w-[86vw] rounded-lg bg-black"
           />
-          <div className="mt-2.5 flex justify-end gap-2">
+          <div className="mt-3 flex justify-end gap-2.5">
             <button type="button" className="act" onClick={() => void copy()}>
               {copied ? '已复制' : '复制路径'}
             </button>

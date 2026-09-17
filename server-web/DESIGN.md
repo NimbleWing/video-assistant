@@ -10,7 +10,8 @@
 
 | 文件 | 职责 |
 |------|------|
-| `src/App.tsx` | 三标签编排、头部统计、播放弹窗状态（视频 tab 卸载重挂即刷新，替代旧版 scan 后手动 loadVideos） |
+| `src/App.tsx` | 组合 Layout 与三标签内容、头部统计、播放弹窗状态（视频 tab 卸载重挂即刷新，替代旧版 scan 后手动 loadVideos） |
+| `src/components/Layout.tsx` | 页面骨架抽象：顶栏（标题 + 补充信息 + 移动端汉堡）+ 左侧侧边栏导航（icon + 文字，可选）+ 内容区；泛型 `K extends string` 支撑标签 key 收窄 |
 | `src/api.ts` | 类型化 API 客户端（fetch 包装：`ok:false` / HTTP 错误统一抛 `Error`，带服务端 error 信息） |
 | `src/types.ts` | 接口模型（字段名对齐 `server/db.js` 的列名，如 `video_id`、`updated_at`） |
 | `src/format.ts` | 纯函数：`fmtSize` / `fmtDur` / `fmtTime` |
@@ -20,6 +21,31 @@
 | `src/components/PlayerDialog.tsx` | 原生 `<dialog>` + `closedby="any"`，`/stream/:id` 播放，关闭/换源时停流清理，复制路径 |
 | `src/components/Pager.tsx` | 共享分页条 |
 | `src/styles.css` | Tailwind `@theme` 主题色（沿用旧版暗色调色板）+ `@layer components`（act/badge/chip/table/dialog） |
+
+## 视觉规范（对齐 rou.video 站点暗色主题）
+
+从站点提取的设计令牌（`@theme`）：
+
+| 令牌 | 值 | 用途 |
+|------|----|------|
+| `bg` | `#101216` | 页面底色 |
+| `surface` | `#191c22` | 卡片/头部面板 |
+| `raised` | `#242932` | 输入框/次级按钮/分段容器 |
+| `line` | `#303640` | 描边（表格行用 55% 混合弱化） |
+| `ink` / `dim` | `#f0f1f4` / `#9aa1ac` | 主文/次要文 |
+| `brand` / `brand-hover` / `brand-soft` / `on-brand` | `#f07759` / `#ff8d75` / `#372420` / `#241009` | 主操作、选中态、悬停 tint、品牌色上文字 |
+| `art` / `art-ink` | `#18333d` / `#58c9b4` | 视频徽标（站点青绿点缀） |
+| `ok/warn/err` + `*-soft` | 亮色 + 暗底 tint | 状态徽标/chip |
+
+模式与组件：
+
+- **布局**：sticky 毛玻璃顶栏（h-14：左侧收合按钮/汉堡 → 品牌圆点 + 标题 + 头部统计）+ 左侧侧边栏（216px、视口高度固定**不可滚动**、`surface` 底、右侧描边；导航项 icon + 文字，`rounded-lg` 8px、选中 `brand-soft` tint，底部 border-t 服务信息）+ 内容区（`flex-1`）。**收合**（桌面端）：顶栏最左 36px「收合/展开侧边栏」图标按钮，216px→76px rail 模式，只留图标（label 隐藏、项居中、footer 隐藏、`title` 提示），宽度动画过渡，状态持久化 `localStorage('side-nav-collapsed')`。移动端侧边栏为 off-canvas 抽屉（顶栏左侧汉堡 + 遮罩点击关闭，`lg:` 起常驻）。
+- **卡片**：内容一律包 `.card`（`surface` + `line` 描边 + `rounded-2xl(16px)` + `0 16px 50px #15202e0c` 投影 + `p-5`）。
+- **按钮** `.act`：`raised` 圆角 9px，悬停 `brand-soft + brand-hover` 文字；`.act-primary`：`brand` 底 + `on-brand` 文字。
+- **表格**：表头 `dim` 12px；行分隔线 55% 弱化，行悬停 `raised` 45% 混合；末行无底线；容器 `overflow-x-auto`。
+- **徽标/chip**：暗底 tint + 亮色文字（7-8px 圆角）；chip 选中 `brand-soft + brand-hover`。
+- **输入**：`raised` 底透明边，聚焦描边 `brand`；空态用虚线框（`border-dashed`）。
+- 字体栈含 `Noto Sans TC / PingFang TC / Microsoft JhengHei`。
 
 ## 构建与开发
 

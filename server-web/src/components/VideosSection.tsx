@@ -56,8 +56,8 @@ export function VideosSection({ onStat, onPlay }: Props) {
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
-    <section>
-      <div className="mb-3 flex flex-wrap items-center gap-2">
+    <section className="card p-5">
+      <div className="mb-4 flex flex-wrap items-center gap-2.5">
         <input
           type="search"
           value={qInput}
@@ -93,47 +93,51 @@ export function VideosSection({ onStat, onPlay }: Props) {
         </select>
       </div>
       {error ? (
-        <div className="py-8 text-center text-dim">加载失败：{error}</div>
+        <div className="rounded-xl border border-dashed border-line py-14 text-center text-dim">加载失败：{error}</div>
       ) : items.length === 0 ? (
-        <div className="py-8 text-center text-dim">没有匹配的条目（先在设置页配置目录并扫描）</div>
+        <div className="rounded-xl border border-dashed border-line py-14 text-center text-dim">
+          没有匹配的条目（先在设置页配置目录并扫描）
+        </div>
       ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>名称</th>
-              <th>盘</th>
-              <th>大小</th>
-              <th>时长</th>
-              <th>修改时间</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((it) => (
-              <tr key={it.id}>
-                <td className="max-w-[460px] [overflow-wrap:anywhere]">
-                  {it.type === 'video' && (
-                    <button
-                      type="button"
-                      className="act mr-1.5"
-                      onClick={() => onPlay({ id: it.id, path: it.path })}
-                    >
-                      播放
-                    </button>
-                  )}
-                  <span className={`badge badge-${it.type}`}>
-                    {it.type === 'video' ? it.ext.toUpperCase() : '封面'}
-                  </span>{' '}
-                  {it.stem}
-                  <div className="path text-xs text-dim">{it.path}</div>
-                </td>
-                <td>{it.volume}</td>
-                <td>{fmtSize(it.size)}</td>
-                <td>{fmtDur(it.duration)}</td>
-                <td>{fmtTime(it.mtime)}</td>
+        <div className="overflow-x-auto">
+          <table>
+            <thead>
+              <tr>
+                <th>名称</th>
+                <th>盘</th>
+                <th>大小</th>
+                <th>时长</th>
+                <th>修改时间</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {items.map((it) => (
+                <tr key={it.id}>
+                  <td className="max-w-[460px] [overflow-wrap:anywhere]">
+                    {it.type === 'video' && (
+                      <button
+                        type="button"
+                        className="act mr-2"
+                        onClick={() => onPlay({ id: it.id, path: it.path })}
+                      >
+                        播放
+                      </button>
+                    )}
+                    <span className={`badge badge-${it.type}`}>
+                      {it.type === 'video' ? it.ext.toUpperCase() : '封面'}
+                    </span>{' '}
+                    {it.stem}
+                    <div className="path mt-1 text-xs text-dim">{it.path}</div>
+                  </td>
+                  <td>{it.volume}</td>
+                  <td>{fmtSize(it.size)}</td>
+                  <td>{fmtDur(it.duration)}</td>
+                  <td>{fmtTime(it.mtime)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
       <Pager
         page={page}

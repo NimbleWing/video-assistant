@@ -63,37 +63,33 @@ export function SettingsSection() {
   }
 
   return (
-    <section>
-      <fieldset className="mb-4 rounded-lg border border-line">
-        <legend className="px-1.5 text-xs text-dim">扫描目录（每行一个绝对路径）</legend>
-        <div className="px-3 pt-1 pb-3">
-          <textarea
-            value={dirs}
-            onChange={(e) => setDirs(e.target.value)}
-            spellCheck={false}
-            placeholder={'D:\\Videos\nE:\\收藏'}
-          />
-          <div className="mt-2.5 flex flex-wrap items-center gap-2">
-            <button type="button" className="act act-primary" onClick={() => void save()}>
-              保存目录
-            </button>
-            <button type="button" className="act" disabled={scanning} onClick={() => void scan()}>
-              立即扫描
-            </button>
-            <button type="button" className="act" onClick={() => void viewLog()}>
-              查看日志
-            </button>
-            <span className="text-xs text-dim">{warn}</span>
-          </div>
-          <div className="mt-2.5 text-[13px]">{scanResult}</div>
-          {log != null && (
-            <pre className="mt-1.5 max-h-[260px] overflow-auto whitespace-pre-line text-xs text-warn select-text">
-              {log}
-            </pre>
-          )}
-        </div>
-      </fieldset>
-      <p className="my-2 text-xs text-dim">
+    <section className="card p-5">
+      <div className="mb-2 text-xs font-medium text-dim">扫描目录（每行一个绝对路径）</div>
+      <textarea
+        value={dirs}
+        onChange={(e) => setDirs(e.target.value)}
+        spellCheck={false}
+        placeholder={'D:\\Videos\nE:\\收藏'}
+      />
+      <div className="mt-3 flex flex-wrap items-center gap-2.5">
+        <button type="button" className="act act-primary" onClick={() => void save()}>
+          保存目录
+        </button>
+        <button type="button" className="act" disabled={scanning} onClick={() => void scan()}>
+          立即扫描
+        </button>
+        <button type="button" className="act" onClick={() => void viewLog()}>
+          查看日志
+        </button>
+        <span className="text-xs text-dim">{warn}</span>
+      </div>
+      <div className="mt-3 text-[13px]">{scanResult}</div>
+      {log != null && (
+        <pre className="mt-2 max-h-[260px] overflow-auto whitespace-pre-line rounded-lg bg-raised p-3 text-xs text-warn select-text">
+          {log}
+        </pre>
+      )}
+      <p className="mt-4 text-xs text-dim">
         服务运行于 127.0.0.1:17321，仅供本机使用；扩展会自动调用判定接口，服务未启动时扩展自动回退浏览器下载历史判定。
       </p>
     </section>

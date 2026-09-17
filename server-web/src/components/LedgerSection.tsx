@@ -32,8 +32,8 @@ export function LedgerSection() {
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
-    <section>
-      <div className="mb-3 flex flex-wrap gap-1.5">
+    <section className="card p-5">
+      <div className="mb-4 flex flex-wrap gap-1.5">
         {(['', ...STATUSES] as Status[]).map((s) => (
           <button
             key={s || 'all'}
@@ -50,47 +50,49 @@ export function LedgerSection() {
           </button>
         ))}
       </div>
-      <p className="my-2 text-xs text-dim">失败项重试由扩展侧面板发起（「重试历史失败」），本页仅展示。</p>
+      <p className="mb-3 text-xs text-dim">失败项重试由扩展侧面板发起（「重试历史失败」），本页仅展示。</p>
       {items.length === 0 ? (
-        <div className="py-8 text-center text-dim">没有记录</div>
+        <div className="rounded-xl border border-dashed border-line py-14 text-center text-dim">没有记录</div>
       ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>视频</th>
-              <th>状态</th>
-              <th>清晰度</th>
-              <th>尝试</th>
-              <th>大小 / 错误</th>
-              <th>更新</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((it) => (
-              <tr key={it.id}>
-                <td className="max-w-[460px] [overflow-wrap:anywhere]">
-                  {it.series_name ? (
-                    <>
-                      <b>{it.series_name}</b> /{' '}
-                    </>
-                  ) : null}
-                  <span>{it.name}</span>
-                  <div className="path text-xs text-dim">
-                    {it.site} {it.page_path}
-                    {it.filename ? ` → ${it.filename}` : ''}
-                  </div>
-                </td>
-                <td>
-                  <span className={`badge badge-${it.status}`}>{it.status}</span>
-                </td>
-                <td>{it.quality || '-'}</td>
-                <td>{it.attempts}</td>
-                <td>{it.error ? <span className="text-err">{it.error}</span> : fmtSize(it.size)}</td>
-                <td>{fmtTime(it.updated_at)}</td>
+        <div className="overflow-x-auto">
+          <table>
+            <thead>
+              <tr>
+                <th>视频</th>
+                <th>状态</th>
+                <th>清晰度</th>
+                <th>尝试</th>
+                <th>大小 / 错误</th>
+                <th>更新</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {items.map((it) => (
+                <tr key={it.id}>
+                  <td className="max-w-[460px] [overflow-wrap:anywhere]">
+                    {it.series_name ? (
+                      <>
+                        <b>{it.series_name}</b> /{' '}
+                      </>
+                    ) : null}
+                    <span>{it.name}</span>
+                    <div className="path mt-1 text-xs text-dim">
+                      {it.site} {it.page_path}
+                      {it.filename ? ` → ${it.filename}` : ''}
+                    </div>
+                  </td>
+                  <td>
+                    <span className={`badge badge-${it.status}`}>{it.status}</span>
+                  </td>
+                  <td>{it.quality || '-'}</td>
+                  <td>{it.attempts}</td>
+                  <td>{it.error ? <span className="text-err">{it.error}</span> : fmtSize(it.size)}</td>
+                  <td>{fmtTime(it.updated_at)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
       <Pager
         page={page}
