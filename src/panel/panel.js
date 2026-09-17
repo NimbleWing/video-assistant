@@ -50,15 +50,16 @@ let limitVal = '';
 let srv = null;
 
 function srvInfo() {
+  const off = srv === false;
   const cls = srv === null ? 'wait' : (srv ? '' : 'err');
-  const txt = srv === null ? '本地库…' : (srv ? `本地库在线 · ${srv.videos}` : '本地库离线');
-  const tip = srv ? '本地媒体库服务运行中（127.0.0.1:17321）' : '未启动 server/start.bat——去重判定回退浏览器下载历史';
-  return { cls, txt, tip };
+  const txt = srv === null ? '本地库…' : (srv ? `本地库在线 · ${srv.videos}` : '本地库离线 · 点击启动');
+  const tip = srv ? '本地媒体库服务运行中（127.0.0.1:17321）' : (off ? '点击经 native messaging 启动本地服务；或手动运行 server/start.bat' : '探测中');
+  return { cls, txt, tip, off };
 }
 
 function srvBadge() {
   const i = srvInfo();
-  return `<span class="srv-s" title="${i.tip}"><i class="dot ${i.cls}"></i>${i.txt}</span>`;
+  return `<span class="srv-s"${i.off ? ' data-act="srv-start" role="button"' : ''} title="${i.tip}"><i class="dot ${i.cls}"></i>${i.txt}</span>`;
 }
 
 async function pingServer() {
@@ -76,7 +77,26 @@ async function pingServer() {
   const i = srvInfo();
   for (const el of document.querySelectorAll('.srv-s')) {
     /** @type {HTMLElement} */ (el).title = i.tip;
+    if (i.off) el.setAttribute('data-act', 'srv-start');
+    else el.removeAttribute('data-act');
     el.innerHTML = `<i class="dot ${i.cls}"></i>${i.txt}`;
+  }
+}
+
+// native messaging 引导启动本地服务（需先运行 server/install-native.bat）
+async function startSrvFromPanel() {
+  toast('正在启动本地服务…', 5000);
+  try {
+    const r = await chrome.runtime.sendNativeMessage('com.rouvideo.media', { cmd: 'start' });
+    if (!r?.ok) throw new Error(r?.error || 'native host 无应答');
+    for (let i = 0; i < 10; i++) {
+      await new Promise((res) => setTimeout(res, 1000));
+      await pingServer();
+      if (srv) { toast('本地库服务已启动'); return; }
+    }
+    throw new Error('服务未在 10 秒内上线');
+  } catch (e) {
+    toast(`启动失败：${String(/** @type {Error} */ (e).message)}（可手动运行 server/start.bat）`, 6000);
   }
 }
 
@@ -335,6 +355,7 @@ app.addEventListener('click', (ev) => {
   const bkind = (/** @type {HTMLElement} */ (act)).dataset.bact;
   if (kind === 'download') cmd('download');
   else if (kind === 'download-force') cmd('download-force');
+  else if (kind === 'srv-start') startSrvFromPanel();
   else if (kind === 'abort') cmd('abort');
   else if (kind === 'rescan') { toast('正在解析…'); cmd('rescan'); }
   else if (kind === 'pip') cmd('pip');

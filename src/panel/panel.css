@@ -95,6 +95,10 @@ body {
   cursor: help;
 }
 
+.srv-s[data-act] {
+  cursor: pointer;
+}
+
 .dl {
   position: relative;
   width: 100%;

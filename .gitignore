@@ -147,3 +147,6 @@ vite.config.ts.timestamp-*
 
 # Local media server runtime data
 server/media.db*
+
+# Native messaging install artifact
+server/com.rouvideo.media.json

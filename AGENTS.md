@@ -38,7 +38,7 @@ npm run check   # lint + typecheck + test（提交前必跑，覆盖率棘轮只
 npm run coverage
 ```
 
-本地媒体库服务：双击 `server/start.bat`（手动启动，不注册自启；不启动时扩展自动回退下载历史判定，仅影响判定精度）。
+本地媒体库服务：双击 `server/start.bat` 启动，或面板离线指示灯一键启动（native messaging 引导，需先运行 `server/install-native.bat` 注册；host 以 detached 方式拉起服务，不随连接退出）。不注册开机自启；服务未启动时扩展自动回退下载历史判定，仅影响判定精度。
 
 ## 编码约定
 

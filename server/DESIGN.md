@@ -42,7 +42,9 @@
 
 - **零 npm 依赖**：Node 22+ 内置 `node:sqlite` + `node:http`，单目录脚本。
 - 监听 `127.0.0.1:17321`。
-- **手动启动**：`server/start.bat`（不注册开机自启）。
+- **启动方式**（二选一）：
+  - 手动：`server/start.bat`
+  - 面板一键：离线指示灯点击 → `chrome.runtime.sendNativeMessage('com.rouvideo.media', {cmd:'start'})` → native host（`native-host.js`，经 `native-host.cmd` 包装）以 detached 方式 spawn server.js 后即退出，服务独立存活；面板轮询 ping 确认上线。需先运行 `server/install-native.bat` 注册（HKCU 注册表 + host manifest，`allowed_origins` 锁扩展 ID；卸载用 `uninstall-native.bat`）。依赖 node 在 PATH。
 - 数据库文件 `server/media.db`，脚本目录下。
 
 ## 4. 数据库设计（三张表）

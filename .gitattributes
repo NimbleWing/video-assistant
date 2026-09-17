@@ -1,1 +1,4 @@
-* text=auto eol=lf
+# Windows 脚本必须 CRLF：LF 会导致 cmd 解析错乱（if 块逐行乱执行）
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
