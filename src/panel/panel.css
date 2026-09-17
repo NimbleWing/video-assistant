@@ -87,6 +87,14 @@ body {
   box-shadow: 0 0 0 3px rgba(255, 93, 93, .16);
 }
 
+/* 本地媒体库心跳指示：绿=服务在线 · 黄=探测中 · 红=离线（判定回退下载历史） */
+.srv-s {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: help;
+}
+
 .dl {
   position: relative;
   width: 100%;

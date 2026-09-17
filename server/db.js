@@ -186,6 +186,19 @@ export function listVolumes() {
   ).all());
 }
 
+/** 库存统计（心跳端点用）。 @returns {{ videos: number, covers: number, downloads: Record<string, number> }} */
+export function stats() {
+  const f = /** @type {any} */ (db.prepare(
+    "SELECT SUM(type = 'video') AS videos, SUM(type = 'cover') AS covers FROM files"
+  ).get());
+  /** @type {Record<string, number>} */
+  const downloads = {};
+  for (const row of /** @type {any[]} */ (db.prepare('SELECT status, COUNT(*) AS n FROM downloads GROUP BY status').all())) {
+    downloads[row.status] = Number(row.n) || 0;
+  }
+  return { videos: Number(f?.videos) || 0, covers: Number(f?.covers) || 0, downloads };
+}
+
 // ---------------------------------------------------------------- downloads
 
 /**

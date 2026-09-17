@@ -116,6 +116,7 @@ CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
 | 接口 | 方向 | 说明 |
 |------|------|------|
+| `GET /api/ping` | 扩展面板 | 心跳：`{ok, uptime, videos, covers, downloads:{status:count}}`；面板打开期间 30s 轮询，显示在线/离线与库存数 |
 | `GET /api/exists?rel=剧名/xx.mp4` | 扩展 | 路径后缀优先、stem 回退；返回 `{exists, matches:[{path,type,size}]}`；仅 `type='video'` 计为已下载 |
 | `POST /api/downloads` | 扩展 | 账本 upsert（一行一视频）：开始（downloading）/最终失败（failed+error）/取消/跳过/完成（complete，带 size/duration） |
 | `POST /api/files` | 扩展 | 落盘成功后登记物理文件（`{absPath, size}`，封面与视频统一经此入库，`source='recorded'`）；与账本分离、无竞态 |

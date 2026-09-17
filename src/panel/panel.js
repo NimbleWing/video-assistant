@@ -43,6 +43,43 @@ let modeSel = null;   // null = 跟随检测结果
 let scopeSel = 'page';
 let limitVal = '';
 
+// ------------------------------------------------------------------ 本地库心跳
+// 面板页面享有 host_permissions 豁免，可直连本地服务（内容脚本才需 SW 中转）。
+// null = 探测中；{videos} = 在线；false = 离线。
+/** @type {null | false | { videos: number }} */
+let srv = null;
+
+function srvInfo() {
+  const cls = srv === null ? 'wait' : (srv ? '' : 'err');
+  const txt = srv === null ? '本地库…' : (srv ? `本地库在线 · ${srv.videos}` : '本地库离线');
+  const tip = srv ? '本地媒体库服务运行中（127.0.0.1:17321）' : '未启动 server/start.bat——去重判定回退浏览器下载历史';
+  return { cls, txt, tip };
+}
+
+function srvBadge() {
+  const i = srvInfo();
+  return `<span class="srv-s" title="${i.tip}"><i class="dot ${i.cls}"></i>${i.txt}</span>`;
+}
+
+async function pingServer() {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 1500);
+    const r = await fetch('http://127.0.0.1:17321/api/ping', { signal: ctrl.signal });
+    clearTimeout(timer);
+    const j = await r.json();
+    srv = j?.ok ? { videos: Number(j.videos) || 0 } : false;
+  } catch {
+    srv = false;
+  }
+  // 轮询结果只更新指示灯本身，避免整页重渲打断交互
+  const i = srvInfo();
+  for (const el of document.querySelectorAll('.srv-s')) {
+    /** @type {HTMLElement} */ (el).title = i.tip;
+    el.innerHTML = `<i class="dot ${i.cls}"></i>${i.txt}`;
+  }
+}
+
 /**
  * @param {string} msg
  * @param {number} [ms]
@@ -195,7 +232,7 @@ function render() {
       <div class="head">
         <div class="who">
           <div class="title">肉视频助手 <span class="ver">v${EXT_VERSION}</span></div>
-          <div class="meta"><i class="dot wait"></i><span>未在视频页</span></div>
+          <div class="meta"><i class="dot wait"></i><span>未在视频页</span>${srvBadge()}</div>
         </div>
       </div>
       <div class="empty">在 rou.video 的页面打开本侧边栏即可使用。<br><br>视频播放页可直接下载；列表根页（剧集库 / 视频库 / 首页 / 搜索页）可连续下载。<br><br>文件保存到浏览器下载目录（可在 Chrome 设置中更改位置）。快捷键 <kbd>Alt</kbd>+<kbd>D</kbd></div>`;
@@ -208,7 +245,7 @@ function render() {
       <div class="head">
         <div class="who">
           <div class="title">肉视频助手 <span class="ver">v${EXT_VERSION}</span></div>
-          <div class="meta"><i class="dot ${snap.listing ? '' : 'wait'}"></i><span>${snap.listing ? '列表页已就绪' : '打开视频页后可单独下载'}</span></div>
+          <div class="meta"><i class="dot ${snap.listing ? '' : 'wait'}"></i><span>${snap.listing ? '列表页已就绪' : '打开视频页后可单独下载'}</span>${srvBadge()}</div>
         </div>
       </div>
       ${batchHtml()}`;
@@ -234,7 +271,7 @@ function render() {
     <div class="head">
       <div class="who">
         <div class="title">${escapeHtml(title)}</div>
-        <div class="meta"><i class="dot ${st.dot}"></i><span>${st.text}</span>${dur ? `<span>·</span><span>${formatDuration(dur)}</span>` : ''}${segInfo}<span>·</span><span class="ver">v${EXT_VERSION}</span></div>
+        <div class="meta"><i class="dot ${st.dot}"></i><span>${st.text}</span>${dur ? `<span>·</span><span>${formatDuration(dur)}</span>` : ''}${segInfo}<span>·</span>${srvBadge()}<span>·</span><span class="ver">v${EXT_VERSION}</span></div>
       </div>
     </div>
     <button class="dl" data-act="${d?.running ? 'abort' : 'download'}" ${!d?.running && !stream && snap.booting ? 'disabled' : ''}>
@@ -383,6 +420,9 @@ async function init() {
   currentTabId = tab?.id ?? null;
   await pullBatch();
   await pull();
+  // 本地库心跳：打开期间 30s 轮询（面板关闭即停，无后台占用）
+  pingServer();
+  setInterval(pingServer, 30 * 1000);
 }
 
 init();

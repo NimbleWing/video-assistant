@@ -6,7 +6,7 @@ import { createReadStream, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  db, setMeta, queryExists, listVideos, listVolumes,
+  db, setMeta, queryExists, listVideos, listVolumes, stats,
   upsertFileRecorded, upsertDownload, listDownloads,
 } from './db.js';
 import { scanAll, scanDirs } from './scanner.js';
@@ -48,6 +48,12 @@ async function handle(req, res) {
     const html = await fs.readFile(path.join(ROOT, 'public', 'index.html'), 'utf8');
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(html);
+    return;
+  }
+
+  if (req.method === 'GET' && pathname === '/api/ping') {
+    const s = stats();
+    json(res, 200, { ok: true, uptime: Math.round(process.uptime()), videos: s.videos, covers: s.covers, downloads: s.downloads });
     return;
   }
 

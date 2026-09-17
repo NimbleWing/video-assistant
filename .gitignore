@@ -144,3 +144,6 @@ vite.config.ts.timestamp-*
 
 # Extension packaging
 *.zip
+
+# Local media server runtime data
+server/media.db*

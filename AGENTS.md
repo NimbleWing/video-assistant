@@ -19,7 +19,7 @@ rou.video 的 Chrome MV3 扩展（由油猴脚本移植）：播放页解析 HLS
 | Offscreen | `src/offscreen.js` → `src/net/save-session.js` | 保存会话编排：模式判定（mp4/透传 ts）→ OPFS 流式写 `.part` → moov 置尾 → rename → objectURL 交 SW downloads |
 | 侧边栏 | `src/panel/` | 纯遥控器 UI，不持有业务状态 |
 | 下载核心 | `src/hls/`（playlist/downloader/ts-remux）、`src/net/`（http/save/fswriter/rou-png/ledger）、`src/features/`（boost/batch） | 纯逻辑，测试覆盖集中于此 |
-| 本地媒体库 | `server/`（server.js/db.js/scanner.js/public/） | Node 22+ 零依赖服务（`node:sqlite`，需 `--experimental-sqlite`），`127.0.0.1:17321`：磁盘扫描入 SQLite（files/downloads/meta 三表）、去重判定 `/api/exists`、下载账本 `/api/downloads`、落盘登记 `/api/files`、Range 流播放、管理页；设计文档 `server/DESIGN.md` |
+| 本地媒体库 | `server/`（server.js/db.js/scanner.js/public/） | Node 22+ 零依赖服务（`node:sqlite`，需 `--experimental-sqlite`），`127.0.0.1:17321`：磁盘扫描入 SQLite（files/downloads/meta 三表）、去重判定 `/api/exists`、下载账本 `/api/downloads`、落盘登记 `/api/files`、心跳 `/api/ping`（面板 30s 轮询显示服务状态）、Range 流播放、管理页；设计文档 `server/DESIGN.md` |
 
 **保存链路（无自定义目录功能，已整体移除——Chrome 对扩展的 FS Access 授权过于短命，缠斗无益）**：
 - 页面侧：分段下载+解密（保持页面 Origin/Referer，CDN 要求）→ 按序 16MB base64 分块直传 offscreen（SW 不在数据路径上，仅 begin 经 SW 确保 offscreen）。
