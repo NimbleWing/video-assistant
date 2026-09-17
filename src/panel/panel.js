@@ -98,6 +98,12 @@ function statusLabel(s) {
 
 // ------------------------------------------------------------------ 连续下载
 
+// 失败项名 → 可点击跳转对应播放页
+/** @param {import('../features/batch.js').BatchFailedItem} f */
+function failedLink(f) {
+  return `<a class="flink" href="https://rou.video/v/${encodeURIComponent(f.id)}" target="_blank" rel="noopener">${escapeHtml(f.name)}</a>`;
+}
+
 // 历史批次报告：暂停原因（note）+ 失败明细 + 重试/继续/清除
 function reportHtml() {
   const b = batchState;
@@ -105,15 +111,16 @@ function reportHtml() {
   const failedN = b.failed?.length || 0;
   const remaining = (b.videoQueue?.length || 0) + (b.seriesQueue?.length || 0) + (b.listingPages?.length || 0);
   if (!b.finishedAt && !b.stoppedAt) return '';
+  const skippedN = b.skipped || 0;
   const head = b.finishedAt
-    ? `上次完成：成功 ${b.done} · 失败 ${failedN}`
-    : `已暂停：成功 ${b.done} · 失败 ${failedN} · 剩余 ${remaining}`;
+    ? `上次完成：新下 ${b.done - skippedN} · 跳过 ${skippedN} · 失败 ${failedN}`
+    : `已暂停：新下 ${b.done - skippedN} · 跳过 ${skippedN} · 失败 ${failedN} · 剩余 ${remaining}`;
   // 暂停原因必须可见（否则表现为"没反应"）
   const noteLine = (b.stoppedAt && b.note && b.note !== '已停止（可继续或重试失败项）')
     ? `<div class="batch-s" style="color:var(--warn,#e6a23c)">${escapeHtml(b.note)}</div>`
     : '';
   const failedList = failedN
-    ? `<div class="batch-failed">${b.failed.slice(0, 8).map((f) => `<div title="${escapeHtml(f.error || '')}">${escapeHtml((f.name || '').slice(0, 26))} — ${escapeHtml((f.error || '').slice(0, 34))}</div>`).join('')}${failedN > 8 ? `<div>…共 ${failedN} 项</div>` : ''}</div>`
+    ? `<div class="batch-failed">${b.failed.slice(0, 8).map((f) => `<div title="${escapeHtml(f.error || '')}">${failedLink(f)} — ${escapeHtml((f.error || '').slice(0, 34))}</div>`).join('')}${failedN > 8 ? `<div>…共 ${failedN} 项</div>` : ''}</div>`
     : '';
   const btns = [];
   if (failedN) btns.push(`<button class="ghost mini" data-bact="retry">重试失败 (${failedN})</button>`);
@@ -121,6 +128,9 @@ function reportHtml() {
   btns.push('<button class="ghost mini" data-bact="clear">清除记录</button>');
   return `<div class="batch-report"><div class="batch-s">${head}</div>${noteLine}${failedList}<div class="batch-btns">${btns.join('')}</div></div>`;
 }
+
+// 本地媒体库账本失败项重试（跨会话持久，与批次记录无关）
+const ledgerRetryBtn = '<button class="ghost mini" data-bact="retry-ledger" style="margin-top:6px">重试历史失败（本地库账本）</button>';
 
 function batchHtml() {
   const b = batchState;
@@ -137,12 +147,12 @@ function batchHtml() {
         </div>
         <div class="batch-s">${escapeHtml(b.note || '')}</div>
         ${stale ? `<div class="batch-s" style="color:var(--warn,#e6a23c)">长时间无推进——可点"恢复后台下载"重开工作标签页</div>` : ''}
-        <div class="batch-stats"><span>已完成 ${b.done}</span><span>失败 ${b.failed?.length || 0}</span><span>待处理 ${pending}</span></div>
-        ${b.failed?.length ? `<div class="batch-failed">跳过：${b.failed.map((f) => escapeHtml(f.name)).join('、')}</div>` : ''}
+        <div class="batch-stats"><span>新下 ${b.done - (b.skipped || 0)}</span><span>跳过 ${b.skipped || 0}</span><span>失败 ${b.failed?.length || 0}</span><span>待处理 ${pending}</span></div>
         <div class="batch-btns">
           <button class="ghost mini" data-bact="spawn">恢复后台下载</button>
           <button class="ghost mini" data-bact="stop">停止连续下载</button>
         </div>
+        ${b.failed?.length ? `<div class="batch-failed">${b.failed.map((f) => `<div title="${escapeHtml(f.error || '')}">${failedLink(f)} — ${escapeHtml((f.error || '').slice(0, 34))}</div>`).join('')}</div>` : ''}
       </div>`;
   }
 
@@ -153,6 +163,7 @@ function batchHtml() {
         <div class="batch-k">连续下载</div>
         <div class="batch-s">到列表根页（剧集库 / 视频库 / 首页 / 搜索页）可批量收割并连续下载。</div>
         ${reportHtml()}
+        ${ledgerRetryBtn}
       </div>`;
   }
 
@@ -172,6 +183,7 @@ function batchHtml() {
       <input class="batch-lim" id="batchLimit" type="number" min="1" step="1" placeholder="项数上限（默认不限）" value="${escapeHtml(limitVal)}">
       <button class="dl batch-start" data-bact="start" ${!kind ? 'disabled' : ''}>${ICONS.down}<span>开始连续下载</span></button>
       ${reportHtml()}
+      ${ledgerRetryBtn}
     </div>`;
 }
 
@@ -242,6 +254,7 @@ function render() {
     </div>` : ''}
     ${d?.running ? `<div class="stats"><span>${d.done}/${d.total} · ${formatBytes(d.bytes || 0)}</span><span>${formatBytes(d.speed || 0)}/s · ${formatEta(d.eta || 0)}</span></div>` : ''}
     ${d?.finished && !d.running ? `<div class="ok">${d.skipped ? '本地已存在，已跳过下载' : '已保存到浏览器下载目录'}</div>` : ''}
+    ${d?.finished && !d.running && d.skipped ? '<button class="ghost" data-act="download-force" style="width:100%;margin-top:6px">仍然下载（忽略本地已存在判定）</button>' : ''}
     ${!stream && !snap.booting ? '<button class="ghost" data-act="rescan" style="width:100%;margin-top:8px">重新解析</button>' : ''}
     <div class="boost">
       <div class="boost-top">
@@ -284,6 +297,7 @@ app.addEventListener('click', (ev) => {
   const kind = (/** @type {HTMLElement} */ (act)).dataset.act;
   const bkind = (/** @type {HTMLElement} */ (act)).dataset.bact;
   if (kind === 'download') cmd('download');
+  else if (kind === 'download-force') cmd('download-force');
   else if (kind === 'abort') cmd('abort');
   else if (kind === 'rescan') { toast('正在解析…'); cmd('rescan'); }
   else if (kind === 'pip') cmd('pip');
@@ -323,6 +337,9 @@ app.addEventListener('click', (ev) => {
   } else if (bkind === 'retry') {
     toast('开始重试失败项…');
     cmd('batch-retry');
+  } else if (bkind === 'retry-ledger') {
+    toast('查询本地库失败项…');
+    cmd('batch-retry-ledger');
   } else if (bkind === 'resume') {
     toast('继续剩余项…');
     cmd('batch-resume');

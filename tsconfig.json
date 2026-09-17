@@ -12,5 +12,5 @@
     "forceConsistentCasingInFileNames": true,
     "types": ["chrome", "node"]
   },
-  "include": ["src/**/*.js", "tests/**/*.js", "tests/**/*.d.ts"]
+  "include": ["src/**/*.js", "tests/**/*.js", "tests/**/*.d.ts", "server/**/*.js"]
 }

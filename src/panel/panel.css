@@ -394,9 +394,15 @@ kbd {
   margin-top: 8px;
   font-size: 11px;
   color: #ffb0b0;
-  line-height: 1.5;
-  max-height: 60px;
-  overflow: auto;
+  line-height: 1.6;
+  word-break: break-all;
+}
+
+/* 失败项链接：跳转对应播放页（新标签页） */
+.batch-failed a.flink {
+  color: #ffc9c9;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
 }
 
 .batch-report {

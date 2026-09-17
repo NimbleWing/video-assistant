@@ -120,6 +120,28 @@ describe('detectListing', () => {
     expect(d).toMatchObject({ kind: 'series', itemCount: 2, fallback: true });
   });
 
+  it('DOM 兜底：翻页链接解析出 totalPage（站点无 __NEXT_DATA__）', () => {
+    setPage('/series', null);
+    document.body.innerHTML = `
+      <a href="/s/a"><h3>剧集A</h3></a><a href="/s/b"><h3>剧集B</h3></a>
+      <nav><a href="/series?page=1">1</a><a href="/series?page=2">2</a><a href="/series?page=3">3</a><a href="/series?page=24">24</a></nav>`;
+    expect(batch.detectListing()).toMatchObject({ kind: 'series', itemCount: 2, totalPage: 24, pageNum: 1, fallback: true });
+  });
+
+  it('DOM 兜底：URL 页码即 pageNum，且不低于链接最大页', () => {
+    setPage('/series?page=2', null);
+    document.body.innerHTML = '<a href="/s/a">A</a><a href="/series?page=3">3</a>';
+    expect(batch.detectListing()).toMatchObject({ pageNum: 2, totalPage: 3 });
+  });
+
+  it('DOM 兜底：卡片 h3 标题进入条目名', async () => {
+    setPage('/series', null);
+    document.body.innerHTML = '<a href="/s/a"><h3>剧集A</h3></a>';
+    await batch.startBatch('series');
+    const b = await stored();
+    expect(b.note).toBe('读取剧集：剧集A');
+  });
+
   it('同一路径命中缓存（返回同一对象）', () => {
     setPage('/series', SERIES_LIST);
     expect(batch.detectListing()).toBe(batch.detectListing());
@@ -162,6 +184,18 @@ describe('startBatch', () => {
     expect(b.listingPages).toEqual(['/v?page=2', '/v?page=3']);
   });
 
+  it('全部页：DOM 兜底页同样可排后续翻页', async () => {
+    setPage('/series', null);
+    document.body.innerHTML = `
+      <a href="/s/a"><h3>剧集A</h3></a>
+      <nav><a href="/series?page=1">1</a><a href="/series?page=2">2</a><a href="/series?page=24">24</a></nav>`;
+    await batch.startBatch('series', { allPages: true });
+    const b = await stored();
+    expect(b.listingPages).toHaveLength(23); // 2..24
+    expect(b.listingPages[0]).toBe('/series?page=2');
+    expect(b.listingPages.at(-1)).toBe('/series?page=24');
+  });
+
   it('非列表页抛错', async () => {
     setPage('/v/abc123', null);
     await expect(batch.startBatch('single')).rejects.toThrow('当前页面不是列表页');
@@ -181,8 +215,23 @@ describe('onDownloadSettled', () => {
     expect(handled).toBe(true);
     const b = await stored();
     expect(b.done).toBe(1);
+    expect(b.skipped).toBeUndefined();
     expect(b.current.id).toBe('v2');
     expect(b.expectedPath).toBe('/v/v2');
+  });
+
+  it('跳过（本地已存在）：done 与 skipped 同步递增，完成文案区分', async () => {
+    await seedBatch({ current: { id: 'v1', name: '视频1' }, videoQueue: [{ id: 'v2', name: '视频2' }] });
+    await batch.onDownloadSettled({ ok: true, skipped: true });
+    let b = await stored();
+    expect(b.done).toBe(1);
+    expect(b.skipped).toBe(1);
+    await batch.onDownloadSettled({ ok: true, skipped: true });
+    b = await stored();
+    expect(b.done).toBe(2);
+    expect(b.skipped).toBe(2);
+    expect(b.active).toBe(false); // 队列耗尽 → 完成
+    expect(toast).toHaveBeenCalledWith('连续下载完成：新下 0 · 跳过 2 · 失败 0');
   });
 
   it('失败：记录原因并跳过；末项失败则批次完成', async () => {
@@ -282,6 +331,19 @@ describe('maybeContinueBatch（认领制）', () => {
     expect(b.videoQueue.map((/** @type {any} */ v) => v.id)).toEqual(['e2']);
     expect(b.total).toBe(2);
     expect(b.note).toBe('下载中：第1集'); // advance 覆盖了收割注记
+  });
+
+  it('汇总页 DOM 兜底：h1 剧名 + 集数按钮文本拼集名', async () => {
+    await seedBatch({ mode: 'series', expectedPath: '/s/s1', seriesQueue: [] });
+    setPage('/s/s1', null);
+    document.body.innerHTML = `<h1>剧集A</h1>
+      <a href="/v/e1">從第 1 集開始</a><a href="/v/e2">第 2 集3 分鐘</a><a href="/v/e3">第 3 集</a>`;
+    await batch.maybeContinueBatch();
+    const b = await stored();
+    expect(b.seriesTaken).toBe(1);
+    expect(b.total).toBe(3);
+    expect(b.note).toBe('下载中：剧集A 第1集');
+    expect(b.videoQueue.map((/** @type {any} */ v) => v.name)).toEqual(['剧集A 第2集', '剧集A 第3集']);
   });
 
   it('汇总页刷新不重复收割', async () => {

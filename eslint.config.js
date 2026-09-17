@@ -34,6 +34,35 @@ export default [
     },
   },
   {
+    files: ['server/**/*.js'],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: 'module',
+      globals: {
+        ...globals.node,
+        console: 'readonly',
+      },
+    },
+    rules: {
+      'no-undef': 'error',
+      'no-unused-vars': ['error', { argsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_' }],
+      'no-unreachable': 'error',
+      'no-constant-condition': ['error', { checkLoops: false }],
+      'no-dupe-keys': 'error',
+      'no-duplicate-case': 'error',
+      'no-empty': ['error', { allowEmptyCatch: true }],
+      'no-fallthrough': 'error',
+      'no-redeclare': 'error',
+      'no-self-assign': 'error',
+      'no-useless-catch': 'error',
+      'no-implied-eval': 'error',
+      'no-new-native-nonconstructor': 'error',
+      'no-var': 'error',
+      'prefer-const': 'error',
+      eqeqeq: ['error', 'allow-null'],
+    },
+  },
+  {
     files: ['tests/**/*.js'],
     languageOptions: {
       globals: {

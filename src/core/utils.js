@@ -31,12 +31,14 @@ const WIN_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
 /**
  * 清洗文件/目录名：去除非法字符并压缩空白，最长 120 字符。
  * 尾部点/空格会被 Windows 静默剥除（不处理会导致已下载判定名与落盘名不一致），
- * 保留设备名加下划线前缀。
+ * 保留设备名加下划线前缀；零宽/不可见字符（站点反爬水印）会被 Chrome
+ * downloads API 拒绝（Invalid filename），必须整体剔除。
  * @param {unknown} name
  * @returns {string}
  */
 export function sanitizeName(name) {
   let s = String(name || 'video')
+    .replace(/[\u00ad\u200b-\u200f\u2028-\u202e\u2060-\u2064\u206a-\u206f\ufeff]/g, '')
     .replace(/[\\/:*?"<>|\u0000-\u001f]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()

@@ -1,9 +1,11 @@
 // Service worker：侧边栏开关、offscreen 生命周期、保存/封面消息转发、
-// 已下载判定（账本 + 下载历史校验）、连续下载后台标签页管理。
+// 已下载判定（本地媒体库服务 → 下载历史校验回退）、本地库登记中转、
+// 连续下载后台标签页管理。
 
 const OFFSCREEN_URL = 'src/offscreen.html';
 const BATCH_KEY = 'rv-hud:batch';
 const BATCH_TAB_KEY = 'rv-batch-tab';
+const LEDGER_BASE = 'http://127.0.0.1:17321';
 
 // ---------------------------------------------------------------- 侧边栏
 
@@ -98,20 +100,81 @@ async function downloadToDisk(url, filename) {
     try { await chrome.downloads.erase({ id: downloadId }); } catch {}
     return { ok: false, error: '落盘中断' };
   }
+  // 本地媒体库登记（fire-and-forget，服务未启动等失败无害——下次扫描自会补齐）
+  if (item.filename) {
+    ledgerPost('/api/files', { absPath: item.filename, size: item.bytesReceived || 0 }).catch(() => {});
+  }
   return { ok: true };
 }
 
+// ---------------------------------------------------------------- 本地媒体库（server/DESIGN.md）
+
+/** POST JSON 到本地服务。 @param {string} path @param {any} body @returns {Promise<Response>} */
+function ledgerPost(path, body) {
+  return fetch(LEDGER_BASE + path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
 /**
- * 已下载判定：下载历史精确校验（basename 匹配且文件仍在）。
+ * 本地服务 exists 查询（磁盘实况，权威判定层）。
+ * @param {string} rel 完整相对路径（已归一化小写）
+ * @returns {Promise<{ exists: boolean, matches: { path: string, type: string, size: number }[] } | null>} null = 服务不可用
+ */
+async function ledgerExists(rel) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 300);
+  try {
+    const r = await fetch(`${LEDGER_BASE}/api/exists?rel=${encodeURIComponent(rel)}`, { signal: ctrl.signal });
+    if (!r.ok) return null;
+    const j = await r.json();
+    if (!j || typeof j.exists !== 'boolean') return null;
+    return { exists: j.exists, matches: Array.isArray(j.matches) ? j.matches : [] };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * 已下载判定（三层链第一二层的实现）：本地媒体库服务优先，
+ * 不可用（未启动/超时）回退 chrome.downloads 历史校验。
+ * @param {string} filename 可含子目录
+ * @returns {Promise<{ exists: boolean, matches: { path: string, type: string, size: number }[] }>}
+ */
+async function fileExists(filename) {
+  const rel = filename.replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase();
+  const local = await ledgerExists(rel);
+  if (local) return local;
+  return { exists: await fileExistsLegacy(filename), matches: [] };
+}
+
+/**
+ * 回退层：下载历史精确校验（完整相对路径优先，basename 回退）。
+ * 注意：不能信任 d.exists——该字段在浏览器重启后可能陈旧为 false
+ * （下载目录在非系统/可移动盘时尤甚），文件明明在磁盘上也会被误判未下载而重复下载。
+ * ≤v1.7 旧管线（FS Access 落盘）的视频没有下载历史，但封面 jpg/png/webp 走
+ * chrome.downloads 且只在视频成功后保存——封面命中即可作为"已下载"的代理证据。
  * @param {string} filename 可含子目录
  * @returns {Promise<boolean>}
  */
-async function fileExists(filename) {
-  const basename = /** @type {string} */ (filename.split(/[\\/]/).pop());
+async function fileExistsLegacy(filename) {
+  const rel = filename.replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase();
+  const basename = /** @type {string} */ (rel.split('/').pop());
+  const stemBase = basename.replace(/\.[a-z0-9]+$/, '');
+  if (!stemBase) return false;
   try {
-    const items = await chrome.downloads.search({ query: [basename], limit: 200 });
-    return items.some((d) => d.state === 'complete' && d.exists !== false
-      && (d.filename || '').endsWith(basename));
+    const items = await chrome.downloads.search({ query: [stemBase], limit: 200 });
+    return items.some((d) => {
+      if (d.state !== 'complete') return false;
+      const fn = (d.filename || '').replace(/\\/g, '/').toLowerCase();
+      if (fn.endsWith('/' + rel) || fn.endsWith(basename)) return true; // 视频本体（忽略陈旧 exists）
+      // 同名封面代理：不同视频恰好同名时可能误报，代价可接受（重试可单发）
+      return /\.(jpe?g|png|webp)$/.test(fn) && (fn.split('/').pop() || '').replace(/\.[a-z0-9]+$/, '') === stemBase;
+    });
   } catch {
     return false;
   }
@@ -151,11 +214,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  // 已下载判定（账本 + 下载历史，无需 offscreen）
+  // 已下载判定（本地媒体库服务 → 下载历史回退，无需 offscreen）
   if (message.type === 'rv-file-exists') {
     fileExists(String(message.filename || ''))
-      .then((exists) => sendResponse({ exists }))
-      .catch(() => sendResponse({ exists: false }));
+      .then((r) => sendResponse(r))
+      .catch(() => sendResponse({ exists: false, matches: [] }));
+    return true;
+  }
+
+  // 本地媒体库：下载生命周期上报（内容脚本不能直连 127.0.0.1，经 SW 中转）
+  if (message.type === 'rv-ledger-report') {
+    ledgerPost('/api/downloads', message.payload || {})
+      .then((r) => sendResponse({ ok: r.ok }))
+      .catch(() => sendResponse({ ok: false }));
+    return true;
+  }
+
+  // 本地媒体库：账本查询（失败列表驱动重试）
+  if (message.type === 'rv-ledger-query') {
+    const q = new URLSearchParams();
+    if (message.opt?.status) q.set('status', String(message.opt.status));
+    if (message.opt?.site) q.set('site', String(message.opt.site));
+    fetch(`${LEDGER_BASE}/api/downloads?${q.toString()}`)
+      .then((r) => r.json())
+      .then((j) => sendResponse({ items: Array.isArray(j?.items) ? j.items : [] }))
+      .catch(() => sendResponse({ items: [] }));
     return true;
   }
 

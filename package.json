@@ -1,6 +1,6 @@
 {
   "name": "rouvideo-assistant",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "private": true,
   "type": "module",
   "description": "肉视频助手 Chrome 扩展 — 开发工具链（测试/静态检查），扩展本体无运行时依赖",
@@ -8,7 +8,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "coverage": "vitest run --coverage",
-    "lint": "eslint src tests",
+    "lint": "eslint src tests server",
     "typecheck": "tsc --noEmit",
     "check": "npm run lint && npm run typecheck && npm run test"
   },

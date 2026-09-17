@@ -7,6 +7,7 @@ import { isPlaylistUrl, parseMasterPlaylist, parseMediaPlaylist, pickVariant, pl
 import { fetchBuffer, fetchText } from './net/http.js';
 import { collectSniffedFromPerformance, installPageHookListener, sniffedUrls } from './net/sniffer.js';
 import { getVideoInfoFresh, videoIdFromPath } from './site/video-info.js';
+import { reportDownload } from './net/ledger.js';
 import { loadSettings, saveSetting, state } from './state.js';
 import * as batch from './features/batch.js';
 import { endBoost, handleKeyDown, handleKeyUp, initBoost, updateActiveRate } from './features/boost.js';
@@ -73,30 +74,32 @@ async function fillMediaInfo(v) {
   } catch { v.duration = 0; }
 }
 
-// 查询 SW：目标文件是否已在本地（下载历史精确校验）
+// 查询 SW：目标文件是否已在本地（本地媒体库服务 → 下载历史回退）
 /**
  * @param {string} filename
- * @returns {Promise<{ exists: boolean }>}
+ * @returns {Promise<{ exists: boolean, matches: { path: string, type: string, size: number }[] }>}
  */
 function checkDownloaded(filename) {
   return chrome.runtime.sendMessage({ type: 'rv-file-exists', filename })
-    .then((r) => ({ exists: !!r?.exists }))
-    .catch(() => ({ exists: false }));
+    .then((r) => ({ exists: !!r?.exists, matches: Array.isArray(r?.matches) ? r.matches : [] }))
+    .catch(() => ({ exists: false, matches: [] }));
 }
 
 // 入口同步守卫：双击/连点（或面板点击与批次触发同时到达）时只有一个调用能穿过，
-// 否则两个调用会都越过 state.download?.running 检查，同文件被下载两遍
-async function startDownload() {
+// 否则两个调用会都越过 state.download?.running 检查，同文件被下载两遍。
+// force = 逃生门：跳过已下载判定强制重下（同名 stem 误报的唯一解法）。
+/** @param {boolean} [force] */
+async function startDownload(force = false) {
   if (state.starting) return false;
   state.starting = true;
   try {
-    return await startDownloadInner();
+    return await startDownloadInner(force);
   } finally {
     state.starting = false;
   }
 }
 
-async function startDownloadInner() {
+async function startDownloadInner(force = false) {
   let quality = currentStream();
   if (!quality && !state.booting) {
     await bootVideo(true);
@@ -106,15 +109,34 @@ async function startDownloadInner() {
   // 剧集视频归入以剧名命名的子目录（Chrome 的 download 属性支持子目录并自动创建）
   const seriesDir = state.page?.seriesName ? `${sanitizeName(state.page.seriesName)}/` : '';
   const filename = `${seriesDir}${sanitizeName(state.page?.name || 'rouvideo')}.mp4`;
-  const verdict = await checkDownloaded(filename);
+  // 本地媒体库账本：上报下载生命周期（fire-and-forget）
+  const videoId = state.page?.id || videoIdFromPath();
+  /** @param {'downloading' | 'complete' | 'failed' | 'canceled' | 'skipped'} status @param {{ error?: string, size?: number, duration?: number }} [extra] */
+  const report = (status, extra) => {
+    if (!videoId) return;
+    reportDownload({
+      videoId,
+      pagePath: location.pathname,
+      name: state.page?.name || videoId,
+      seriesName: state.page?.seriesName || undefined,
+      quality: quality?.height || undefined,
+      filename,
+      status,
+      ...extra,
+    });
+  };
+  const verdict = force ? { exists: false, matches: [] } : await checkDownloaded(filename);
   if (verdict.exists) {
     Logger.info('DL', `本地已存在，跳过：${filename}`);
-    hud.toast('本地已存在，已跳过下载');
+    const where = verdict.matches[0]?.path;
+    hud.toast(where ? `本地已存在：${where}` : '本地已存在，已跳过下载', 3200);
     state.download = { running: false, finished: true, pct: 100, skipped: true, filename };
     pushState();
+    report('skipped');
     saveCover(state.page); // 封面仍补齐（覆盖写，代价极小）
     return true;
   }
+  report('downloading');
   const ctrl = new AbortController();
   state.abort = ctrl;
   state.download = { running: true, finished: false, done: 0, total: 0, bytes: 0, speed: 0, eta: 0, pct: 0 };
@@ -129,6 +151,7 @@ async function startDownloadInner() {
       bytes: result.bytes || state.download.bytes || 0,
       filename: result.filename || filename,
     };
+    report('complete', { size: state.download.bytes || undefined, duration: quality.duration || undefined });
     await saveCover(state.page);
     hud.toast(result.note || '下载完成');
     return true;
@@ -136,6 +159,7 @@ async function startDownloadInner() {
     const aborted = isAbortError(err);
     const msg = aborted ? '已取消' : (errText(err) || '下载失败');
     hud.toast(msg, aborted ? 1800 : 4000); // 错误信息留足阅读时间
+    report(aborted ? 'canceled' : 'failed', aborted ? undefined : { error: msg.slice(0, 280) });
     if (state.download) {
       state.download.running = false;
       state.download.finished = false;
@@ -190,8 +214,9 @@ async function batchDownloadCurrent() {
     return;
   }
   const ok = await startDownload();
+  const skipped = ok && !!state.download?.skipped; // 本地已存在被跳过（非真实下载）
   const errMsg = ok ? '' : (state.download?.error === 'aborted' ? '已取消' : (state.download?.error || '下载失败'));
-  await batch.onDownloadSettled({ ok, error: errMsg });
+  await batch.onDownloadSettled({ ok, error: errMsg, skipped });
 }
 
 async function bootVideo(force = false) {
@@ -336,6 +361,7 @@ function onKeyUp(e) {
  */
 function runCommand(cmd, value) {
   if (cmd === 'download') startDownload();
+  else if (cmd === 'download-force') { hud.toast('强制重新下载…'); startDownload(true); } // 逃生门：绕过已下载判定
   else if (cmd === 'abort') { state.abort?.abort(); cancelActiveSave(); } // 下载/保存两阶段都可取消
   else if (cmd === 'rescan') { hud.toast('正在解析…'); bootVideo(true); }
   else if (cmd === 'pip') togglePip();
@@ -345,6 +371,8 @@ function runCommand(cmd, value) {
     batch.stopBatch().then(() => hud.toast('已停止（记录已保留）'));
   } else if (cmd === 'batch-retry') {
     batch.retryFailed().catch((e) => hud.toast(e.message, 4000));
+  } else if (cmd === 'batch-retry-ledger') {
+    batch.retryLedgerFailed().catch((e) => hud.toast(e.message, 4000));
   } else if (cmd === 'batch-resume') {
     batch.resumeBatch().catch((e) => hud.toast(e.message, 4000));
   } else if (cmd === 'batch-clear') {

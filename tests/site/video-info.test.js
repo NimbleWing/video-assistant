@@ -95,6 +95,39 @@ describe('getVideoInfo', () => {
   });
 });
 
+describe('DOM 兜底（站点无 __NEXT_DATA__）', () => {
+  it('h1 拆剧名/集数，og:image 作封面', () => {
+    setupPage('/v/abc123', null);
+    document.body.innerHTML = '<h1>测试剧集 · 第 3 集</h1>';
+    document.head.innerHTML = '<meta property="og:image" content="https://cdn.example.com/c.jpg">';
+    const info = getVideoInfo();
+    expect(info).toMatchObject({
+      id: 'abc123',
+      name: '测试剧集 第3集',
+      seriesName: '测试剧集',
+      coverUrl: 'https://cdn.example.com/c.jpg',
+    });
+    expect(info?.masterM3u8).toBe(''); // 无直出播放地址，boot 走嗅探/API 兜底
+  });
+
+  it('单片：h1 无集数段 → name=h1、seriesName 为空', () => {
+    setupPage('/v/xyz', null);
+    document.body.innerHTML = '<h1>单一片</h1>';
+    expect(getVideoInfo()).toMatchObject({ id: 'xyz', name: '单一片', seriesName: '' });
+  });
+
+  it('无 h1 时仍返回 null（交给抓取兜底）', () => {
+    setupPage('/v/abc123', null);
+    expect(getVideoInfo()).toBeNull();
+  });
+
+  it('__NEXT_DATA__ 存在时优先于 DOM', () => {
+    setupPage('/v/abc123', VIDEO_PROPS);
+    document.body.innerHTML += '<h1>DOM 名字</h1>';
+    expect(getVideoInfo()?.name).toBe('测试视频');
+  });
+});
+
 describe('getVideoInfoFresh', () => {
   it('本地命中时不走网络', async () => {
     setupPage('/v/abc123', VIDEO_PROPS);

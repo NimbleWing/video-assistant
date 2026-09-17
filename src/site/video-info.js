@@ -73,12 +73,38 @@ function videoInfoFromData(data) {
   };
 }
 
+/**
+ * DOM 兜底：站点已移除 __NEXT_DATA__（反爬），播放页信息从页面结构提取。
+ * h1 形如「剧名 · 第 1 集」；og:image 为封面。
+ * @returns {PageInfo | null}
+ */
+function videoInfoFromDom() {
+  const id = videoIdFromPath();
+  if (!id) return null;
+  const h1 = (document.querySelector('h1')?.textContent || '').trim();
+  if (!h1) return null;
+  const m = h1.match(/^(.+?)\s*[·•]\s*第\s*(\d+)\s*集$/);
+  const seriesName = m ? m[1].trim() : '';
+  const name = m ? `${seriesName} 第${m[2]}集` : h1;
+  const cover = document.querySelector('meta[property="og:image"]')?.getAttribute('content') || '';
+  return {
+    id,
+    name,
+    masterM3u8: '',
+    videoUrl: '',
+    duration: 0,
+    seriesName,
+    seriesCoverUrl: '',
+    coverUrl: cover,
+  };
+}
+
 /** @returns {PageInfo | null} 页面数据中的当前视频信息（与地址栏 id 一致才采信） */
 export function getVideoInfo() {
   const info = videoInfoFromData(getNextData());
   const id = videoIdFromPath();
   if (info && (!id || info.id === id)) return info;
-  return null;
+  return videoInfoFromDom();
 }
 
 /** @returns {Promise<PageInfo | null>} 本地解析失败时重新抓取页面 HTML 兜底 */
