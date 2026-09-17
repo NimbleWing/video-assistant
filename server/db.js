@@ -176,6 +176,31 @@ export function listVideos(opt) {
   const items = /** @type {any[]} */ (db.prepare(
     `SELECT id, path, stem, ext, type, size, mtime, volume, video_id, duration, source, first_seen, last_seen FROM files WHERE ${wsql} ORDER BY mtime DESC, id DESC LIMIT ? OFFSET ?`
   ).all(...params, size, (page - 1) * size));
+  // 封面关联（管理页卡片用）：视频条目补 cover_id —— stem 同名优先（单片），回退所在目录名（剧集封面 stem=剧名）
+  if (type === 'video' && items.length) {
+    /** @type {Set<string>} */
+    const stems = new Set();
+    for (const it of items) {
+      stems.add(it.stem);
+      const slash = String(it.path).lastIndexOf('/');
+      const dir = slash > 0 ? String(it.path).slice(0, slash) : '';
+      const dirName = dir.slice(dir.lastIndexOf('/') + 1);
+      if (dirName) stems.add(dirName);
+    }
+    const arr = [...stems];
+    const rows = /** @type {any[]} */ (db.prepare(
+      `SELECT id, stem FROM files WHERE type = 'cover' AND stem IN (${arr.map(() => '?').join(',')})`
+    ).all(...arr));
+    /** @type {Map<string, number>} */
+    const byStem = new Map();
+    for (const r of rows) if (!byStem.has(r.stem)) byStem.set(r.stem, Number(r.id));
+    for (const it of items) {
+      const slash = String(it.path).lastIndexOf('/');
+      const dir = slash > 0 ? String(it.path).slice(0, slash) : '';
+      const dirName = dir.slice(dir.lastIndexOf('/') + 1);
+      it.cover_id = byStem.get(it.stem) ?? (dirName ? byStem.get(dirName) ?? null : null);
+    }
+  }
   return { total, items };
 }
 

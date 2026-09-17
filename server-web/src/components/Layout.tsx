@@ -51,8 +51,8 @@ export function Layout<K extends string>({ title, headerExtra, tabs, activeTab, 
   };
 
   return (
-    <div className="min-h-screen">
-      <header className="sticky top-0 z-30 border-b border-line bg-surface/90 backdrop-blur">
+    <div className="flex h-screen flex-col overflow-hidden">
+      <header className="shrink-0 border-b border-line bg-surface/90 backdrop-blur">
         <div className="flex h-14 items-center gap-3 px-5 lg:px-6">
           {hasTabs && (
             <button
@@ -88,7 +88,7 @@ export function Layout<K extends string>({ title, headerExtra, tabs, activeTab, 
       {navOpen && hasTabs && (
         <div className="fixed inset-x-0 bottom-0 top-14 z-30 bg-black/50 lg:hidden" aria-hidden onClick={() => setNavOpen(false)} />
       )}
-      <div className="lg:flex">
+      <div className="flex min-h-0 flex-1">
         {hasTabs && (
           <nav
             aria-label="标签"
@@ -117,7 +117,7 @@ export function Layout<K extends string>({ title, headerExtra, tabs, activeTab, 
             </div>
           </nav>
         )}
-        <main className="min-w-0 flex-1 px-5 py-6 lg:px-8">{children}</main>
+        <main className="flex min-h-0 min-w-0 flex-1 flex-col px-5 py-6 lg:px-8">{children}</main>
       </div>
     </div>
   );

@@ -32,8 +32,8 @@ export function LedgerSection() {
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
-    <section className="card p-5">
-      <div className="mb-4 flex flex-wrap gap-1.5">
+    <section className="flex min-h-0 flex-1 flex-col">
+      <div className="mb-4 flex shrink-0 flex-wrap gap-1.5">
         {(['', ...STATUSES] as Status[]).map((s) => (
           <button
             key={s || 'all'}
@@ -50,11 +50,11 @@ export function LedgerSection() {
           </button>
         ))}
       </div>
-      <p className="mb-3 text-xs text-dim">失败项重试由扩展侧面板发起（「重试历史失败」），本页仅展示。</p>
+      <p className="mb-3 shrink-0 text-xs text-dim">失败项重试由扩展侧面板发起（「重试历史失败」），本页仅展示。</p>
       {items.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-line py-14 text-center text-dim">没有记录</div>
+        <div className="shrink-0 rounded-xl border border-dashed border-line py-14 text-center text-dim">没有记录</div>
       ) : (
-        <div className="overflow-x-auto">
+        <div className="card min-h-0 flex-1 overflow-auto p-5">
           <table>
             <thead>
               <tr>

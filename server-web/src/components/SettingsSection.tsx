@@ -63,7 +63,8 @@ export function SettingsSection() {
   }
 
   return (
-    <section className="card p-5">
+    <section className="min-h-0 flex-1 overflow-y-auto">
+      <div className="card p-5">
       <div className="mb-2 text-xs font-medium text-dim">扫描目录（每行一个绝对路径）</div>
       <textarea
         value={dirs}
@@ -92,6 +93,7 @@ export function SettingsSection() {
       <p className="mt-4 text-xs text-dim">
         服务运行于 127.0.0.1:17321，仅供本机使用；扩展会自动调用判定接口，服务未启动时扩展自动回退浏览器下载历史判定。
       </p>
+      </div>
     </section>
   );
 }

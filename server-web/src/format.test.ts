@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fmtDur, fmtSize, fmtTime } from './format';
+import { fmtDate, fmtDur, fmtSize, fmtTime } from './format';
 
 describe('fmtSize', () => {
   it('空值返回 -', () => {
@@ -37,6 +37,18 @@ describe('fmtDur', () => {
     expect(fmtDur(61)).toBe('1:01');
     expect(fmtDur(3599)).toBe('59:59');
     expect(fmtDur(3600)).toBe('60:00');
+  });
+});
+
+describe('fmtDate', () => {
+  it('空值返回 -', () => {
+    expect(fmtDate(0)).toBe('-');
+    expect(fmtDate(null)).toBe('-');
+  });
+
+  it('按 zh-CN 短日期格式化', () => {
+    const ms = Date.UTC(2026, 0, 2, 3, 4, 5);
+    expect(fmtDate(ms)).toBe(new Date(ms).toLocaleDateString('zh-CN'));
   });
 });
 

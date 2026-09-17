@@ -110,6 +110,7 @@ CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 ### 匹配与维护语义
 
 - **判定匹配**：`/api/exists` 携带完整相对路径 `rel`（`剧名/xx.mp4`）与 `stem`；**路径后缀（`/{rel}`）优先，stem 相等回退**。匹配结果返回完整 path 列表，面板 toast 展示「已存在：D:\xxx.mp4」，误报（同名不同视频）一眼可辨。
+- **封面关联（管理页卡片）**：`/api/videos` 对视频条目补 `cover_id`——优先 `type='cover' AND stem = 视频stem`（单片），回退 `stem = 视频所在目录名`（剧集封面 stem=剧名）；同页 stem 集合一次 `IN` 查询，未命中为 null（前端渲染占位图）。
 - **files upsert（扫描）**：按 path 唯一。文件在 → 更新 `size/mtime/last_seen`，**不触碰 `video_id/source`**（保护登记数据）；文件消失 → 删行（判定自然回到未下载，正是期望行为）。全量重扫幂等。
 - **downloads upsert（登记）**：按 `(site, video_id)`。开始 → `downloading`（attempts+1）；终态 → `complete/failed/canceled/skipped`。
 - **两表不做硬外键**，靠 filename/stem 宽松关联——手动移动文件后 files.path 变，任务记录不失效。
@@ -126,7 +127,7 @@ CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 | `POST /api/files` | 扩展 | 落盘成功后登记物理文件（`{absPath, size}`，封面与视频统一经此入库，`source='recorded'`）；与账本分离、无竞态 |
 | `POST /api/scan` | 页面/手动 | 触发扫描（幂等） |
 | `GET /api/config` / `POST /api/config` | 页面 | 读取/保存 scan_dirs（POST 校验目录存在性，警告不阻断） |
-| `GET /api/videos?page=&size=&q=&volume=&type=` | 页面 | 分页 + 搜索 + 盘符/类型筛选，附盘符统计 |
+| `GET /api/videos?page=&size=&q=&volume=&type=` | 页面 | 分页 + 搜索 + 盘符/类型筛选，附盘符统计；视频条目带 `cover_id`（封面关联：stem 同名优先、目录名回退，`/stream/{cover_id}` 取图） |
 | `GET /api/downloads?status=&site=&q=` | 页面/扩展 | 账本查询（含各 status 计数）；扩展拉 `status=failed` 驱动重试 |
 | `GET /stream/:id` | 页面 | files.id 的 Range 流式播放（`<video>` 直接用） |
 | `GET /` | 页面 | 管理页：配置、视频分页浏览、播放、账本 |

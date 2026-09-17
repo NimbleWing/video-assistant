@@ -20,3 +20,8 @@ export function fmtDur(s?: number | null): string {
 export function fmtTime(ms?: number | null): string {
   return ms ? new Date(ms).toLocaleString('zh-CN', { hour12: false }) : '-';
 }
+
+/** 卡片用短日期（无时间部分）。 */
+export function fmtDate(ms?: number | null): string {
+  return ms ? new Date(ms).toLocaleDateString('zh-CN') : '-';
+}

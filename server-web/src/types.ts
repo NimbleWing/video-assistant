@@ -11,6 +11,8 @@ export interface VideoItem {
   volume: string;
   video_id: string | null;
   duration: number | null;
+  /** 关联封面 files.id（服务端 stem 同名优先、目录名回退；无则 null） */
+  cover_id: number | null;
   source: string;
   first_seen: number;
   last_seen: number;

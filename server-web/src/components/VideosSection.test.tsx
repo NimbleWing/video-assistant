@@ -19,6 +19,7 @@ function item(partial: Partial<VideoItem> = {}): VideoItem {
     volume: 'd:',
     video_id: null,
     duration: 61,
+    cover_id: null,
     source: 'scanned',
     first_seen: 1,
     last_seen: 2,
@@ -95,11 +96,33 @@ describe('VideosSection', () => {
     );
   });
 
-  it('点击播放回调携带 id 与路径', async () => {
+  it('点击卡片播放回调携带 id 与路径', async () => {
     const onPlay = vi.fn();
     mocked.mockResolvedValue(resp());
     render(<VideosSection onStat={() => {}} onPlay={onPlay} />);
-    fireEvent.click(await screen.findByText('播放'));
+    fireEvent.click(await screen.findByRole('button', { name: '播放 a' }));
     expect(onPlay).toHaveBeenCalledWith({ id: 7, path: 'D:/v/a.mp4' });
+  });
+
+  it('有关联封面时缩略图走 /stream/{cover_id}，无封面渲染占位', async () => {
+    mocked.mockResolvedValue(resp({ items: [item(), item({ id: 8, stem: 'b', cover_id: 9 })] }));
+    const { container } = render(<VideosSection onStat={() => {}} onPlay={() => {}} />);
+    await screen.findByText('b');
+    const imgs = container.querySelectorAll('img');
+    expect(imgs).toHaveLength(1);
+    expect(imgs[0].getAttribute('src')).toBe('/stream/9');
+    // a 无封面：占位 svg + hover 播放按钮仍在
+    expect(container.querySelectorAll('svg').length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: '播放 b' })).toBeTruthy();
+  });
+
+  it('封面条目：缩略图即自身且不渲染播放按钮', async () => {
+    mocked.mockResolvedValue(resp({ items: [item({ type: 'cover', ext: 'jpg', duration: null, cover_id: null })] }));
+    const { container } = render(<VideosSection onStat={() => {}} onPlay={() => {}} />);
+    await screen.findByText('a');
+    const img = container.querySelector('img');
+    expect(img?.getAttribute('src')).toBe('/stream/7');
+    expect(container.querySelector('[aria-label^="播放"]')).toBeNull();
+    expect(container.querySelector('.badge')?.textContent).toBe('封面');
   });
 });
