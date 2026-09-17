@@ -15,12 +15,28 @@ import { mp4Duration } from './mp4.js';
 const PORT = 17321;
 const HOST = '127.0.0.1';
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
-/** 允许发起写操作的来源：扩展 + 管理页自身；无 Origin（curl 等）放行 */
+/** 允许发起写操作的来源：扩展 + 管理页自身 + server-web 开发服（vite）；无 Origin（curl 等）放行 */
 const ALLOWED_ORIGINS = [
   'chrome-extension://fieogbjpjaiokpmfkokckebfaojncomm',
   `http://${HOST}:${PORT}`,
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
 ];
 const DL_STATUSES = new Set(['downloading', 'complete', 'failed', 'canceled', 'skipped']);
+const PUBLIC_DIR = path.join(ROOT, 'public');
+/** 静态资源 MIME（管理页构建产物，源码见 ../server-web） @type {Record<string, string>} */
+const STATIC_MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.ico': 'image/x-icon',
+  '.json': 'application/json',
+  '.woff2': 'font/woff2',
+  '.map': 'application/json',
+};
 
 const server = http.createServer((req, res) => {
   handle(req, res).catch((e) => {
@@ -45,11 +61,9 @@ async function handle(req, res) {
     }
   }
 
-  if (req.method === 'GET' && (pathname === '/' || pathname === '/index.html')) {
-    const html = await fs.readFile(path.join(ROOT, 'public', 'index.html'), 'utf8');
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(html);
-    return;
+  // 静态资源（public/，管理页构建产物）；未命中则继续走 API 路由
+  if (req.method === 'GET' || req.method === 'HEAD') {
+    if (await serveStatic(req, res, pathname)) return;
   }
 
   if (req.method === 'GET' && pathname === '/api/log') {
@@ -193,6 +207,30 @@ async function handle(req, res) {
 }
 
 // ---------------------------------------------------------------- 工具
+
+/**
+ * 静态文件（public/）：GET/HEAD，命中写出并返回 true，未命中返回 false。
+ * 归一化后限制在 public 目录内，防路径穿越。
+ * @param {http.IncomingMessage} req
+ * @param {http.ServerResponse} res
+ * @param {string} pathname
+ * @returns {Promise<boolean>}
+ */
+async function serveStatic(req, res, pathname) {
+  const rel = pathname === '/' ? 'index.html' : pathname.slice(1);
+  let decoded;
+  try { decoded = decodeURIComponent(rel); } catch { return false; }
+  const file = path.normalize(path.join(PUBLIC_DIR, decoded));
+  if (!file.startsWith(PUBLIC_DIR + path.sep)) return false;
+  let st;
+  try { st = await fs.stat(file); } catch { return false; }
+  if (!st.isFile()) return false;
+  const mime = STATIC_MIME[path.extname(file).toLowerCase()] || 'application/octet-stream';
+  res.writeHead(200, { 'Content-Type': mime, 'Content-Length': st.size, 'Cache-Control': 'no-store' });
+  if (req.method === 'HEAD') { res.end(); return true; }
+  createReadStream(file).pipe(res);
+  return true;
+}
 
 /** @param {http.ServerResponse} res @param {number} code @param {any} data */
 function json(res, code, data) {

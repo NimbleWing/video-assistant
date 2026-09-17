@@ -41,6 +41,7 @@
 ## 3. 技术选型与运行方式
 
 - **零 npm 依赖**：Node 22+ 内置 `node:sqlite` + `node:http`，单目录脚本。
+- **管理页前端**：源码在 `../server-web`（独立 npm 包：React + TypeScript + Tailwind CSS + Vite + Vitest），`npm run build` 产物直出 `server/public`（文件名不带哈希、随仓库提交——服务侧维持零依赖、`start.bat` 开箱即用，代价是构建产物入库）。开发走 `npm run dev`（Vite dev server 代理 `/api`、`/stream` 到 17321；服务端写操作 Origin 白名单已含 dev origin）。
 - 监听 `127.0.0.1:17321`。
 - **启动方式**（二选一）：
   - 手动：`server/start.bat`

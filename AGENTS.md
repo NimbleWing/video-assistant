@@ -19,7 +19,8 @@ rou.video 的 Chrome MV3 扩展（由油猴脚本移植）：播放页解析 HLS
 | Offscreen | `src/offscreen.js` → `src/net/save-session.js` | 保存会话编排：模式判定（mp4/透传 ts）→ OPFS 流式写 `.part` → moov 置尾 → rename → objectURL 交 SW downloads |
 | 侧边栏 | `src/panel/` | 纯遥控器 UI，不持有业务状态 |
 | 下载核心 | `src/hls/`（playlist/downloader/ts-remux）、`src/net/`（http/save/fswriter/rou-png/ledger）、`src/features/`（boost/batch） | 纯逻辑，测试覆盖集中于此 |
-| 本地媒体库 | `server/`（server.js/db.js/scanner.js/public/） | Node 22+ 零依赖服务（`node:sqlite`，需 `--experimental-sqlite`），`127.0.0.1:17321`：磁盘扫描入 SQLite（files/downloads/meta 三表）、去重判定 `/api/exists`、下载账本 `/api/downloads`、落盘登记 `/api/files`、心跳 `/api/ping`、日志 `/api/log`、Range 流播放、管理页；设计文档 `server/DESIGN.md` |
+| 本地媒体库 | `server/`（server.js/db.js/scanner.js/public/） | Node 22+ 零依赖服务（`node:sqlite`，需 `--experimental-sqlite`），`127.0.0.1:17321`：磁盘扫描入 SQLite（files/downloads/meta 三表）、去重判定 `/api/exists`、下载账本 `/api/downloads`、落盘登记 `/api/files`、心跳 `/api/ping`、日志 `/api/log`、Range 流播放、静态服务 `server/public`（管理页构建产物）；设计文档 `server/DESIGN.md` |
+| 管理页前端 | `server-web/`（独立 npm 包：React + TypeScript + Tailwind CSS + Vite + Vitest） | 管理页源码（视频库/账本/设置三标签 + 播放弹窗）；`npm run build` 产物直出 `server/public`（文件名不带哈希、随仓库提交，服务侧保持零依赖开箱即用）；开发 `npm run dev`（Vite 代理 `/api`、`/stream` 到 17321，服务端写操作 Origin 白名单已含 dev origin） |
 
 **保存链路（无自定义目录功能，已整体移除——Chrome 对扩展的 FS Access 授权过于短命，缠斗无益）**：
 - 页面侧：分段下载+解密（保持页面 Origin/Referer，CDN 要求）→ 按序 16MB base64 分块直传 offscreen（SW 不在数据路径上，仅 begin 经 SW 确保 offscreen）。
@@ -36,13 +37,18 @@ rou.video 的 Chrome MV3 扩展（由油猴脚本移植）：播放页解析 HLS
 ```bash
 npm run check   # lint + typecheck + test（提交前必跑，覆盖率棘轮只升不降；pre-commit 钩子已配置 tools/hooks）
 npm run coverage
+
+# 管理页前端（server-web/ 内执行；根 check 不覆盖该目录）
+npm run check   # typecheck + test + build（改动后必跑，产物直出 ../server/public 并随仓库提交）
+npm run dev     # Vite 开发服（热更，/api、/stream 代理到 127.0.0.1:17321）
 ```
 
 本地媒体库服务：双击 `server/start.bat` 启动，或面板心跳指示灯一键操作——**在线（绿）点击 = 新标签页打开管理页，离线（红）点击 = native messaging 启动服务**（需先运行 `server/install-native.bat` 注册；host 以 detached 方式拉起服务，不随连接退出，日志落 `server/server.log`）。不注册开机自启；服务未启动时扩展自动回退下载历史判定，仅影响判定精度。
 
 ## 编码约定
 
-- 无构建步骤：扩展本体为原生 ESM，`web_accessible_resources` 直引；不引入运行时依赖。
+- **终端命令必须带超时**：执行任何 shell 命令都要设置 timeout（按预期时长给值），超时无反馈即中止退出并向用户回报；禁止无超时阻塞等待，避免会话挂起。常驻/交互式进程（dev server、守护进程等）不得前台等待——用 detached 方式启动后轮询验证。
+- 无构建步骤：扩展本体为原生 ESM，`web_accessible_resources` 直引；不引入运行时依赖。（管理页前端是唯一例外：`server-web/` 独立 npm 包，产物入库，不影响扩展本体）
 - JSDoc 类型注解 + `tsc --noEmit` 把关；新增代码必须过 typecheck。
 - 注释与 UI 文案用中文；日志经 `core/logger.js` 分模块输出。
 - **每次功能/修复变更必须同步升版本号**：`manifest.json` 与 `package.json` 保持一致（补丁 1.8.0→1.8.1，新功能升次版本 1.9.0）；面板版本号读自 manifest，无需另改。

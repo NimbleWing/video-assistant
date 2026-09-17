@@ -4,6 +4,10 @@ import globals from 'globals';
 // 不含任何 stylistic 规则，避免大规模重排。
 export default [
   {
+    // server/public 为 server-web 构建产物；server-web 有独立工具链，均不归本配置管
+    ignores: ['server/public/**', 'server-web/**'],
+  },
+  {
     files: ['src/**/*.js', 'tests/**/*.js'],
     languageOptions: {
       ecmaVersion: 2022,
