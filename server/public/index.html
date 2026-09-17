@@ -114,7 +114,7 @@
   </section>
 </main>
 
-<dialog id="player">
+<dialog id="player" closedby="any">
   <div class="vtitle" id="p-title"></div>
   <video controls preload="metadata" width="960" height="540" id="p-video"></video>
   <div class="bar" style="margin-top:10px;justify-content:flex-end">
@@ -217,9 +217,14 @@ document.addEventListener('click', (e) => {
   $('player').showModal();
   v.play().catch(() => {});
 });
-$('p-close').addEventListener('click', () => closePlayer());
-$('player').addEventListener('close', closePlayer);
+$('p-close').addEventListener('click', closePlayer);
+// dialog 的 close 事件（Esc / 遮罩点击原生关闭）只负责停流清理
+$('player').addEventListener('close', stopVideo);
 function closePlayer() {
+  $('player').close();
+  stopVideo();
+}
+function stopVideo() {
   const v = $('p-video');
   v.pause();
   v.removeAttribute('src');

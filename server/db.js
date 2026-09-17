@@ -174,7 +174,7 @@ export function listVideos(opt) {
   const wsql = where.join(' AND ');
   const total = Number((/** @type {any} */ (db.prepare(`SELECT COUNT(*) AS n FROM files WHERE ${wsql}`).get(...params))).n) || 0;
   const items = /** @type {any[]} */ (db.prepare(
-    `SELECT id, path, stem, ext, size, mtime, volume, video_id, duration, source, first_seen, last_seen FROM files WHERE ${wsql} ORDER BY mtime DESC, id DESC LIMIT ? OFFSET ?`
+    `SELECT id, path, stem, ext, type, size, mtime, volume, video_id, duration, source, first_seen, last_seen FROM files WHERE ${wsql} ORDER BY mtime DESC, id DESC LIMIT ? OFFSET ?`
   ).all(...params, size, (page - 1) * size));
   return { total, items };
 }
