@@ -2,6 +2,15 @@ import type {
   ConfigResponse,
   DownloadsResponse,
   LogResponse,
+  RawFilesResponse,
+  RawMissingResponse,
+  RawResolveOp,
+  RawResolveResponse,
+  RawScanCancelResponse,
+  RawScanStartResponse,
+  RawScanStatusResponse,
+  RawType,
+  RawVolumesResponse,
   SaveConfigResponse,
   ScanResponse,
   VideosResponse,
@@ -71,4 +80,61 @@ export function triggerScan(): Promise<ScanResponse> {
 
 export function fetchLog(): Promise<LogResponse> {
   return api('/api/log');
+}
+
+// ---------------------------------------------------------------------------
+// 原始资料库（SSE 进度不经此客户端，组件直连 EventSource）
+// ---------------------------------------------------------------------------
+
+export function fetchRawVolumes(): Promise<RawVolumesResponse> {
+  return api('/api/raw/volumes');
+}
+
+export function startRawScan(volumes: string[], types: RawType[]): Promise<RawScanStartResponse> {
+  return api('/api/raw/scan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ volumes, types }),
+  });
+}
+
+export function cancelRawScan(): Promise<RawScanCancelResponse> {
+  return api('/api/raw/scan/cancel', { method: 'POST' });
+}
+
+export function fetchRawScanStatus(): Promise<RawScanStatusResponse> {
+  return api('/api/raw/scan/status');
+}
+
+export interface RawFilesQuery {
+  page: number;
+  size: number;
+  q?: string;
+  type?: 'video' | 'image';
+  volume?: string;
+  missing?: 'hide' | 'only' | 'all';
+}
+
+export function fetchRawFiles(query: RawFilesQuery): Promise<RawFilesResponse> {
+  const p = new URLSearchParams({
+    page: String(query.page),
+    size: String(query.size),
+  });
+  if (query.q) p.set('q', query.q);
+  if (query.type) p.set('type', query.type);
+  if (query.volume) p.set('volume', query.volume);
+  if (query.missing) p.set('missing', query.missing);
+  return api(`/api/raw/files?${p.toString()}`);
+}
+
+export function fetchRawMissing(): Promise<RawMissingResponse> {
+  return api('/api/raw/missing');
+}
+
+export function resolveRawMissing(op: RawResolveOp): Promise<RawResolveResponse> {
+  return api('/api/raw/missing/resolve', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ op }),
+  });
 }

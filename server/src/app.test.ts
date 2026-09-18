@@ -74,3 +74,62 @@ describe('app 集成', () => {
     expect(r.headers.get('content-type')).toContain('text/html');
   });
 });
+
+describe('app 集成：raw feature', () => {
+  it('GET /api/raw/volumes 返回盘符数组与上次勾选', async () => {
+    const r = await fetch(`${base}/api/raw/volumes`);
+    expect(r.status).toBe(200);
+    const j = (await r.json()) as { ok: boolean; volumes: { volume: string }[]; lastSelection: unknown };
+    expect(j.ok).toBe(true);
+    expect(Array.isArray(j.volumes)).toBe(true);
+    for (const v of j.volumes) expect(v.volume).toMatch(/^[a-z]:$/);
+  });
+
+  it('GET /api/raw/files / missing 空库正常', async () => {
+    const f = await fetch(`${base}/api/raw/files`);
+    expect(((await f.json()) as { ok: boolean }).ok).toBe(true);
+    const m = await fetch(`${base}/api/raw/missing`);
+    expect(((await m.json()) as { ok: boolean; items: unknown[] }).items).toEqual([]);
+  });
+
+  it('POST /api/raw/scan 非法请求体 400', async () => {
+    const bad = await fetch(`${base}/api/raw/scan`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ volumes: ['zz'], types: ['video'] }),
+    });
+    expect(bad.status).toBe(400);
+    const empty = await fetch(`${base}/api/raw/scan`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ volumes: [], types: [] }),
+    });
+    expect(empty.status).toBe(400);
+  });
+
+  it('POST /api/raw/missing/resolve 非法 op 400', async () => {
+    const r = await fetch(`${base}/api/raw/missing/resolve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ op: 'nuke' }),
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it('GET /api/raw/file/:id/content 未知 id 404', async () => {
+    const r = await fetch(`${base}/api/raw/file/99999/content`);
+    expect(r.status).toBe(404);
+  });
+
+  it('GET /api/raw/scan/events SSE 先推 snapshot 事件', async () => {
+    const ctrl = new AbortController();
+    const r = await fetch(`${base}/api/raw/scan/events`, { signal: ctrl.signal });
+    expect(r.status).toBe(200);
+    expect(r.headers.get('content-type')).toContain('text/event-stream');
+    const reader = r.body!.getReader();
+    const { value } = await reader.read();
+    const text = new TextDecoder().decode(value);
+    expect(text).toContain('event: snapshot');
+    ctrl.abort();
+  });
+});

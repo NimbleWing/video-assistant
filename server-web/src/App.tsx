@@ -1,11 +1,14 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { Layout } from '@/components/Layout';
-import { PlayerDialog, Videos } from '@/features/Videos';
+import { PlayerDialog } from '@/components/PlayerDialog';
+import type { PlaySource } from '@/components/PlayerDialog';
+import { Videos } from '@/features/Videos';
+import { Raw } from '@/features/Raw';
 import { Ledger } from '@/features/Ledger';
 import { Settings } from '@/features/Settings';
 
-type Tab = 'videos' | 'ledger' | 'settings';
+type Tab = 'videos' | 'raw' | 'ledger' | 'settings';
 
 const icon = (path: ReactNode) => (
   <svg
@@ -35,6 +38,17 @@ const TABS = [
     ),
   },
   {
+    key: 'raw',
+    label: '原始资料',
+    icon: icon(
+      <>
+        <ellipse cx="12" cy="5.5" rx="8" ry="2.8" />
+        <path d="M4 5.5v13c0 1.55 3.58 2.8 8 2.8s8-1.25 8-2.8v-13" />
+        <path d="M4 12c0 1.55 3.58 2.8 8 2.8s8-1.25 8-2.8" />
+      </>,
+    ),
+  },
+  {
     key: 'ledger',
     label: '下载账本',
     icon: icon(
@@ -59,7 +73,7 @@ const TABS = [
 export default function App() {
   const [tab, setTab] = useState<Tab>('videos');
   const [stat, setStat] = useState('加载中…');
-  const [playing, setPlaying] = useState<{ id: number; path: string } | null>(null);
+  const [playing, setPlaying] = useState<PlaySource | null>(null);
 
   return (
     <>
@@ -75,7 +89,15 @@ export default function App() {
         activeTab={tab}
         onTabChange={setTab}
       >
-        {tab === 'videos' && <Videos onStat={setStat} onPlay={setPlaying} />}
+        {tab === 'videos' && (
+          <Videos
+            onStat={setStat}
+            onPlay={(it) =>
+              setPlaying({ path: it.path, direct: `/stream/${it.id}`, hls: `/stream/${it.id}/index.m3u8` })
+            }
+          />
+        )}
+        {tab === 'raw' && <Raw onStat={setStat} onPlay={setPlaying} />}
         {tab === 'ledger' && <Ledger />}
         {tab === 'settings' && <Settings />}
       </Layout>

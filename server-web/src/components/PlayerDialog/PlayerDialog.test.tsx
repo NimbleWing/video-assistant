@@ -1,7 +1,7 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import Hls from 'hls.js';
-import { PlayerDialog } from './PlayerDialog';
+import { PlayerDialog } from './index';
 
 // hls.js 桩：捕获实例方法与 ERROR 回调（降级链测试需要手动触发错误）
 interface HlsStubInstance {
@@ -57,14 +57,24 @@ beforeEach(() => {
   supported = true;
 });
 
-function renderDialog(id = 7) {
+function renderDialog(over: Partial<{ direct: string; hls: string; preferDirect: boolean }> = {}) {
   // dialog.showModal 在 happy-dom 中可用性不稳定，绕开：直接渲染内容断言 video 行为
-  const r = render(<PlayerDialog item={{ id, path: 'D:/v/a.mp4' }} onClose={() => {}} />);
+  const r = render(
+    <PlayerDialog
+      item={{
+        path: 'D:/v/a.mp4',
+        direct: '/stream/7',
+        hls: '/stream/7/index.m3u8',
+        ...over,
+      }}
+      onClose={() => {}}
+    />,
+  );
   const video = () => r.container.querySelector('video') as HTMLVideoElement;
   return { ...r, video };
 }
 
-describe('PlayerDialog 播放链路', () => {
+describe('PlayerDialog 播放链路（默认 hls 优先）', () => {
   it('hls.js 可用：加载 m3u8 并挂载 video', async () => {
     expect(Hls.isSupported()).toBe(true);
     renderDialog();
@@ -73,7 +83,7 @@ describe('PlayerDialog 播放链路', () => {
     await waitFor(() => expect(h.attachMedia).toHaveBeenCalled());
   });
 
-  it('fatal manifest 网络错误 → 销毁 hls 并降级直连 /stream/:id', async () => {
+  it('fatal manifest 网络错误 → 销毁 hls 并降级直连', async () => {
     const { video } = renderDialog();
     const h = lastInstance();
     expect(h.onError).toBeTruthy();
@@ -105,5 +115,36 @@ describe('PlayerDialog 播放链路', () => {
     const { video } = renderDialog();
     expect(video().getAttribute('src')).toBe('/stream/7');
     expect(instances).toHaveLength(0);
+  });
+
+  it('无 hls 源（纯直连条目）直接播 direct', () => {
+    const { video } = renderDialog({ hls: undefined });
+    expect(video().getAttribute('src')).toBe('/stream/7');
+    expect(instances).toHaveLength(0);
+  });
+});
+
+describe('PlayerDialog preferDirect（原生格式直连优先）', () => {
+  it('直连优先，不建 hls 实例', () => {
+    const { video } = renderDialog({ preferDirect: true });
+    expect(video().getAttribute('src')).toBe('/stream/7');
+    expect(instances).toHaveLength(0);
+  });
+
+  it('video error（编解码不支持）→ 回退 hls 转码', async () => {
+    const { video } = renderDialog({ preferDirect: true });
+    fireEvent.error(video());
+    const h = lastInstance();
+    expect(h.loadSource).toHaveBeenCalledWith('/stream/7/index.m3u8');
+    await waitFor(() => expect(h.attachMedia).toHaveBeenCalled());
+  });
+
+  it('复制路径按钮', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    renderDialog();
+    fireEvent.click(screen.getByText('复制路径'));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('D:/v/a.mp4'));
+    expect(screen.getByText('已复制')).toBeTruthy();
   });
 });

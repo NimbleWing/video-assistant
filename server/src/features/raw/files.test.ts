@@ -1,0 +1,95 @@
+// raw_files 表操作单测：upsert / 三键 touch / 作用域消失判定 / 决策 / 列表筛选。
+import { afterAll, describe, expect, it } from 'vitest';
+import { db } from '../../lib/db.ts';
+import { findRawByPath, listPendingMissing, listRawFiles, markPendingMissing, rawTypeOfExt, rawVolumeStats, resolveMissing, touchRawSeen, upsertRawScanned } from './files.ts';
+
+afterAll(() => {
+  db.exec('DELETE FROM raw_files');
+});
+
+const row = (over: Partial<Parameters<typeof upsertRawScanned>[0]> = {}) => ({
+  path: 'd:/rawfiles/a.mp4',
+  hash: 'h1',
+  name: 'a',
+  ext: 'mp4',
+  type: 'video' as const,
+  size: 100,
+  mtime: 1000,
+  volume: 'd:',
+  seen: 100,
+  ...over,
+});
+
+describe('rawTypeOfExt', () => {
+  it('视频/图片扩展名分派，未知 null', () => {
+    expect(rawTypeOfExt('mp4')).toBe('video');
+    expect(rawTypeOfExt('rmvb')).toBe('video');
+    expect(rawTypeOfExt('jpeg')).toBe('image');
+    expect(rawTypeOfExt('txt')).toBeNull();
+    expect(rawTypeOfExt('gif')).toBeNull(); // 明确不收 gif
+  });
+});
+
+describe('upsert / touch', () => {
+  it('插入后更新走 conflict 分支并清消失标记', () => {
+    upsertRawScanned(row());
+    upsertRawScanned(row({ hash: 'h2', size: 200, mtime: 2000, seen: 200 }));
+    const r = findRawByPath('d:/rawfiles/a.mp4');
+    expect(r).toEqual({ hash: 'h2', size: 200, mtime: 2000 });
+  });
+
+  it('touch 只刷 last_seen 并归零 missing/pending_missing', () => {
+    db.exec("UPDATE raw_files SET missing = 1, pending_missing = 1 WHERE path = 'd:/rawfiles/a.mp4'");
+    touchRawSeen('d:/rawfiles/a.mp4', 300);
+    const it = listRawFiles({ missing: 'all' }).items[0];
+    expect(it?.missing).toBe(false);
+    expect(it?.pending_missing).toBe(false);
+    expect(it?.last_seen).toBe(300);
+  });
+});
+
+describe('作用域消失判定', () => {
+  it('只判 (盘符,类型) 作用域内的过期行；missing=1 不重报；返回含历史待决策总数', () => {
+    // d: video（过期→待决策）/ d: image（不在作用域，不动）/ e: video（不在作用域，不动）
+    upsertRawScanned(row({ seen: 100 }));
+    upsertRawScanned(row({ path: 'd:/rawfiles/b.jpg', ext: 'jpg', type: 'image', volume: 'd:', seen: 100 }));
+    upsertRawScanned(row({ path: 'e:/rawfiles/c.mp4', volume: 'e:', seen: 100 }));
+    const n = markPendingMissing([{ volume: 'd:', type: 'video' }], 500);
+    const items = listPendingMissing();
+    expect(items.map((i) => i.path)).toEqual(['d:/rawfiles/a.mp4']);
+    expect(n).toBe(1);
+
+    // 已决策 mark（missing=1）后，下次同作用域扫描不再上报
+    resolveMissing('mark');
+    expect(markPendingMissing([{ volume: 'd:', type: 'video' }], 600)).toBe(0);
+
+    // 补 e: video 作用域 → e 行上报；d: image 行始终不动
+    expect(markPendingMissing([{ volume: 'e:', type: 'video' }], 700)).toBe(1);
+    const items2 = listPendingMissing();
+    expect(items2.map((i) => i.path)).toEqual(['e:/rawfiles/c.mp4']);
+  });
+});
+
+describe('resolveMissing', () => {
+  it('delete 删行', () => {
+    expect(resolveMissing('delete')).toBe(1);
+    expect(listPendingMissing()).toHaveLength(0);
+  });
+});
+
+describe('listRawFiles', () => {
+  it('默认隐藏 missing；only 只看 missing；名称搜索大小写不敏感', () => {
+    upsertRawScanned(row({ path: 'd:/rawfiles/Name.MP4', name: 'Name', seen: 900 }));
+    db.exec("UPDATE raw_files SET missing = 1 WHERE path = 'd:/rawfiles/b.jpg'");
+    expect(listRawFiles({}).total).toBeGreaterThanOrEqual(1);
+    expect(listRawFiles({ q: 'name' }).total).toBe(1);
+    expect(listRawFiles({ q: 'name', missing: 'all' }).total).toBe(1);
+    expect(listRawFiles({ type: 'image', missing: 'only' }).items.map((i) => i.path)).toEqual(['d:/rawfiles/b.jpg']);
+  });
+
+  it('盘符统计分组', () => {
+    const v = rawVolumeStats().find((x) => x.volume === 'd:');
+    expect(v?.videos).toBe(2); // a.mp4 + Name.MP4
+    expect(v?.images).toBe(1); // b.jpg
+  });
+});
