@@ -423,6 +423,26 @@ describe('后台标签页驱动（advance worker 模式）', () => {
     expect(open).toMatchObject({ url: '/v/v2' });
   });
 
+  it('resumeBatch 带 reprime：踢停在目标页的闲置工作页续跑', async () => {
+    await seedBatch({
+      active: false,
+      stoppedAt: Date.now(),
+      current: null,
+      videoQueue: [{ id: 'v1', name: '视频1' }], // 停止时被中止项已放回队首
+      expectedPath: '/v/v1', // 与 worker 标签页当前 URL 相同
+    });
+    await batch.resumeBatch();
+    const open = mock.sendMessage.mock.calls.map((c) => c[0]).find((m) => m.type === 'rv-batch-open');
+    expect(open).toMatchObject({ url: '/v/v1', reprime: true });
+  });
+
+  it('startBatch 不带 reprime（新批次无需踢闲置页）', async () => {
+    setPage('/v', SINGLES);
+    await batch.startBatch('single');
+    const open = mock.sendMessage.mock.calls.map((c) => c[0]).find((m) => m.type === 'rv-batch-open');
+    expect(open.reprime).toBeFalsy();
+  });
+
   it('onDownloadSettled 在工作标签页内自驱（不发 rv-batch-open）', async () => {
     await seedBatch({ current: { id: 'v1', name: '视频1' }, videoQueue: [{ id: 'v2', name: '视频2' }] });
     await batch.onDownloadSettled({ ok: true });

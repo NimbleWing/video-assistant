@@ -375,6 +375,9 @@ function runCommand(cmd, value) {
     batch.retryLedgerFailed().catch((e) => hud.toast(e.message, 4000));
   } else if (cmd === 'batch-resume') {
     batch.resumeBatch().catch((e) => hud.toast(e.message, 4000));
+  } else if (cmd === 'batch-continue') {
+    // SW reprime 踢闲置工作页续跑（继续剩余时标签页已停在目标页、不重导航）
+    batch.maybeContinueBatch();
   } else if (cmd === 'batch-clear') {
     batch.clearBatch().then(() => hud.toast('已清除批次记录'));
   }

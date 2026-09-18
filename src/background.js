@@ -242,9 +242,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  // 连续下载：打开/复用后台工作标签页
+  // 连续下载：打开/复用后台工作标签页（reprime = 继续剩余：踢闲置页面续跑）
   if (message.type === 'rv-batch-open') {
-    openBatchTab(String(message.url || ''))
+    openBatchTab(String(message.url || ''), !!message.reprime)
       .then((r) => sendResponse(r))
       .catch((e) => sendResponse({ ok: false, error: String((/** @type {any} */ (e))?.message || e) }));
     return true;
@@ -258,11 +258,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 /**
  * 打开或复用后台工作标签页（标签页 id 存 storage.session，SW 重启不丢）。
  * expectedPath 为站内相对路径，此处统一绝对化；已在目标页时不重导航
- * （避免"恢复"按钮打断进行中的下载）。
+ * （避免"恢复"按钮打断进行中的下载）；reprime 场景（继续剩余）例外——
+ * 标签页停在目标页但批次刚从停止恢复、页面闲置无人推进，发 batch-continue
+ * 踢其续跑，内容脚本失联（未注入/崩溃）则强制重导航兜底。
  * @param {string} url
+ * @param {boolean} [reprime]
  * @returns {Promise<{ ok: boolean, tabId?: number, error?: string }>}
  */
-async function openBatchTab(url) {
+async function openBatchTab(url, reprime = false) {
   if (!url) return { ok: false, error: '缺少目标地址' };
   const abs = url.startsWith('http') ? url : `https://rou.video${url}`;
   try {
@@ -271,7 +274,13 @@ async function openBatchTab(url) {
     if (tabId != null) {
       try {
         const tab = await chrome.tabs.get(tabId);
-        if (tab && (tab.url === abs || tab.pendingUrl === abs)) return { ok: true, tabId };
+        if (tab && (tab.url === abs || tab.pendingUrl === abs)) {
+          if (reprime) {
+            const pong = await chrome.tabs.sendMessage(tabId, { type: 'rv-cmd', cmd: 'batch-continue' }).catch(() => null);
+            if (!pong) await chrome.tabs.update(tabId, { url: abs });
+          }
+          return { ok: true, tabId };
+        }
         await chrome.tabs.update(tabId, { url: abs });
         return { ok: true, tabId };
       } catch { /* 标签页已不在，开新的 */ }

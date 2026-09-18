@@ -309,15 +309,18 @@ function navTo(url) {
  * @param {BatchState} b
  * @param {'self' | 'worker'} drive self = 当前标签页自驱（工作标签页内）；
  *   worker = 交给 SW 打开/复用后台标签页（面板/发起页调用，不劫持当前页）
+ * @param {boolean} [reprime] worker 已停在目标页时踢其续跑（继续剩余场景：
+ *   停止后被中止项回队首，expectedPath 与 worker 标签页 URL 相同，
+ *   不重导航页面就不刷新、批次无人推进）
  */
-async function advance(b, drive) {
+async function advance(b, drive, reprime = false) {
   const v = b.videoQueue.shift();
   if (v) {
     b.current = v;
     b.note = `下载中：${v.name}`;
     b.expectedPath = `/v/${encodeURIComponent(v.id)}`; // 认领标记：只推进自己导航出的页面
     await saveBatch(b);
-    if (drive === 'worker' && await requestWorker(b.expectedPath)) return;
+    if (drive === 'worker' && await requestWorker(b.expectedPath, reprime)) return;
     navTo(b.expectedPath);
     return;
   }
@@ -327,7 +330,7 @@ async function advance(b, drive) {
     b.note = `读取剧集：${s.name}`;
     b.expectedPath = `/s/${encodeURIComponent(s.id)}`;
     await saveBatch(b);
-    if (drive === 'worker' && await requestWorker(b.expectedPath)) return;
+    if (drive === 'worker' && await requestWorker(b.expectedPath, reprime)) return;
     navTo(b.expectedPath);
     return;
   }
@@ -337,7 +340,7 @@ async function advance(b, drive) {
     b.note = `翻页收割：${lp}`;
     b.expectedPath = lp;
     await saveBatch(b);
-    if (drive === 'worker' && await requestWorker(b.expectedPath)) return;
+    if (drive === 'worker' && await requestWorker(b.expectedPath, reprime)) return;
     navTo(b.expectedPath);
     return;
   }
@@ -356,10 +359,11 @@ async function advance(b, drive) {
  * 让 SW 打开/复用后台工作标签页（认领制：标签页加载后自行续跑流水线）。
  * 失败必须可见并降级为当前页驱动——否则批次停在 active 却无人推进（静默失败）。
  * @param {string} url
+ * @param {boolean} [reprime] 标签页已停在目标页时踢其续跑而非跳过
  * @returns {Promise<boolean>} 是否成功交给后台标签页
  */
-async function requestWorker(url) {
-  const r = await chrome.runtime.sendMessage({ type: 'rv-batch-open', url }).catch((e) => ({ ok: false, error: String(/** @type {any} */ (e)?.message || e) }));
+async function requestWorker(url, reprime = false) {
+  const r = await chrome.runtime.sendMessage({ type: 'rv-batch-open', url, reprime }).catch((e) => ({ ok: false, error: String(/** @type {any} */ (e)?.message || e) }));
   if (r?.ok) return true;
   const msg = `后台标签页打开失败（${r?.error || '无应答'}），改为当前页驱动`;
   Logger.warn('BATCH', msg);
@@ -522,7 +526,7 @@ export async function resumeBatch() {
   b.note = '继续剩余项';
   await saveBatch(b);
   Logger.info('BATCH', `继续剩余：视频 ${b.videoQueue.length}，剧集 ${b.seriesQueue.length}，翻页 ${b.listingPages.length}`);
-  await advance(b, 'worker');
+  await advance(b, 'worker', true);
 }
 
 // 每个下载结束后由 main 调用；返回是否属于连续下载任务。

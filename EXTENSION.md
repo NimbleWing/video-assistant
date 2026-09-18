@@ -28,7 +28,7 @@ rou.video 的 Chrome MV3 扩展（由油猴脚本移植）：播放页解析 HLS
 
 ## 连续下载
 
-发起页收割 → SW 开后台标签页（`storage.session` 记 id，完成自动关闭，被关可一键恢复）跑流水线；认领制（`expectedPath`）保证用户浏览不干扰批次。
+发起页收割 → SW 开后台标签页（`storage.session` 记 id，完成自动关闭，被关可一键恢复）跑流水线；认领制（`expectedPath`）保证用户浏览不干扰批次。「继续剩余」带 `reprime` 标记：worker 标签页已停在目标页时不重导航，改发 `batch-continue` 命令踢闲置页面续跑（内容脚本失联则强制重导航兜底）——否则停止后被中止项回队首、继续后 expectedPath 与标签页 URL 相同，页面不刷新导致批次无人推进。
 
 ## 开发与发布约定
 

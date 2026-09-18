@@ -1,6 +1,6 @@
 {
   "name": "rouvideo-assistant",
-  "version": "1.11.1",
+  "version": "1.11.2",
   "private": true,
   "type": "module",
   "description": "肉视频助手 Chrome 扩展 — 开发工具链（测试/静态检查），扩展本体无运行时依赖",
