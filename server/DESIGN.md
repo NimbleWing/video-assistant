@@ -28,7 +28,7 @@
 
 职责边界：
 
-- **服务**：被动存储与查询。磁盘扫描、去重判定查询、下载账本、管理页（配置/分页浏览/播放/账本）。不主动驱动浏览器。
+- **服务**：被动存储与查询。磁盘扫描、去重判定查询、下载账本、原始资料库（各盘 RawFiles/ 盘点 + 抽样 hash，见 §6）、管理页（配置/分页浏览/播放/账本/原始资料）。不主动驱动浏览器。
 - **扩展**：所有下载生命周期事件的发起方与上报方；重试动作由扩展发起（服务开不了标签页）。
 
 判定链（三层，逐级回退）：
@@ -54,7 +54,8 @@ server/src/
 │   ├── meta.ts          # meta KV 表 get/set（scan_dirs 等配置存储，后续 feature 可复用）
 │   ├── http.ts          # json() / readJson() / asRecord() / HttpError / Route 与 RequestContext 类型
 │   ├── static.ts        # public/ 静态服务（MIME 表 + 防路径穿越）
-│   └── paths.ts         # normPath / stemOf / volumeOf / typeOfExt 纯函数
+│   ├── paths.ts         # normPath / stemOf / volumeOf / typeOfExt 纯函数
+│   └── hls-core.ts      # HLS 会话状态机 + ffmpeg 探测（无业务语义：键泛化为字符串，media/raw 共用）
 └── features/
     ├── media/           # 媒体库：磁盘实况（files 表）
     │   ├── index.ts     # 桶导出
@@ -62,9 +63,19 @@ server/src/
     │   ├── scanner.ts   # 扫描（消费 lib/meta 的 scan_dirs）
     │   ├── mp4.ts       # mvhd 流式时长解析
     │   ├── stream.ts    # /stream/:id Range 直连播放（封面图 + ffmpeg 缺失时的前端降级目标）
-    │   ├── hls.ts       # /stream/:id/index.m3u8 + /seg/:n.ts：ffmpeg -c copy 按需分段（会话状态机）
+    │   ├── hls.ts       # media 适配层：files.id → 行/时长（DB 缓存）→ lib/hls-core 会话
     │   ├── routes.ts    # /api/videos、/api/files、/api/exists、/api/scan、/api/config
     │   └── types.ts     # FileRow / VideoItem / ScanResult / 各响应 DTO（纯类型）
+    ├── raw/             # 原始资料库：各盘 RawFiles/ 盘点 + 抽样 hash（raw_files 表）
+    │   ├── index.ts     # 桶导出
+    │   ├── files.ts     # raw_files 表 DDL + 全部操作（upsert/touch/markPendingMissing/list/resolve）
+    │   ├── hash.ts      # 抽样 SHA-256（头/中/尾 64KB + size）+ .ts 魔数嗅探
+    │   ├── volumes.ts   # 盘符探测（A:–Z: 根下 RawFiles/ 存在才返回 + statfs 容量）
+    │   ├── scanner.ts   # 扫描任务（单任务、作用域消失判定、协作取消、SSE 广播）
+    │   ├── stream.ts    # /api/raw/file/:id/content（图片/原生视频 Range 直连）
+    │   ├── hls.ts       # raw 适配层：raw_files.id → 行 → ffmpeg 探时长 → lib/hls-core 会话
+    │   ├── routes.ts    # /api/raw/*（volumes/scan/status/events/files/missing/file）
+    │   └── types.ts     # RawFileRow / RawScanStatus 等响应 DTO（纯类型）
     ├── ledger/          # 下载账本（downloads 表）
     │   ├── index.ts / downloads.ts / routes.ts / types.ts
     └── system/          # 服务级
@@ -88,7 +99,7 @@ server/src/
 - 数据库文件 `server/media.db`、日志 `server/server.log`（均锚定 server 根，代码经 `src/..` 相对定位，不依赖 cwd）。
 - 开发命令：`server/` 内 `npm run check`（typecheck + test）。根目录 lint/typecheck 已排除 server（对齐 server-web 策略：无 eslint，tsc strict + 测试把关）。
 
-## 4. 数据库设计（三张表）
+## 4. 数据库设计（四张表）
 
 ```sql
 -- 1. files：磁盘实况，去重判定唯一依据
@@ -131,7 +142,26 @@ CREATE UNIQUE INDEX idx_dl ON downloads (site, video_id);
 
 -- 3. meta：配置与扫描游标
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
--- scan_dirs（JSON 数组）、ffmpeg_path（HLS 流用，空/缺省 = PATH 探测）、每目录 mtime 游标、页面偏好
+-- scan_dirs（JSON 数组）、ffmpeg_path（HLS 流用，空/缺省 = PATH 探测）、每目录 mtime 游标、
+-- raw_last_selection（原始资料页上次的盘符+类型勾选）、页面偏好
+
+-- 4. raw_files：原始资料库（各盘 RawFiles/ 盘点 + hash 查重底账）
+CREATE TABLE raw_files (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  path            TEXT NOT NULL UNIQUE,       -- 绝对路径，normPath 归一（小写 + 正斜杠）
+  hash            TEXT NOT NULL,              -- 抽样 SHA-256 hex（头/中/尾 64KB + size）
+  name            TEXT NOT NULL,              -- basename 去扩展名，保留原始大小写（展示用）
+  ext             TEXT NOT NULL,              -- mp4 / ts / jpg ...
+  type            TEXT NOT NULL CHECK (type IN ('video','image')),
+  size            INTEGER NOT NULL,
+  mtime           INTEGER NOT NULL,           -- 跳过重算的三键之一
+  volume          TEXT NOT NULL,              -- 'd:'（列表筛选 + 消失判定作用域）
+  missing         INTEGER NOT NULL DEFAULT 0, -- 用户已确认的消失标记（不重报，查重排除）
+  pending_missing INTEGER NOT NULL DEFAULT 0, -- 扫描发现消失、待用户决策
+  first_seen      INTEGER NOT NULL,
+  last_seen       INTEGER NOT NULL
+);
+CREATE INDEX idx_raw_hash ON raw_files (hash);  -- 后续查重的关键路径
 ```
 
 已定决策记录：
@@ -146,6 +176,19 @@ CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 | skipped 入账？ | 入账 | 支撑「该站点哪些视频没下过」视角：`status NOT IN ('complete','skipped')` |
 | `.ts` 透传文件 | type='video' | 对齐扩展落盘行为（非 H.264 流存 .ts） |
 | 封面存储 | 同表 `type='cover'` | 单片：stem 与视频相同；剧集：stem=剧名，与分集靠同目录关联 |
+
+raw 已定决策记录：
+
+| 决策 | 结论 | 备注 |
+|------|------|------|
+| 与 media 的关系 | 独立 feature + 独立表 | 扫描策略（盘符 RawFiles/ vs 配置目录）、字段（hash）、用途（盘点/查重 vs 下载判定）全不同；互不 import |
+| 消失处理 | 不自动删行 | 扫描结束上报「待决策」清单（pending_missing），用户批量删除或标记；missing=1 不重报，文件重现自动归 0；后续查重只看 missing=0 |
+| hash 算法 | 抽样 SHA-256 | 头/中/尾各 64KB + size；全文件读整盘小时级不可接受；查重时可再对候选对补全文件校验 |
+| hash 时机 | 扫描 inline 计算 | path+size+mtime 三键未变 → 沿用旧 hash 只刷 last_seen（重扫近纯遍历） |
+| 假消失防护 | 消失判定限定作用域 | 只对本次实际扫过的 (盘符, 类型) 组合判定，勾选类型变化不误伤 |
+| `.ts` 歧义 | 魔数嗅探 | 首字节 0x47 且偏移 188 处 0x47 判视频，否则整文件跳过；复用 hash 头部缓冲零额外 IO |
+| 扩展名清单 | video=mp4/ts/mkv/avi/mov/wmv/flv/webm/m4v/mpg/mpeg/rm/rmvb；image=jpg/jpeg/png | 清单内聚 features/raw，不动 lib/paths 的 typeOfExt |
+| 启动行为 | 不自动扫 | raw 永远手动触发（可能挂冷备份盘）；上次勾选存 meta（raw_last_selection） |
 
 ### 匹配与维护语义
 
@@ -173,6 +216,16 @@ CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 | `GET /stream/:id/index.m3u8` | 页面 | HLS VOD 清单（服务端自生成，段数按时长算，详见 §7） |
 | `GET /stream/:id/seg/:n.ts` | 页面 | 按需驱动 ffmpeg 生成第 n 段 MPEG-TS 并回流（`-c copy` 无损重整） |
 | `GET /` | 页面 | 管理页：配置、视频分页浏览、播放、账本 |
+| `GET /api/raw/volumes` | 页面 | 原始资料盘符列表：探测 `A:`–`Z:` 根下 `RawFiles/` 目录，**只返回存在的盘**，附 statfs 总容量/剩余空间；网络盘等无盘符形态不支持 |
+| `POST /api/raw/scan` | 页面 | 启动原始资料扫描 `{volumes:['d:'], types:['video','image']}`：202 即返（异步任务）；已有任务 409；请求时二次校验 RawFiles 存在性（拔盘跳过记 warning） |
+| `POST /api/raw/scan/cancel` | 页面 | 协作式取消（文件/目录间查标志位；取消**不做**消失判定，已入库数据保留） |
+| `GET /api/raw/scan/status` | 页面 | 任务快照 `{running, currentVolume, scanned, videos, images, lastResult}`（无 SSE 环境兜底；结果保留到下次启动） |
+| `GET /api/raw/scan/events` | 页面 | **SSE**：连接即推 `snapshot` → 运行中 ~500ms 推 `progress` → 结束推 `done`（含 missingCount 摘要）；15s 心跳注释行保活 |
+| `GET /api/raw/files?page=&size=&q=&type=&volume=&missing=` | 页面 | 分页 + 名称搜索 + 类型/盘符筛选，`ORDER BY last_seen DESC, id DESC`；missing 取值 hide(默认)/only/all |
+| `GET /api/raw/missing` | 页面 | 待决策消失清单（pending_missing=1，全量返回） |
+| `POST /api/raw/missing/resolve` | 页面 | `{op:'delete'\|'mark'}` 批量处理全部待决策行：delete 删行；mark 置 missing=1；均清 pending_missing |
+| `GET /api/raw/file/:id/content` | 页面 | 图片缩略图 / 原生格式视频 Range 直连（mp4/webm/m4v/mov/mkv） |
+| `GET /api/raw/file/:id/index.m3u8` + `/seg/:seg` | 页面 | 非原生格式视频 HLS 转码（复用 lib/hls-core；ffmpeg 缺失 503 → 前端禁播提示） |
 
 安全：仅监听 127.0.0.1；校验 `Origin`/`Referer` 头，放行扩展 origin（`chrome-extension://fieogbjpjaiokpmfkokckebfaojncomm`）与自身页面，其余 403。无鉴权 token（本地个人使用，接受）。
 
@@ -182,6 +235,15 @@ CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 - **首次**：全量遍历，收集 `mp4/ts` → `type='video'`，`jpg/png/webp` → `type='cover'`。
 - **之后**：每目录 mtime 游标增量扫描；启动时自动增量一次 + 页面手动触发（定时任务暂不做，留配置项余地）。
 - 增量与全量同一 upsert 路径，幂等。
+
+### 原始资料库扫描（raw）
+
+- **范围**：所选盘符根下的 `RawFiles/` 目录递归遍历（用户自管目录，无系统目录排除清单）；跳过符号链接/junction（防循环）；无权限子目录静默跳过。
+- **任务模型**：全局单任务（POST 时已有任务 → 409）；202 即返，进度经 SSE 推送（见 §5）；协作式取消——取消收尾不做消失判定；与 media 扫描不互斥（扫描树不相交）。
+- **单文件流程**：stat → 按扩展名分派类型（未勾选的类型直接跳过）→ 查库中行：`path+size+mtime` 三键未变 → 只刷 `last_seen`（missing/pending_missing 归 0）；否则读头 64KB（`.ts` 在同一缓冲区做魔数嗅探，不过则整文件跳过）→ 读中/尾 64KB → 抽样 SHA-256 → upsert（hash/size/mtime/last_seen 更新，missing/pending_missing 归 0）。
+- **消失判定（作用域化）**：扫描正常完成后，对本次**实际扫过且遍历成功**的每个 (盘符, 类型) 组合：`last_seen < 本次 token 且 missing=0` 的行置 `pending_missing=1`。已标 missing=1 的不重报；未扫的类型/盘符的行不受影响（勾选类型变化不产生假消失）。
+- **待决策**：`GET /api/raw/missing` 拉清单，`POST /api/raw/missing/resolve` 批量 delete（删行）或 mark（missing=1）；不决策下次扫描继续上报。
+- **服务启动不自动扫**；页面记住上次勾选（meta.raw_last_selection）。
 
 ## 7. HLS 流播放（ffmpeg 可选增强）
 
@@ -194,6 +256,7 @@ CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 | 决策 | 结论 | 备注 |
 |------|------|------|
 | 流形态 | HLS（m3u8 + MPEG-TS 分段） | seek/缓冲由 hls.js 免费解决；fMP4 管道直出会丢 Range/seek，弃 |
+| 会话状态机归属 | **`lib/hls-core.ts`（下沉共享）** | 键从 files.id 泛化为任意字符串（`m{id}`=media、`raw-{id}`=raw），入参 = 绝对路径 + 时长；media/raw 的 hls.ts 均为薄适配层（各自负责查表/时长来源），ffmpeg 探测（ffmpegInfo/meta.ffmpeg_path）一并下沉 lib；规则例外说明：状态机无 files 表知识，属通用媒体服务设施而非业务 |
 | 重整 vs 转码 | **libx264 转码**（veryfast/CRF 23） | copy 无法修复无 ctts 源的帧级时间轴（实测段头丢帧、无 DTS）；转码代价 = 轻微质量再损 + CPU（480p 约 1 核，可接受） |
 | 切换策略 | 全部视频统一走 HLS | 单一路径可预期；`.ts` 透传文件一并救活；封面仍走 `/stream/:id` |
 | remuxer 治本 | 不修 | 新文件继续带病落盘，库外 Chrome 直开仍抖（VLC/PotPlayer 无妨），已知已接受 |
@@ -230,9 +293,9 @@ CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
   - 音频转 AAC：编码器输出完整 ADTS 帧，避免 copy 模式跨段切割 AAC 帧产生破音。
   - 临时段名 `.{n}.ts`（前置点）→ 下一段出现才改名为 `{n}.ts`，即「完整性确认」信号。
 
-### 7.4 会话状态机（移植自 stash StreamManager，简化为单文件粒度）
+### 7.4 会话状态机（lib/hls-core.ts，media/raw 共用）
 
-- 会话键 = `files.id`，缓存根 `os.tmpdir()/rou-media-hls/<id>/`；服务启动时清空缓存根（残留自杀清理）。
+- 会话键 = 调用方传入的字符串（media 用 `m{files.id}`、raw 用 `raw-{raw_files.id}`，键内非法路径字符统一替换 `-`），缓存根 `os.tmpdir()/rou-hls/<key>/`（服务启动时清空缓存根，残留自杀清理；同时清理旧版 `rou-media-hls` 遗留目录）；raw 侧时长无 DB 缓存列，每次建会话 `ffmpeg -i` 现探。
 - 全局 200ms monitor tick（有会话才运行）：
   1. **段确认**：从 `procSegment` 起向上扫 `.{i}.ts`，存在则将上一段改名转正（重复生成不覆盖已有段）；进程退出时按退出码决定末段转正（成功）或删除（失败，可能不完整）。
   2. **等待段派发**：文件已出现 → 回流该段（`video/mp2t`，`createReadStream` 管道）；超时 15s → 500。
@@ -266,7 +329,8 @@ CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 2. **P2 管理页**：配置、视频分页浏览、播放（Range 流）、账本页。
 3. **P3 扩展接入**：判定接入 + 回退、生命周期上报、manifest 权限。
 4. **P4 增强**：逃生门、失败重试持久化拉取。
-5. **P5 HLS 流播放**：ffmpeg 探测与配置、m3u8/分段端点与会话状态机、管理页 hls.js 播放 + 降级链（本次）。
+5. **P5 HLS 流播放**：ffmpeg 探测与配置、m3u8/分段端点与会话状态机、管理页 hls.js 播放 + 降级链。
+6. **P6 原始资料库**（本次）：前置独立 commit——hls-core 下沉重构 + 测试迁移；随后 features/raw（表/抽样 hash/扫描任务/SSE/全部接口）+ 管理页「原始资料」页（磁盘选择/进度/卡片浏览/播放/消失决策）。
 
 ## 11. 待确认项
 

@@ -4,7 +4,8 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { json, type Route } from '../../lib/http.ts';
 import { SERVER_ROOT } from '../../lib/db.ts';
-import { mediaStats, ffmpegInfo } from '../media/index.ts';
+import { ffmpegInfo } from '../../lib/hls-core.ts';
+import { mediaStats } from '../media/index.ts';
 import { dlStatusCounts } from '../ledger/index.ts';
 import type { LogResponse, PingResponse } from './types.ts';
 

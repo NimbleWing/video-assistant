@@ -1,7 +1,7 @@
 // HLS 纯函数单测：清单生成 / 段号解析 / ffmpeg 参数（会话状态机依赖真实进程，不在此覆盖）。
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
-import { buildFfmpegArgs, buildManifest, parseSegmentParam, segmentCount } from './hls.ts';
+import { buildFfmpegArgs, buildManifest, parseSegmentParam, segmentCount } from './hls-core.ts';
 
 describe('segmentCount', () => {
   it('floor(duration/2)，至少 1 段', () => {

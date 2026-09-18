@@ -2,8 +2,9 @@
 // /stream/:id（Range 直连）、/stream/:id/index.m3u8 + /seg/:seg（HLS 流）。
 import { promises as fs } from 'node:fs';
 import { asRecord, HttpError, json, readJson, type Route } from '../../lib/http.ts';
+import { ffmpegInfo, getFfmpegPath, resetFfmpegProbe, setFfmpegPath } from '../../lib/hls-core.ts';
 import { listVideos, listVolumes, queryExists, setFileDuration, upsertFileRecorded } from './files.ts';
-import { ffmpegInfo, getFfmpegPath, hlsManifestHandler, hlsSegmentHandler, resetFfmpegProbe, setFfmpegPath } from './hls.ts';
+import { hlsManifestHandler, hlsSegmentHandler } from './hls.ts';
 import { mp4Duration } from './mp4.ts';
 import { scanAll, saveScanDirs, scanDirs } from './scanner.ts';
 import { streamHandler } from './stream.ts';
