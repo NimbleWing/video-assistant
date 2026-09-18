@@ -8,7 +8,7 @@ import {
   resolveRawMissing,
   startRawScan,
 } from '@/lib/api';
-import type { RawFileRow, RawFilesResponse, RawVolumesResponse, RawScanStatus } from '@/lib/types';
+import type { RawFileRow, RawFilesResponse, RawScanStatus, RawVolumesResponse } from '@/lib/types';
 import { Raw } from './Raw';
 
 vi.mock('@/lib/api', () => ({
@@ -59,6 +59,7 @@ function row(partial: Partial<RawFileRow> = {}): RawFileRow {
     volume: 'd:',
     missing: false,
     pending_missing: false,
+    archived: false,
     first_seen: 1,
     last_seen: 2,
     ...partial,
@@ -146,7 +147,7 @@ describe('Raw 扫描面板', () => {
     act(() => {
       es.emit('done', {
         running: false,
-        lastResult: { ms: 1500, newCount: 3, updatedCount: 1, missingCount: 0, warnings: [], canceled: false },
+        lastResult: { ms: 1500, newCount: 3, updatedCount: 1, movedCount: 0, missingCount: 0, warnings: [], canceled: false },
       });
     });
     expect(screen.getByText(/上次扫描：新增 3 · 更新 1/)).toBeTruthy();
@@ -162,7 +163,7 @@ describe('Raw 扫描面板', () => {
     act(() => {
       es.emit('done', {
         running: false,
-        lastResult: { ms: 10, newCount: 1, updatedCount: 0, missingCount: 1, warnings: [], canceled: false },
+        lastResult: { ms: 10, newCount: 1, updatedCount: 0, movedCount: 0, missingCount: 1, warnings: [], canceled: false },
       });
     });
     // done 后拉取待决策清单（refreshMissing）→ 横幅出现
@@ -206,7 +207,9 @@ describe('Raw 文件浏览', () => {
   });
 
   it('非原生格式（avi）播放不 preferDirect；mkv 直连优先', async () => {
-    mockedFiles.mockResolvedValue(filesResp({ items: [row({ ext: 'avi' }), row({ id: 8, name: 'b', ext: 'mkv' })] }));
+    mockedFiles.mockResolvedValue(
+      filesResp({ items: [row({ ext: 'avi' }), row({ id: 8, name: 'b', ext: 'mkv', path: 'd:/rawfiles/b.mkv' })] }),
+    );
     const { onPlay } = renderRaw();
     fireEvent.click(await screen.findByRole('button', { name: '播放 a' }));
     expect(onPlay).toHaveBeenLastCalledWith(
@@ -231,5 +234,33 @@ describe('Raw 文件浏览', () => {
     const { onStat } = renderRaw();
     await screen.findByText('a');
     expect(onStat).toHaveBeenCalledWith('资料 1 · 视频 1 · 图片 0');
+  });
+
+  it('archived 卡片：标题=当前名（path 末段），副行显示最初名', async () => {
+    mockedFiles.mockResolvedValue(
+      filesResp({ items: [row({ name: 'origin', path: 'd:/rawfiles/renamed.mp4', archived: true })] }),
+    );
+    renderRaw();
+    await screen.findByText('renamed');
+    expect(screen.getByText('最初：origin')).toBeTruthy();
+  });
+
+  it('页面不渲染变更记录区块（已迁移至归档资料页）', async () => {
+    renderRaw();
+    await screen.findByText('a');
+    expect(screen.queryByText('变更记录')).toBeNull();
+  });
+
+  it('done 结果摘要含合并移动数', async () => {
+    renderRaw();
+    await screen.findByRole('button', { name: '盘符 d:' });
+    const es = FakeEventSource.instances.at(-1) as FakeEventSource;
+    act(() => {
+      es.emit('done', {
+        running: false,
+        lastResult: { ms: 1500, newCount: 1, updatedCount: 2, movedCount: 3, missingCount: 0, warnings: [], canceled: false },
+      });
+    });
+    expect(screen.getByText(/合并移动 3/)).toBeTruthy();
   });
 });

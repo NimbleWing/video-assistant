@@ -7,6 +7,7 @@ export interface RawFileRow {
   id: number;
   path: string;
   hash: string;
+  /** 最初名字（改名永不更新，供扩展下载查重）。 */
   name: string;
   ext: string;
   type: RawType;
@@ -15,6 +16,8 @@ export interface RawFileRow {
   volume: string;
   missing: boolean;
   pending_missing: boolean;
+  /** 已归档（发生过移动/改名）。 */
+  archived: boolean;
   first_seen: number;
   last_seen: number;
 }
@@ -53,6 +56,8 @@ export interface RawScanResult {
   ms: number;
   newCount: number;
   updatedCount: number;
+  /** 配对合并的移动/改名对数（旧行续命，非真新增）。 */
+  movedCount: number;
   /** 全部待决策消失数（含历史未决策）。 */
   missingCount: number;
   warnings: string[];
@@ -95,4 +100,34 @@ export type RawResolveOp = 'delete' | 'mark';
 export interface RawResolveResponse {
   ok: boolean;
   affected: number;
+}
+
+/** 变更日志条目：事件 + 关联的 raw_files 行（行被删则为 null，悬空保留）。 */
+export interface RawEventItem {
+  id: number;
+  kind: 'rename' | 'move';
+  result: string;
+  created_at: number;
+  file: { id: number; path: string; hash: string; name: string; volume: string; size: number } | null;
+}
+
+export interface RawEventsResponse {
+  ok: boolean;
+  total: number;
+  items: RawEventItem[];
+}
+
+/** 归档文件条目：archived=1 的逻辑文件 + 归档登记（最新名）+ 变更计数。 */
+export interface ArchivedItem extends RawFileRow {
+  /** 最新名字（raw_archive.name）。 */
+  latest_name: string;
+  /** 变更事件数。 */
+  event_count: number;
+}
+
+export interface RawArchivedResponse {
+  ok: boolean;
+  total: number;
+  items: ArchivedItem[];
+  volumes: RawVolumeStat[];
 }

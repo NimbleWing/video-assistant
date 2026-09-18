@@ -5,10 +5,11 @@ import { PlayerDialog } from '@/components/PlayerDialog';
 import type { PlaySource } from '@/components/PlayerDialog';
 import { Videos } from '@/features/Videos';
 import { Raw } from '@/features/Raw';
+import { Archive } from '@/features/Archive';
 import { Ledger } from '@/features/Ledger';
 import { Settings } from '@/features/Settings';
 
-type Tab = 'videos' | 'raw' | 'ledger' | 'settings';
+type Tab = 'videos' | 'raw' | 'archive' | 'ledger' | 'settings';
 
 const icon = (path: ReactNode) => (
   <svg
@@ -45,6 +46,17 @@ const TABS = [
         <ellipse cx="12" cy="5.5" rx="8" ry="2.8" />
         <path d="M4 5.5v13c0 1.55 3.58 2.8 8 2.8s8-1.25 8-2.8v-13" />
         <path d="M4 12c0 1.55 3.58 2.8 8 2.8s8-1.25 8-2.8" />
+      </>,
+    ),
+  },
+  {
+    key: 'archive',
+    label: '归档资料',
+    icon: icon(
+      <>
+        <rect x="3" y="4" width="18" height="5" rx="1.5" />
+        <path d="M5 9v9.5c0 1 .8 1.5 1.8 1.5h10.4c1 0 1.8-.5 1.8-1.5V9" />
+        <path d="M10 13h4" />
       </>,
     ),
   },
@@ -98,6 +110,7 @@ export default function App() {
           />
         )}
         {tab === 'raw' && <Raw onStat={setStat} onPlay={setPlaying} />}
+        {tab === 'archive' && <Archive onStat={setStat} onPlay={setPlaying} />}
         {tab === 'ledger' && <Ledger />}
         {tab === 'settings' && <Settings />}
       </Layout>

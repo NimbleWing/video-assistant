@@ -1,11 +1,13 @@
 // 原始资料库 API 路由：/api/raw/*（volumes/scan 启停/状态/SSE/files/missing/file 内容与 HLS）。
 import { asRecord, HttpError, json, readJson, type Route } from '../../lib/http.ts';
-import { listRawFiles, listPendingMissing, resolveMissing, rawVolumeStats } from './files.ts';
+import { listArchivedFiles, listRawEvents, listRawFiles, listPendingMissing, resolveMissing, rawVolumeStats } from './files.ts';
 import { probeRawVolumes } from './volumes.ts';
 import { cancelRawScan, rawLastSelection, rawScanStatus, startRawScan } from './scanner.ts';
 import { rawContentHandler } from './stream.ts';
 import { rawManifestHandler, rawSegmentHandler } from './hls.ts';
 import type {
+  RawArchivedResponse,
+  RawEventsResponse,
   RawFilesResponse,
   RawMissingResponse,
   RawResolveOp,
@@ -102,6 +104,29 @@ const resolveRoute: Route['handler'] = async ({ req, res }) => {
   json(res, 200, r);
 };
 
+const rawEventsRoute: Route['handler'] = ({ res, url }) => {
+  const r = listRawEvents({
+    page: Number(url.searchParams.get('page')) || 1,
+    size: Number(url.searchParams.get('size')) || 50,
+    kind: url.searchParams.get('kind') ?? undefined,
+    fileId: Number(url.searchParams.get('file_id')) || undefined,
+  });
+  const body: RawEventsResponse = { ok: true, ...r };
+  json(res, 200, body);
+};
+
+const archivedRoute: Route['handler'] = ({ res, url }) => {
+  const r = listArchivedFiles({
+    page: Number(url.searchParams.get('page')) || 1,
+    size: Number(url.searchParams.get('size')) || 50,
+    q: url.searchParams.get('q') ?? undefined,
+    type: url.searchParams.get('type') ?? undefined,
+    volume: url.searchParams.get('volume') ?? undefined,
+  });
+  const body: RawArchivedResponse = { ok: true, ...r, volumes: rawVolumeStats() };
+  json(res, 200, body);
+};
+
 export const rawRoutes: Route[] = [
   { method: 'GET', path: '/api/raw/volumes', handler: volumesRoute },
   { method: 'POST', path: '/api/raw/scan', handler: startScanRoute },
@@ -111,6 +136,8 @@ export const rawRoutes: Route[] = [
   { method: 'GET', path: '/api/raw/files', handler: filesRoute },
   { method: 'GET', path: '/api/raw/missing', handler: missingRoute },
   { method: 'POST', path: '/api/raw/missing/resolve', handler: resolveRoute },
+  { method: 'GET', path: '/api/raw/events', handler: rawEventsRoute },
+  { method: 'GET', path: '/api/raw/archived', handler: archivedRoute },
   { method: 'GET', path: '/api/raw/file/:id/content', handler: rawContentHandler },
   { method: 'HEAD', path: '/api/raw/file/:id/content', handler: rawContentHandler },
   { method: 'GET', path: '/api/raw/file/:id/index.m3u8', handler: rawManifestHandler },

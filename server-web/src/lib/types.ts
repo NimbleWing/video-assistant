@@ -30,6 +30,10 @@ export type {
   RawMissingResponse,
   RawResolveOp,
   RawResolveResponse,
+  RawEventItem,
+  RawEventsResponse,
+  ArchivedItem,
+  RawArchivedResponse,
 } from '../../../server/src/features/raw/types';
 export type {
   DlStatus,

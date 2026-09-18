@@ -2,6 +2,8 @@ import type {
   ConfigResponse,
   DownloadsResponse,
   LogResponse,
+  RawArchivedResponse,
+  RawEventsResponse,
   RawFilesResponse,
   RawMissingResponse,
   RawResolveOp,
@@ -137,4 +139,41 @@ export function resolveRawMissing(op: RawResolveOp): Promise<RawResolveResponse>
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ op }),
   });
+}
+
+export interface RawEventsQuery {
+  page: number;
+  size: number;
+  kind?: 'rename' | 'move';
+  /** 单文件时间线：全量正序返回。 */
+  fileId?: number;
+}
+
+export function fetchRawEvents(query: RawEventsQuery): Promise<RawEventsResponse> {
+  const p = new URLSearchParams({
+    page: String(query.page),
+    size: String(query.size),
+  });
+  if (query.kind) p.set('kind', query.kind);
+  if (query.fileId != null) p.set('file_id', String(query.fileId));
+  return api(`/api/raw/events?${p.toString()}`);
+}
+
+export interface RawArchivedQuery {
+  page: number;
+  size: number;
+  q?: string;
+  type?: 'video' | 'image';
+  volume?: string;
+}
+
+export function fetchRawArchived(query: RawArchivedQuery): Promise<RawArchivedResponse> {
+  const p = new URLSearchParams({
+    page: String(query.page),
+    size: String(query.size),
+  });
+  if (query.q) p.set('q', query.q);
+  if (query.type) p.set('type', query.type);
+  if (query.volume) p.set('volume', query.volume);
+  return api(`/api/raw/archived?${p.toString()}`);
 }

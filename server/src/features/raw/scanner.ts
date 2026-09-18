@@ -5,10 +5,20 @@ import path from 'node:path';
 import { getMeta, setMeta } from '../../lib/meta.ts';
 import { normPath } from '../../lib/paths.ts';
 import { HttpError } from '../../lib/http.ts';
-import { findRawByPath, markPendingMissing, touchRawSeen, upsertRawScanned, rawTypeOfExt } from './files.ts';
+import {
+  countOtherLiveByHash,
+  findRawByPath,
+  getRawByPath,
+  listScopeDisappeared,
+  markPendingMissing,
+  mergeMove,
+  touchRawSeen,
+  upsertRawScanned,
+  rawTypeOfExt,
+} from './files.ts';
 import { isMpegTsHead, sampleFile } from './hash.ts';
 import { rawRootOf } from './volumes.ts';
-import type { RawScanResult, RawScanStatus, RawType } from './types.ts';
+import type { RawFileRow, RawScanResult, RawScanStatus, RawType } from './types.ts';
 
 interface ScanState {
   volumes: string[];
@@ -30,6 +40,13 @@ interface ScanScope {
 
 let state: ScanState | null = null;
 let lastResult: RawScanResult | null = null;
+/** 单调递增的扫描 token：快速连扫可能落在同一毫秒，Date.now() 回退取 last+1 保证严格递增（消失判定依赖 last_seen < token）。 */
+let lastToken = 0;
+
+function nextToken(): number {
+  lastToken = Math.max(Date.now(), lastToken + 1);
+  return lastToken;
+}
 
 /** 任务快照（status 端点与 SSE 事件体共用）。 */
 export function rawScanStatus(): RawScanStatus {
@@ -146,14 +163,15 @@ export function scanRawRoots(scopes: ScanScope[], types: RawType[]): Promise<Raw
   return executeScan(scopes, st);
 }
 
-/** 任务执行体：逐盘遍历入库，正常完成后做作用域化消失判定（取消不判）。 */
+/** 任务执行体：逐盘遍历入库 → 移动/改名配对合并 → 作用域化消失判定（取消两步都不做）。 */
 async function executeScan(scopes: ScanScope[], st: ScanState): Promise<RawScanResult> {
   const t0 = Date.now();
-  const token = t0;
+  const token = nextToken();
   const warnings: string[] = [];
   const completed: { volume: string; type: RawType }[] = [];
   let newCount = 0;
   let updatedCount = 0;
+  const newPaths: string[] = [];
   for (const sc of scopes) {
     if (st.cancelRequested) {
       st.canceled = true;
@@ -167,7 +185,7 @@ async function executeScan(scopes: ScanScope[], st: ScanState): Promise<RawScanR
       continue;
     }
     try {
-      const r = await walkRoot(sc.root, sc.volume, st, token);
+      const r = await walkRoot(sc.root, sc.volume, st, token, newPaths);
       newCount += r.newCount;
       updatedCount += r.updatedCount;
       for (const t of st.types) completed.push({ volume: sc.volume, type: t });
@@ -175,12 +193,58 @@ async function executeScan(scopes: ScanScope[], st: ScanState): Promise<RawScanR
       warnings.push(`${sc.volume}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
+  let movedCount = 0;
+  if (!st.canceled && newPaths.length) {
+    movedCount = pairMoves(newPaths, completed, token);
+    newCount -= movedCount; // 合并对不是真新增
+    updatedCount += movedCount; // 旧行被续命更新
+  }
   const missingCount = st.canceled ? 0 : markPendingMissing(completed, token);
-  return { ms: Date.now() - t0, newCount, updatedCount, missingCount, warnings, canceled: st.canceled };
+  return { ms: Date.now() - t0, newCount, updatedCount, movedCount, missingCount, warnings, canceled: st.canceled };
 }
 
-/** 递归遍历单盘 RawFiles：逐文件「三键跳过 / 抽样 hash / .ts 嗅探」后入库。 */
-async function walkRoot(root: string, vol: string, st: ScanState, token: number): Promise<{ newCount: number; updatedCount: number }> {
+/**
+ * 移动/改名配对（四条件，宁缺毋错）：同会话内按 hash 分组，恰好 1 消失行 + 1 新建行、
+ * 且全库无第三条 missing=0 同 hash 行 → 合并（旧行续命 + 归档 + 事件）；否则回退 pending 流程。
+ */
+function pairMoves(newPaths: string[], completed: { volume: string; type: RawType }[], token: number): number {
+  const disappeared = listScopeDisappeared(completed, token);
+  if (!disappeared.length) return 0;
+  const disByHash = new Map<string, typeof disappeared>();
+  for (const d of disappeared) {
+    const arr = disByHash.get(d.hash) ?? [];
+    arr.push(d);
+    disByHash.set(d.hash, arr);
+  }
+  const newByHash = new Map<string, RawFileRow[]>();
+  for (const p of newPaths) {
+    const row = getRawByPath(p);
+    if (!row) continue; // 理论不可达：刚 upsert 的行
+    const arr = newByHash.get(row.hash) ?? [];
+    arr.push(row);
+    newByHash.set(row.hash, arr);
+  }
+  let moved = 0;
+  for (const [hash, news] of newByHash) {
+    if (news.length !== 1) continue; // 条件①：恰好 1 新建
+    const diss = disByHash.get(hash);
+    if (!diss || diss.length !== 1) continue; // 条件①：恰好 1 消失
+    const old = diss[0] as RawFileRow;
+    const nw = news[0] as RawFileRow;
+    if (countOtherLiveByHash(hash, [old.id, nw.id]) > 0) continue; // 条件②：全库无第三条同 hash 存活行
+    if (mergeMove(old, nw, token).length) moved += 1;
+  }
+  return moved;
+}
+
+/** 递归遍历单盘 RawFiles：逐文件「三键跳过 / 抽样 hash / .ts 嗅探」后入库（新建路径累计进 newPaths 供配对）。 */
+async function walkRoot(
+  root: string,
+  vol: string,
+  st: ScanState,
+  token: number,
+  newPaths: string[],
+): Promise<{ newCount: number; updatedCount: number }> {
   let newCount = 0;
   let updatedCount = 0;
   const stack = [path.resolve(root)];
@@ -240,7 +304,10 @@ async function walkRoot(root: string, vol: string, st: ScanState, token: number)
         seen: token,
       });
       if (prev) updatedCount += 1;
-      else newCount += 1;
+      else {
+        newCount += 1;
+        newPaths.push(np);
+      }
       st.scanned += 1;
       if (type === 'video') st.videos += 1;
       else st.images += 1;

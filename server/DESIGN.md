@@ -68,13 +68,13 @@ server/src/
     │   └── types.ts     # FileRow / VideoItem / ScanResult / 各响应 DTO（纯类型）
     ├── raw/             # 原始资料库：各盘 RawFiles/ 盘点 + 抽样 hash（raw_files 表）
     │   ├── index.ts     # 桶导出
-    │   ├── files.ts     # raw_files 表 DDL + 全部操作（upsert/touch/markPendingMissing/list/resolve）
+    │   ├── files.ts     # raw_files/raw_archive/raw_events 三表 DDL + 全部操作（upsert/touch/配对合并/消失判定/事件列表）
     │   ├── hash.ts      # 抽样 SHA-256（头/中/尾 64KB + size）+ .ts 魔数嗅探
     │   ├── volumes.ts   # 盘符探测（A:–Z: 根下 RawFiles/ 存在才返回 + statfs 容量）
     │   ├── scanner.ts   # 扫描任务（单任务、作用域消失判定、协作取消、SSE 广播）
     │   ├── stream.ts    # /api/raw/file/:id/content（图片/原生视频 Range 直连）
     │   ├── hls.ts       # raw 适配层：raw_files.id → 行 → ffmpeg 探时长 → lib/hls-core 会话
-    │   ├── routes.ts    # /api/raw/*（volumes/scan/status/events/files/missing/file）
+    │   ├── routes.ts    # /api/raw/*（volumes/scan 启停/状态/SSE/files/missing/archived/file/events）
     │   └── types.ts     # RawFileRow / RawScanStatus 等响应 DTO（纯类型）
     ├── ledger/          # 下载账本（downloads 表）
     │   ├── index.ts / downloads.ts / routes.ts / types.ts
@@ -150,7 +150,7 @@ CREATE TABLE raw_files (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   path            TEXT NOT NULL UNIQUE,       -- 绝对路径，normPath 归一（小写 + 正斜杠）
   hash            TEXT NOT NULL,              -- 抽样 SHA-256 hex（头/中/尾 64KB + size）
-  name            TEXT NOT NULL,              -- basename 去扩展名，保留原始大小写（展示用）
+  name            TEXT NOT NULL,              -- **最初名字**（改名永不更新，供扩展下载查重匹配）
   ext             TEXT NOT NULL,              -- mp4 / ts / jpg ...
   type            TEXT NOT NULL CHECK (type IN ('video','image')),
   size            INTEGER NOT NULL,
@@ -158,10 +158,30 @@ CREATE TABLE raw_files (
   volume          TEXT NOT NULL,              -- 'd:'（列表筛选 + 消失判定作用域）
   missing         INTEGER NOT NULL DEFAULT 0, -- 用户已确认的消失标记（不重报，查重排除）
   pending_missing INTEGER NOT NULL DEFAULT 0, -- 扫描发现消失、待用户决策
+  archived        INTEGER NOT NULL DEFAULT 0, -- 1=发生过移动/改名（单行跟随：id 不变，path/volume 随文件更新）
   first_seen      INTEGER NOT NULL,
   last_seen       INTEGER NOT NULL
 );
 CREATE INDEX idx_raw_hash ON raw_files (hash);  -- 后续查重的关键路径
+
+-- 5. raw_archive：归档登记（一行一文件；其余数据关联 raw_files 查）
+CREATE TABLE raw_archive (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  file_id    INTEGER NOT NULL UNIQUE,
+  name       TEXT NOT NULL,        -- 当前最新名字（改名时更新；移动不动）
+  created_at INTEGER NOT NULL,     -- 首次归档时间（首次改名或移动）
+  updated_at INTEGER NOT NULL      -- 最近一次变更时间
+);
+
+-- 6. raw_events：变更日志（全部变更一张表；kind 按需扩枚举）
+CREATE TABLE raw_events (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  file_id    INTEGER NOT NULL,     -- 关联 raw_files（无外键约定，行删则悬空保留）
+  kind       TEXT NOT NULL CHECK (kind IN ('rename','move')),
+  result     TEXT NOT NULL,        -- 「名称从 xx 改为 xx」「从 xx 移动到 xx」
+  created_at INTEGER NOT NULL     -- = 扫描 token
+);
+CREATE INDEX idx_raw_events_file ON raw_events (file_id, created_at);
 ```
 
 已定决策记录：
@@ -189,6 +209,10 @@ raw 已定决策记录：
 | `.ts` 歧义 | 魔数嗅探 | 首字节 0x47 且偏移 188 处 0x47 判视频，否则整文件跳过；复用 hash 头部缓冲零额外 IO |
 | 扩展名清单 | video=mp4/ts/mkv/avi/mov/wmv/flv/webm/m4v/mpg/mpeg/rm/rmvb；image=jpg/jpeg/png | 清单内聚 features/raw，不动 lib/paths 的 typeOfExt |
 | 启动行为 | 不自动扫 | raw 永远手动触发（可能挂冷备份盘）；上次勾选存 meta（raw_last_selection） |
+| 行身份 | 单行跟随（逻辑文件） | 移动/改名不换行：UPDATE path/volume，name 永远=最初名；行仅 resolve 接口可删 |
+| 移动/改名自动判定 | 同会话配对，四条件全满足 | ①恰好 1 消失行+1 新建行同 hash ②全库无第三条 missing=0 同 hash 行 ③本次扫描正常完成；命中→旧行合并（archived=1）+写归档/事件，改名+移动同发记两条事件；不满足→回退 pending 由用户定夺，宁缺毋错 |
+| 跨会话追认 | 不做 | 分次扫描的移动由用户工作流兜底：待决策确认后手动删除，新位置行成为唯一记录 |
+| 归档表粒度 | 一行一文件 | file_id UNIQUE；name=最新名；中间历代名字不单存，沿革看 raw_events.result |
 
 ### 匹配与维护语义
 
@@ -224,6 +248,8 @@ raw 已定决策记录：
 | `GET /api/raw/files?page=&size=&q=&type=&volume=&missing=` | 页面 | 分页 + 名称搜索 + 类型/盘符筛选，`ORDER BY last_seen DESC, id DESC`；missing 取值 hide(默认)/only/all |
 | `GET /api/raw/missing` | 页面 | 待决策消失清单（pending_missing=1，全量返回） |
 | `POST /api/raw/missing/resolve` | 页面 | `{op:'delete'\|'mark'}` 批量处理全部待决策行：delete 删行；mark 置 missing=1；均清 pending_missing |
+| `GET /api/raw/events?page=&size=&kind=&file_id=` | 页面 | 变更日志：通用列表分页（kind 筛选，倒序）；`file_id` 时返回该文件全部事件（正序，弹窗用）；条目关联 raw_files 带出当前 path/hash/volume/最初名，行已删则 file=null |
+| `GET /api/raw/archived?page=&size=&q=&type=&volume=` | 页面 | 归档文件分页（`archived=1` 且 missing=0 的逻辑文件）：搜索/类型/盘符筛选；条目附最新名（raw_archive.name）与变更计数（event_count） |
 | `GET /api/raw/file/:id/content` | 页面 | 图片缩略图 / 原生格式视频 Range 直连（mp4/webm/m4v/mov/mkv） |
 | `GET /api/raw/file/:id/index.m3u8` + `/seg/:seg` | 页面 | 非原生格式视频 HLS 转码（复用 lib/hls-core；ffmpeg 缺失 503 → 前端禁播提示） |
 
@@ -242,6 +268,7 @@ raw 已定决策记录：
 - **任务模型**：全局单任务（POST 时已有任务 → 409）；202 即返，进度经 SSE 推送（见 §5）；协作式取消——取消收尾不做消失判定；与 media 扫描不互斥（扫描树不相交）。
 - **单文件流程**：stat → 按扩展名分派类型（未勾选的类型直接跳过）→ 查库中行：`path+size+mtime` 三键未变 → 只刷 `last_seen`（missing/pending_missing 归 0）；否则读头 64KB（`.ts` 在同一缓冲区做魔数嗅探，不过则整文件跳过）→ 读中/尾 64KB → 抽样 SHA-256 → upsert（hash/size/mtime/last_seen 更新，missing/pending_missing 归 0）。
 - **消失判定（作用域化）**：扫描正常完成后，对本次**实际扫过且遍历成功**的每个 (盘符, 类型) 组合：`last_seen < 本次 token 且 missing=0` 的行置 `pending_missing=1`。已标 missing=1 的不重报；未扫的类型/盘符的行不受影响（勾选类型变化不产生假消失）。
+- **移动/改名自动判定（配对合并）**：消失判定**之前**执行——本次会话累计的消失行 × 新建行按 hash 分组配对，hash 满足「恰好 1 消失 + 1 新建，且全库无第三条 missing=0 同 hash 行」时：旧行保留 id/name/first_seen，UPDATE path/volume/last_seen 并置 `archived=1`，删除本次误建的新行；`raw_archive` upsert（无行则建，改名更新 name，updated_at=token）；`raw_events` 按路径差异记 `rename`（同目录不同名）/`move`（不同目录），两者同发记两条。配对行 last_seen 已=token，自然不进 pending。取消收尾不配对（与不判消失同理）。
 - **待决策**：`GET /api/raw/missing` 拉清单，`POST /api/raw/missing/resolve` 批量 delete（删行）或 mark（missing=1）；不决策下次扫描继续上报。
 - **服务启动不自动扫**；页面记住上次勾选（meta.raw_last_selection）。
 
@@ -331,6 +358,7 @@ raw 已定决策记录：
 4. **P4 增强**：逃生门、失败重试持久化拉取。
 5. **P5 HLS 流播放**：ffmpeg 探测与配置、m3u8/分段端点与会话状态机、管理页 hls.js 播放 + 降级链。
 6. **P6 原始资料库**（本次）：前置独立 commit——hls-core 下沉重构 + 测试迁移；随后 features/raw（表/抽样 hash/扫描任务/SSE/全部接口）+ 管理页「原始资料」页（磁盘选择/进度/卡片浏览/播放/消失决策）。
+7. **P7 归档与变更日志**（本次）：raw_files 加 archived（旧行迁移）、raw_archive/raw_events 两表、扫描收尾配对合并（移动/改名自动判定，四条件宁缺毋错）、`GET /api/raw/events`、前端「变更记录」区块与卡片最初名展示。
 
 ## 11. 待确认项
 

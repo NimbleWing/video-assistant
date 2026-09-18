@@ -1,7 +1,7 @@
 // raw_files 表：原始资料库（各盘 RawFiles/ 盘点 + 抽样 hash）。DDL + 全部数据操作，仅此文件触碰本表。
 import { db, numOf, strOf, type SqlRow } from '../../lib/db.ts';
 import type { SQLInputValue } from 'node:sqlite';
-import type { RawFileRow, RawType, RawVolumeStat } from './types.ts';
+import type { ArchivedItem, RawEventItem, RawFileRow, RawType, RawVolumeStat } from './types.ts';
 
 /** 原始资料类型→扩展名清单（内聚本 feature，不动 lib/paths 的媒体判定）。 */
 const RAW_VIDEO_EXTS = new Set(['mp4', 'ts', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'webm', 'm4v', 'mpg', 'mpeg', 'rm', 'rmvb']);
@@ -28,10 +28,35 @@ db.exec(`
     volume          TEXT NOT NULL,
     missing         INTEGER NOT NULL DEFAULT 0,
     pending_missing INTEGER NOT NULL DEFAULT 0,
+    archived        INTEGER NOT NULL DEFAULT 0,
     first_seen      INTEGER NOT NULL,
     last_seen       INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_raw_hash ON raw_files (hash);
+`);
+// 旧库迁移：P6 建的表没有 archived 列（列已存在时 ALTER 报 duplicate column，吞掉即可）
+try {
+  db.exec('ALTER TABLE raw_files ADD archived INTEGER NOT NULL DEFAULT 0');
+} catch {
+  /* 列已存在 */
+}
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS raw_archive (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_id    INTEGER NOT NULL UNIQUE,
+    name       TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS raw_events (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_id    INTEGER NOT NULL,
+    kind       TEXT NOT NULL CHECK (kind IN ('rename','move')),
+    result     TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_raw_events_file ON raw_events (file_id, created_at);
 `);
 
 export interface RawScannedRow {
@@ -103,9 +128,18 @@ function toRow(r: SqlRow): RawFileRow {
     volume: strOf(r.volume),
     missing: numOf(r.missing) === 1,
     pending_missing: numOf(r.pending_missing) === 1,
+    archived: numOf(r.archived) === 1,
     first_seen: numOf(r.first_seen),
     last_seen: numOf(r.last_seen),
   };
+}
+
+/** 按 path 取完整行（配对时由扫描器调用）。 */
+export function getRawByPath(path: string): RawFileRow | null {
+  const row = db.prepare(
+    'SELECT id, path, hash, name, ext, type, size, mtime, volume, missing, pending_missing, archived, first_seen, last_seen FROM raw_files WHERE path = ?',
+  ).get(path) as SqlRow | undefined;
+  return row ? toRow(row) : null;
 }
 
 /** 文件分页查询：名称搜索（大小写不敏感 LIKE）+ 类型/盘符/missing 筛选，最近扫到的排前面。 */
@@ -133,7 +167,7 @@ export function listRawFiles(opt: ListRawOpt): { total: number; items: RawFileRo
   const wsql = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const total = numOf((db.prepare(`SELECT COUNT(*) AS n FROM raw_files ${wsql}`).get(...params) as SqlRow).n);
   const items = (db.prepare(
-    `SELECT id, path, hash, name, ext, type, size, mtime, volume, missing, pending_missing, first_seen, last_seen
+    `SELECT id, path, hash, name, ext, type, size, mtime, volume, missing, pending_missing, archived, first_seen, last_seen
      FROM raw_files ${wsql} ORDER BY last_seen DESC, id DESC LIMIT ? OFFSET ?`,
   ).all(...params, size, (page - 1) * size) as SqlRow[]).map(toRow);
   return { total, items };
@@ -142,7 +176,7 @@ export function listRawFiles(opt: ListRawOpt): { total: number; items: RawFileRo
 /** 待决策消失清单（全量返回，量级 = 上次消失数）。 */
 export function listPendingMissing(): RawFileRow[] {
   return (db.prepare(
-    'SELECT id, path, hash, name, ext, type, size, mtime, volume, missing, pending_missing, first_seen, last_seen FROM raw_files WHERE pending_missing = 1 ORDER BY path',
+    'SELECT id, path, hash, name, ext, type, size, mtime, volume, missing, pending_missing, archived, first_seen, last_seen FROM raw_files WHERE pending_missing = 1 ORDER BY path',
   ).all() as SqlRow[]).map(toRow);
 }
 
@@ -162,7 +196,181 @@ export function rawVolumeStats(): RawVolumeStat[] {
 /** 按 id 取行（内容端点 / HLS 适配层用）。 */
 export function getRawFile(id: number): RawFileRow | null {
   const row = db.prepare(
-    'SELECT id, path, hash, name, ext, type, size, mtime, volume, missing, pending_missing, first_seen, last_seen FROM raw_files WHERE id = ?',
+    'SELECT id, path, hash, name, ext, type, size, mtime, volume, missing, pending_missing, archived, first_seen, last_seen FROM raw_files WHERE id = ?',
   ).get(id) as SqlRow | undefined;
   return row ? toRow(row) : null;
+}
+
+// ---------------------------------------------------------------------------
+// 移动/改名自动判定（配对合并）—— 仅在扫描正常收尾、四条件满足时由扫描器调用
+// ---------------------------------------------------------------------------
+
+/** 本次扫过作用域内的消失行（last_seen < token 且未挂 pending——排除历史待决策，不做跨会话追认）。 */
+export function listScopeDisappeared(scopes: { volume: string; type: RawType }[], token: number): RawFileRow[] {
+  if (!scopes.length) return [];
+  const conds = scopes.map(() => '(volume = ? AND type = ?)').join(' OR ');
+  return (db.prepare(
+    `SELECT id, path, hash, name, ext, type, size, mtime, volume, missing, pending_missing, archived, first_seen, last_seen
+     FROM raw_files WHERE (${conds}) AND last_seen < ? AND missing = 0 AND pending_missing = 0`,
+  ).all(...scopes.flatMap((s) => [s.volume, s.type]), token) as SqlRow[]).map(toRow);
+}
+
+/** 全库还有几条 missing=0 的同 hash 行（排除配对双方；>0 即有副本、配对不成立）。 */
+export function countOtherLiveByHash(hash: string, excludeIds: number[]): number {
+  const ph = excludeIds.length ? `AND id NOT IN (${excludeIds.map(() => '?').join(',')})` : '';
+  return numOf((db.prepare(
+    `SELECT COUNT(*) AS n FROM raw_files WHERE hash = ? AND missing = 0 ${ph}`,
+  ).get(hash, ...excludeIds) as SqlRow).n);
+}
+
+/** 'd:/rawfiles/a/b.mp4' → 'd:/rawfiles/a'。 */
+function dirOf(p: string): string {
+  const i = p.lastIndexOf('/');
+  return i > 0 ? p.slice(0, i) : '';
+}
+
+/** 'd:/rawfiles/a/b.mp4' → 'b'（去扩展名）。 */
+function baseOf(p: string): string {
+  const seg = p.slice(p.lastIndexOf('/') + 1);
+  return seg.replace(/\.[a-z0-9]+$/i, '') || seg;
+}
+
+/**
+ * 配对合并：旧行保留 id/name(最初名)/first_seen，UPDATE 为新位置并置 archived=1；
+ * 删除本次误建的新行；raw_archive upsert（改名更新最新名）；按路径差异记 rename/move 事件（可两条）。
+ * 事务保证「合并 + 归档 + 事件」原子生效。返回产生的事件种类。
+ */
+export function mergeMove(oldRow: RawFileRow, newRow: RawFileRow, token: number): ('rename' | 'move')[] {
+  const kinds: ('rename' | 'move')[] = [];
+  const oldDir = dirOf(oldRow.path);
+  const newDir = dirOf(newRow.path);
+  const oldBase = baseOf(oldRow.path);
+  const newBase = baseOf(newRow.path);
+  if (oldDir !== newDir) kinds.push('move');
+  if (oldBase !== newBase) kinds.push('rename');
+  if (!kinds.length) return []; // 同路径同内容（理论不可达）：无事可记
+
+  db.exec('BEGIN');
+  try {
+    db.prepare('DELETE FROM raw_files WHERE id = ?').run(newRow.id);
+    db.prepare(
+      `UPDATE raw_files SET path = ?, volume = ?, size = ?, mtime = ?, hash = ?, last_seen = ?,
+       missing = 0, pending_missing = 0, archived = 1 WHERE id = ?`,
+    ).run(newRow.path, newRow.volume, newRow.size, newRow.mtime, newRow.hash, token, oldRow.id);
+    db.prepare(
+      `INSERT INTO raw_archive (file_id, name, created_at, updated_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(file_id) DO UPDATE SET name = excluded.name, updated_at = excluded.updated_at`,
+    ).run(oldRow.id, newBase, token, token);
+    for (const k of kinds) {
+      const result = k === 'move'
+        ? `从「${oldRow.path}」移动到「${newRow.path}」`
+        : `名称从「${oldBase}」改为「${newBase}」`;
+      db.prepare('INSERT INTO raw_events (file_id, kind, result, created_at) VALUES (?, ?, ?, ?)').run(oldRow.id, k, result, token);
+    }
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+  return kinds;
+}
+
+/**
+ * 变更日志查询：通用列表分页（kind 筛选，倒序）；file_id 时返回该文件全部事件（时间正序，弹窗用）。
+ * 条目关联 raw_files 带出当前信息，行已删则 file=null。
+ */
+export function listRawEvents(opt: { page?: number; size?: number; kind?: string; fileId?: number }): {
+  total: number;
+  items: RawEventItem[];
+} {
+  const conds: string[] = [];
+  const params: SQLInputValue[] = [];
+  if (opt.kind === 'rename' || opt.kind === 'move') {
+    conds.push('e.kind = ?');
+    params.push(opt.kind);
+  }
+  if (Number.isInteger(opt.fileId) && (opt.fileId as number) > 0) {
+    conds.push('e.file_id = ?');
+    params.push(opt.fileId as number);
+  }
+  const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
+  const perFile = Number.isInteger(opt.fileId) && (opt.fileId as number) > 0;
+  const total = numOf((db.prepare(`SELECT COUNT(*) AS n FROM raw_events e ${where}`).get(...params) as SqlRow).n);
+  if (perFile) {
+    // 单文件：全量正序（时间线展示）
+    const items = (db.prepare(
+      `SELECT e.id, e.kind, e.result, e.created_at, f.id AS f_id, f.path AS f_path, f.hash AS f_hash,
+              f.name AS f_name, f.volume AS f_volume, f.size AS f_size
+       FROM raw_events e LEFT JOIN raw_files f ON f.id = e.file_id ${where} ORDER BY e.id ASC`,
+    ).all(...params) as SqlRow[]).map(toEvent);
+    return { total, items };
+  }
+  const page = Math.max(1, Number(opt.page) || 1);
+  const size = Math.min(200, Math.max(1, Number(opt.size) || 50));
+  const items = (db.prepare(
+    `SELECT e.id, e.kind, e.result, e.created_at, f.id AS f_id, f.path AS f_path, f.hash AS f_hash,
+            f.name AS f_name, f.volume AS f_volume, f.size AS f_size
+     FROM raw_events e LEFT JOIN raw_files f ON f.id = e.file_id ${where}
+     ORDER BY e.id DESC LIMIT ? OFFSET ?`,
+  ).all(...params, size, (page - 1) * size) as SqlRow[]).map(toEvent);
+  return { total, items };
+}
+
+function toEvent(r: SqlRow): RawEventItem {
+  return {
+    id: numOf(r.id),
+    kind: r.kind === 'move' ? 'move' : 'rename',
+    result: strOf(r.result),
+    created_at: numOf(r.created_at),
+    file: r.f_id == null
+      ? null
+      : {
+          id: numOf(r.f_id),
+          path: strOf(r.f_path),
+          hash: strOf(r.f_hash),
+          name: strOf(r.f_name),
+          volume: strOf(r.f_volume),
+          size: numOf(r.f_size),
+        },
+  };
+}
+
+export interface ListArchivedOpt {
+  page?: number;
+  size?: number;
+  q?: string;
+  type?: string;
+  volume?: string;
+}
+
+/** 归档文件分页：archived=1 且 missing=0 的逻辑文件，附最新名（raw_archive）与变更计数。 */
+export function listArchivedFiles(opt: ListArchivedOpt): { total: number; items: ArchivedItem[] } {
+  const page = Math.max(1, Number(opt.page) || 1);
+  const size = Math.min(200, Math.max(1, Number(opt.size) || 50));
+  const where: string[] = ['f.archived = 1', 'f.missing = 0'];
+  const params: SQLInputValue[] = [];
+  if (opt.type === 'video' || opt.type === 'image') {
+    where.push('f.type = ?');
+    params.push(opt.type);
+  }
+  if (opt.volume) {
+    where.push('f.volume = ?');
+    params.push(String(opt.volume).toLowerCase());
+  }
+  if (opt.q) {
+    where.push("(f.name LIKE ? ESCAPE '\\' OR f.path LIKE ? ESCAPE '\\')");
+    const like = `%${String(opt.q).replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+    params.push(like, like);
+  }
+  const wsql = `WHERE ${where.join(' AND ')}`;
+  const total = numOf((db.prepare(`SELECT COUNT(*) AS n FROM raw_files f ${wsql}`).get(...params) as SqlRow).n);
+  const items = (db.prepare(
+    `SELECT f.id, f.path, f.hash, f.name, f.ext, f.type, f.size, f.mtime, f.volume, f.missing,
+            f.pending_missing, f.archived, f.first_seen, f.last_seen,
+            COALESCE(a.name, f.name) AS latest_name,
+            (SELECT COUNT(*) FROM raw_events e WHERE e.file_id = f.id) AS event_count
+     FROM raw_files f LEFT JOIN raw_archive a ON a.file_id = f.id
+     ${wsql} ORDER BY f.last_seen DESC, f.id DESC LIMIT ? OFFSET ?`,
+  ).all(...params, size, (page - 1) * size) as SqlRow[]).map((r) => ({ ...toRow(r), latest_name: strOf(r.latest_name), event_count: numOf(r.event_count) }));
+  return { total, items: items as ArchivedItem[] };
 }

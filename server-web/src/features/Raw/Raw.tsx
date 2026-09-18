@@ -8,10 +8,11 @@ import {
   startRawScan,
 } from '@/lib/api';
 import type { PlaySource } from '@/components/PlayerDialog';
+import { RawCard } from '@/components/RawCard';
 import { Pager } from '@/components/Pager';
 import type { RawFileRow, RawFilesResponse, RawScanStatus, RawType, RawVolumesResponse } from '@/lib/types';
 import { fmtSize } from '@/utils/format';
-import { NATIVE_VIDEO_EXTS, RawCard } from './RawCard';
+import { NATIVE_VIDEO_EXTS } from '@/components/RawCard';
 
 const DEFAULT_PAGE_SIZE = 50;
 const PAGE_SIZE_OPTIONS = [20, 50, 100];
@@ -288,8 +289,9 @@ export function Raw({ onStat, onPlay }: Props) {
           </div>
         ) : last ? (
           <div className="mt-3 text-xs text-dim" title={last.warnings.join('\n')}>
-            上次扫描：新增 {last.newCount} · 更新 {last.updatedCount} · 待决策消失 {last.missingCount} · 用时{' '}
-            {Math.max(1, Math.round(last.ms / 1000))}s{last.canceled ? ' · 已取消（未判定消失）' : ''}
+            上次扫描：新增 {last.newCount} · 更新 {last.updatedCount} · 合并移动 {last.movedCount} · 待决策消失{' '}
+            {last.missingCount} · 用时 {Math.max(1, Math.round(last.ms / 1000))}s
+            {last.canceled ? ' · 已取消（未判定消失）' : ''}
             {last.warnings.length ? ` · 警告 ${last.warnings.length} 条` : ''}
           </div>
         ) : null}
