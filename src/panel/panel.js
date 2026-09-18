@@ -167,6 +167,19 @@ function failedLink(f) {
   return `<a class="flink" href="https://rou.video/v/${encodeURIComponent(f.id)}" target="_blank" rel="noopener">${escapeHtml(f.name)}</a>`;
 }
 
+// 待处理分类展示：三个队列单位不同（视频/集=个、剧集=部、翻页=页），直接求和无参考价值
+/** @param {import('../features/batch.js').BatchState} b */
+function pendingText(b) {
+  const v = b.videoQueue?.length || 0;
+  const s = b.seriesQueue?.length || 0;
+  const p = b.listingPages?.length || 0;
+  const parts = [];
+  if (v) parts.push(`${b.mode === 'series' ? '集' : '视频'} ${v}`);
+  if (s) parts.push(`剧集 ${s}`);
+  if (p) parts.push(`翻页 ${p}`);
+  return parts.length ? parts.join(' · ') : '0';
+}
+
 // 历史批次报告：暂停原因（note）+ 失败明细 + 重试/继续/清除
 function reportHtml() {
   const b = batchState;
@@ -177,7 +190,7 @@ function reportHtml() {
   const skippedN = b.skipped || 0;
   const head = b.finishedAt
     ? `上次完成：新下 ${b.done - skippedN} · 跳过 ${skippedN} · 失败 ${failedN}`
-    : `已暂停：新下 ${b.done - skippedN} · 跳过 ${skippedN} · 失败 ${failedN} · 剩余 ${remaining}`;
+    : `已暂停：新下 ${b.done - skippedN} · 跳过 ${skippedN} · 失败 ${failedN} · 剩余 ${pendingText(b)}`;
   // 暂停原因必须可见（否则表现为"没反应"）
   const noteLine = (b.stoppedAt && b.note && b.note !== '已停止（可继续或重试失败项）')
     ? `<div class="batch-s" style="color:var(--warn,#e6a23c)">${escapeHtml(b.note)}</div>`
@@ -198,7 +211,6 @@ const ledgerRetryBtn = '<button class="ghost mini" data-bact="retry-ledger" styl
 function batchHtml() {
   const b = batchState;
   if (b?.active) {
-    const pending = (b.videoQueue?.length || 0) + (b.seriesQueue?.length || 0) + (b.listingPages?.length || 0);
     // 停滞检测：批次活着但长时间无推进（工作标签页被关/扩展出错）时给出可见提示
     const staleMs = Date.now() - (b.updatedAt || Date.now());
     const stale = staleMs > 90 * 1000;
@@ -210,7 +222,7 @@ function batchHtml() {
         </div>
         <div class="batch-s">${escapeHtml(b.note || '')}</div>
         ${stale ? `<div class="batch-s" style="color:var(--warn,#e6a23c)">长时间无推进——可点"恢复后台下载"重开工作标签页</div>` : ''}
-        <div class="batch-stats"><span>新下 ${b.done - (b.skipped || 0)}</span><span>跳过 ${b.skipped || 0}</span><span>失败 ${b.failed?.length || 0}</span><span>待处理 ${pending}</span></div>
+        <div class="batch-stats"><span>新下 ${b.done - (b.skipped || 0)}</span><span>跳过 ${b.skipped || 0}</span><span>失败 ${b.failed?.length || 0}</span><span>待处理 ${pendingText(b)}</span></div>
         <div class="batch-btns">
           <button class="ghost mini" data-bact="spawn">恢复后台下载</button>
           <button class="ghost mini" data-bact="stop">停止连续下载</button>
