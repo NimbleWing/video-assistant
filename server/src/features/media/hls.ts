@@ -151,6 +151,7 @@ export function parseSegmentParam(seg: string): number | null {
  *   （TS 只带锯齿 PTS、段头丢帧，MSE 丢帧更狠）；libx264 重建全新时间轴并输出 DTS。
  * - input 侧 -ss 定位重启段；-copyts 保持原始时间轴，seek 重启后段 PTS 与全局 2s 网格对齐；
  * - force_key_frames 每 2s 全局网格强关键帧 + split_by_time 精确切分：段起始必为关键帧、段数与清单吻合；
+ * - `-muxdelay 0 -muxpreload 0`：mpegts muxer 默认初始 DTS 偏移（≈1.4s）会吃掉段头内容，必须归零；
  * - 音频转 AAC：编码器输出完整 ADTS 帧，避免 copy 模式跨段切割 AAC 帧产生破音。
  */
 export function buildFfmpegArgs(file: string, segment: number, dir: string): string[] {
@@ -163,6 +164,7 @@ export function buildFfmpegArgs(file: string, segment: number, dir: string): str
     '-force_key_frames', 'expr:gte(t,n_forced*2)',
     '-c:a', 'aac', '-b:a', '128k', '-ac', '2',
     '-sn', '-dn', '-copyts', '-avoid_negative_ts', 'disabled',
+    '-muxdelay', '0', '-muxpreload', '0',
     '-f', 'hls',
     '-start_number', String(segment),
     '-hls_time', String(SEGMENT_SEC),

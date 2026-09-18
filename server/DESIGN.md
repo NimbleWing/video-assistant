@@ -217,7 +217,7 @@ CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p -sc_threshold 0 \
     -force_key_frames expr:gte(t,n_forced*2) \
     -c:a aac -b:a 128k -ac 2 \
-    -sn -dn -copyts -avoid_negative_ts disabled \
+    -sn -dn -copyts -avoid_negative_ts disabled -muxdelay 0 -muxpreload 0 \
     -f hls -start_number <n> -hls_time 2 -hls_flags split_by_time \
     -hls_segment_type mpegts -hls_playlist_type vod \
     -hls_segment_filename <dir>/.%d.ts <dir>/manifest.m3u8
@@ -226,6 +226,7 @@ CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
   - **libx264 重建时间轴**：源 MP4 无 ctts/DTS，copy 无法修复；编码器输出全新 DTS/PTS（B 帧重排正确）。
   - `-copyts`：保持原始时间轴，seek 重启后段 PTS 与全局 2s 网格对齐，hls.js 时间线连续。
   - `force_key_frames` 每 2s 全局网格强关键帧：段起始必为关键帧（MSE 干净 append）。
+  - `-muxdelay 0 -muxpreload 0`：mpegts muxer 默认初始 DTS 偏移（实测 ≈1.4s）会吃掉段头内容，必须归零。
   - 音频转 AAC：编码器输出完整 ADTS 帧，避免 copy 模式跨段切割 AAC 帧产生破音。
   - 临时段名 `.{n}.ts`（前置点）→ 下一段出现才改名为 `{n}.ts`，即「完整性确认」信号。
 

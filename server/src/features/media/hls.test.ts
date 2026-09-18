@@ -51,10 +51,12 @@ describe('buildFfmpegArgs', () => {
   const dir = path.join('cache', '7');
   const base = buildFfmpegArgs('g:/v/a.mp4', 0, dir);
 
-  it('转码模式（libx264 + 强制关键帧网格 + copyts + 临时段名）', () => {
+  it('转码模式（libx264 + 强制关键帧网格 + copyts + muxdelay 归零 + 临时段名）', () => {
     expect(base).toContain('libx264');
     expect(base).toContain('-force_key_frames');
     expect(base).toContain('-copyts');
+    expect(base).toContain('-muxdelay');
+    expect(base[base.indexOf('-muxdelay') + 1]).toBe('0');
     expect(base).toContain('split_by_time');
     expect(base).toContain('-hls_time');
     expect(base[base.indexOf('-hls_time') + 1]).toBe('2');
