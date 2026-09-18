@@ -13,6 +13,7 @@
     "check": "npm run typecheck && npm run test && npm run build"
   },
   "dependencies": {
+    "hls.js": "^1.6.2",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

@@ -4,11 +4,11 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { json, type Route } from '../../lib/http.ts';
 import { SERVER_ROOT } from '../../lib/db.ts';
-import { mediaStats } from '../media/index.ts';
+import { mediaStats, ffmpegInfo } from '../media/index.ts';
 import { dlStatusCounts } from '../ledger/index.ts';
 import type { LogResponse, PingResponse } from './types.ts';
 
-const pingRoute: Route['handler'] = ({ res }) => {
+const pingRoute: Route['handler'] = async ({ res }) => {
   const s = mediaStats();
   const body: PingResponse = {
     ok: true,
@@ -16,6 +16,7 @@ const pingRoute: Route['handler'] = ({ res }) => {
     videos: s.videos,
     covers: s.covers,
     downloads: dlStatusCounts(),
+    ffmpeg: await ffmpegInfo(),
   };
   json(res, 200, body);
 };

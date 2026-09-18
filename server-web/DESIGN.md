@@ -18,11 +18,11 @@
 | `src/features/Videos/index.ts` | 桶导出：`Videos`、`PlayerDialog` |
 | `src/features/Videos/Videos.tsx` | **视频库页面**：搜索防抖 300ms、盘符/类型筛选（选中盘符消失自动回退全部）、分页可调每页条数（20/50/100）与跳页 |
 | `src/features/Videos/VideoCard.tsx` | 单卡（参考 tauri-react VideoProbeCard：封面/占位 + 时长/大小/盘符角标 + hover 播放遮罩与封面缩放 + 信息区；无封面用 art 渐变占位） |
-| `src/features/Videos/PlayerDialog.tsx` | 原生 `<dialog>` + `closedby="any"`，`/stream/:id` 播放，关闭/换源时停流清理，复制路径；由 App 持有状态全局挂载（tab 切换不卸载） |
+| `src/features/Videos/PlayerDialog.tsx` | 原生 `<dialog>` + `closedby="any"`，**hls.js 走 `/stream/:id/index.m3u8` 播放**（降级链见下），关闭/换源时停流清理，复制路径；由 App 持有状态全局挂载（tab 切换不卸载） |
 | `src/features/Ledger/index.ts` | 桶导出：`Ledger` |
 | `src/features/Ledger/Ledger.tsx` | 下载账本页面：状态 chips（全部 + failed/complete/downloading/canceled/skipped 计数，默认 failed）、分页 |
 | `src/features/Settings/index.ts` | 桶导出：`Settings` |
-| `src/features/Settings/Settings.tsx` | 设置页面：扫描目录保存（POST /api/config）、立即扫描、日志尾部查看 |
+| `src/features/Settings/Settings.tsx` | 设置页面：扫描目录保存、ffmpeg 路径配置与状态显示（POST /api/config）、立即扫描、日志尾部查看 |
 | `src/lib/api.ts` | 类型化 API 客户端（fetch 包装：`ok:false` / HTTP 错误统一抛 `Error`，带服务端 error 信息） |
 | `src/lib/types.ts` | 接口模型（字段名对齐 `server/db.js` 的列名，如 `video_id`、`updated_at`） |
 | `src/utils/format.ts` | 纯函数：`fmtSize` / `fmtDur` / `fmtTime` / `fmtDate` |
@@ -54,6 +54,15 @@
 - 字体栈含 `Noto Sans TC / PingFang TC / Microsoft JhengHei`。
 - **视频卡片网格**：`grid grid-cols-2 md:3 xl:4 gap-4`；卡片 = 封面区（`aspect-video`、`object-cover`、hover `scale-105`；角标毛玻璃 `bg-black/65`：左上 ext 徽标、右上时长 `font-mono`、左下大小、右下盘符）+ 信息区（stem `line-clamp-2`、path 单行截断带 `title`、mtime 日期）。视频 hover 出品牌色圆形播放按钮遮罩，点击整卡触发 `onPlay`；封面条目无遮罩不可点。封面走 `/stream/{cover_id}`（服务端 stem 同名/目录名关联），无封面渲染 art 渐变 + 胶片图标占位。
 
+## 播放链路（hls.js + 降级链）
+
+- **主路径**：`Hls.isSupported()` → `hls.js` 加载 `/stream/:id/index.m3u8`（服务端 ffmpeg libx264 实时转码分段，设计见 `../server/DESIGN.md` §7）。remux 产出的 MP4 容器时基有缺陷（无 ctts/DTS，Chrome 直连播会抖动，copy 重整也救不了），转码重建时间轴后播放健康。
+- **降级链**（逐级回退，保证任何环境可播）：
+  1. hls.js fatal 网络错误且 manifest 未加载成功（典型：服务端 ffmpeg 缺失返回 503）→ 销毁 hls 实例，回退 `video.src = /stream/:id` 直连（画质=现状抖动水平）；
+  2. `Hls.isSupported()` 为假（老 Safari 等）→ `canPlayType('application/vnd.apple.mpegurl')` 原生 HLS；
+  3. 都不支持 → 直连 `/stream/:id`。
+- 换源/关闭清理：`hls.destroy()` + `video.pause()/load()`；封面缩略图不走 HLS，固定 `/stream/:id` Range。
+
 ## 构建与开发
 
 - `npm run build` = `tsc --noEmit && vite build`，产物直出 `../server/public`（`emptyOutDir` 清旧版；**文件名不带哈希**，diff 稳定），随仓库提交——服务侧保持零依赖、`start.bat` 开箱即用，代价是构建产物入库。
@@ -65,7 +74,8 @@
 - Vitest + happy-dom + Testing Library，`globals: true` + `src/test/setup.ts`（`IS_REACT_ACT_ENVIRONMENT`）。
 - 组件测试统一 `vi.mock('@/lib/api')`（别名经 vite resolve.alias 解析，与源码导入同一模块）；纯逻辑（format/api）直接测。
 - 已知坑：RTL `getByText` 默认只匹配元素的**直接文本节点**——混合内容（如 `<b>剧名</b> / 标题`）需 span 包裹或用 `selector` / `textContent` 断言。
-- 覆盖：格式化边界、API 错误路径与参数拼接、三 Section 交互（筛选/分页/防抖/chips/保存/扫描/日志）。
+- 覆盖：格式化边界、API 错误路径与参数拼接、三 Section 交互（筛选/分页/防抖/chips/保存/扫描/日志）、PlayerDialog 的 hls 建链与降级（`vi.mock('hls.js')`）。
+- 运行时依赖：react / react-dom / **hls.js**（播放链路唯一第三方运行时依赖）。
 
 ## 约定
 

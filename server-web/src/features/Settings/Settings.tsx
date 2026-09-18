@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { fetchConfig, fetchLog, saveConfig, triggerScan } from '@/lib/api';
+import type { FfmpegStatus } from '@/lib/types';
 
 export function Settings() {
   const [dirs, setDirs] = useState('');
+  const [ffmpegPath, setFfmpegPath] = useState('');
+  const [ffmpeg, setFfmpeg] = useState<FfmpegStatus | null>(null);
   const [warn, setWarn] = useState('');
   const [scanResult, setScanResult] = useState<ReactNode>(null);
   const [scanning, setScanning] = useState(false);
@@ -13,7 +16,10 @@ export function Settings() {
     let alive = true;
     fetchConfig()
       .then((j) => {
-        if (alive) setDirs((j.scanDirs || []).join('\n'));
+        if (!alive) return;
+        setDirs((j.scanDirs || []).join('\n'));
+        setFfmpegPath(j.ffmpegPath || '');
+        setFfmpeg(j.ffmpeg ?? null);
       })
       .catch(() => {});
     return () => {
@@ -24,8 +30,9 @@ export function Settings() {
   async function save() {
     const list = dirs.split('\n').map((s) => s.trim()).filter(Boolean);
     try {
-      const j = await saveConfig(list);
+      const j = await saveConfig(list, ffmpegPath);
       setWarn(j.warnings?.length ? j.warnings.join('；') : '已保存');
+      fetchConfig().then((c) => setFfmpeg(c.ffmpeg ?? null)).catch(() => {});
     } catch (e) {
       setWarn(String((e as Error).message));
     }
@@ -72,9 +79,26 @@ export function Settings() {
         spellCheck={false}
         placeholder={'D:\\Videos\nE:\\收藏'}
       />
+      <div className="mt-4 mb-2 text-xs font-medium text-dim">ffmpeg 路径（HLS 流播放用，留空 = 自动从 PATH 探测）</div>
+      <input
+        value={ffmpegPath}
+        onChange={(e) => setFfmpegPath(e.target.value)}
+        spellCheck={false}
+        placeholder="D:\\Tools\\ffmpeg\\bin\\ffmpeg.exe"
+        aria-label="ffmpeg 路径"
+      />
+      <div className="mt-1.5 text-xs">
+        {ffmpeg == null ? (
+          <span className="text-dim">探测中…</span>
+        ) : ffmpeg.available ? (
+          <span className="text-ok">已就绪：{ffmpeg.path}{ffmpeg.source === 'config' ? '（配置）' : '（PATH）'}</span>
+        ) : (
+          <span className="text-warn">未检测到 ffmpeg：HLS 流不可用，播放将降级为直连（画面可能抖动）</span>
+        )}
+      </div>
       <div className="mt-3 flex flex-wrap items-center gap-2.5">
         <button type="button" className="act act-primary" onClick={() => void save()}>
-          保存目录
+          保存配置
         </button>
         <button type="button" className="act" disabled={scanning} onClick={() => void scan()}>
           立即扫描

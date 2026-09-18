@@ -68,9 +68,19 @@ export interface ScanResponse {
   result: ScanResult;
 }
 
+/** ffmpeg 探测状态（/api/config、/api/ping 聚合；source: config=用户配置路径 / path=PATH 探测 / null=均不可用）。 */
+export interface FfmpegStatus {
+  available: boolean;
+  path: string;
+  source: 'config' | 'path' | null;
+}
+
 export interface ConfigResponse {
   ok: boolean;
   scanDirs: string[];
+  /** 用户配置的 ffmpeg 路径（空串 = 未配置，走 PATH）。 */
+  ffmpegPath: string;
+  ffmpeg: FfmpegStatus;
 }
 
 export interface SaveConfigResponse {

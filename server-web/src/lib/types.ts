@@ -13,6 +13,7 @@ export type {
   ScanResponse,
   ConfigResponse,
   SaveConfigResponse,
+  FfmpegStatus,
 } from '../../../server/src/features/media/types';
 export type {
   DlStatus,

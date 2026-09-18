@@ -189,8 +189,10 @@ export function setFileDuration(id: number, duration: number): void {
   db.prepare('UPDATE files SET duration = ? WHERE id = ?').run(duration, id);
 }
 
-/** 流播放取文件基础信息（库中 size 可能滞后，实盘 stat 为准）。 */
-export function getFileBasic(id: number): { path: string; size: number; ext: string } | null {
-  const row = db.prepare('SELECT path, size, ext FROM files WHERE id = ?').get(id) as SqlRow | undefined;
-  return row ? { path: strOf(row.path), size: numOf(row.size), ext: strOf(row.ext) } : null;
+/** 流播放取文件基础信息（库中 size 可能滞后，实盘 stat 为准；type/duration 供 HLS 会话用）。 */
+export function getFileBasic(id: number): { path: string; size: number; ext: string; type: 'video' | 'cover'; duration: number | null } | null {
+  const row = db.prepare('SELECT path, size, ext, type, duration FROM files WHERE id = ?').get(id) as SqlRow | undefined;
+  return row
+    ? { path: strOf(row.path), size: numOf(row.size), ext: strOf(row.ext), type: row.type === 'cover' ? 'cover' : 'video', duration: row.duration == null ? null : numOf(row.duration) }
+    : null;
 }

@@ -1,11 +1,13 @@
-// 媒体库 API 路由：/api/videos、/api/files、/api/exists、/api/scan、/api/config、/stream/:id。
+// 媒体库 API 路由：/api/videos、/api/files、/api/exists、/api/scan、/api/config、
+// /stream/:id（Range 直连）、/stream/:id/index.m3u8 + /seg/:seg（HLS 流）。
 import { promises as fs } from 'node:fs';
 import { asRecord, HttpError, json, readJson, type Route } from '../../lib/http.ts';
 import { listVideos, listVolumes, queryExists, setFileDuration, upsertFileRecorded } from './files.ts';
+import { ffmpegInfo, getFfmpegPath, hlsManifestHandler, hlsSegmentHandler, resetFfmpegProbe, setFfmpegPath } from './hls.ts';
 import { mp4Duration } from './mp4.ts';
 import { scanAll, saveScanDirs, scanDirs } from './scanner.ts';
 import { streamHandler } from './stream.ts';
-import type { ScanResponse, VideosResponse } from './types.ts';
+import type { ConfigResponse, ScanResponse, VideosResponse } from './types.ts';
 
 const listVideosRoute: Route['handler'] = async ({ res, url }) => {
   const r = listVideos({
@@ -59,8 +61,10 @@ const scanRoute: Route['handler'] = async ({ res }) => {
   json(res, 200, body);
 };
 
-const getConfigRoute: Route['handler'] = ({ res }) => {
-  json(res, 200, { ok: true, scanDirs: scanDirs() });
+const getConfigRoute: Route['handler'] = async ({ res }) => {
+  const ffmpeg = await ffmpegInfo();
+  const body: ConfigResponse = { ok: true, scanDirs: scanDirs(), ffmpegPath: getFfmpegPath(), ffmpeg };
+  json(res, 200, body);
 };
 
 const saveConfigRoute: Route['handler'] = async ({ req, res }) => {
@@ -79,6 +83,20 @@ const saveConfigRoute: Route['handler'] = async ({ req, res }) => {
     }
   }
   saveScanDirs(dirs);
+  // ffmpeg 路径（可选字段）：空串 = 清除配置走 PATH；存在性同样只警告不阻断
+  if (body?.ffmpegPath != null) {
+    const p = String(body.ffmpegPath).trim();
+    if (p) {
+      try {
+        const st = await fs.stat(p);
+        if (!st.isFile()) warnings.push(`${p} 不是文件`);
+      } catch {
+        warnings.push(`${p} 不存在或不可访问`);
+      }
+    }
+    setFfmpegPath(p);
+    resetFfmpegProbe();
+  }
   json(res, 200, { ok: true, warnings });
 };
 
@@ -91,4 +109,8 @@ export const mediaRoutes: Route[] = [
   { method: 'POST', path: '/api/config', handler: saveConfigRoute },
   { method: 'GET', path: '/stream/:id', handler: streamHandler },
   { method: 'HEAD', path: '/stream/:id', handler: streamHandler },
+  { method: 'GET', path: '/stream/:id/index.m3u8', handler: hlsManifestHandler },
+  { method: 'HEAD', path: '/stream/:id/index.m3u8', handler: hlsManifestHandler },
+  { method: 'GET', path: '/stream/:id/seg/:seg', handler: hlsSegmentHandler },
+  { method: 'HEAD', path: '/stream/:id/seg/:seg', handler: hlsSegmentHandler },
 ];

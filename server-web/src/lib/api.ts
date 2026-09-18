@@ -57,11 +57,11 @@ export function fetchConfig(): Promise<ConfigResponse> {
   return api('/api/config');
 }
 
-export function saveConfig(scanDirs: string[]): Promise<SaveConfigResponse> {
+export function saveConfig(scanDirs: string[], ffmpegPath?: string): Promise<SaveConfigResponse> {
   return api('/api/config', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ scanDirs }),
+    body: JSON.stringify(ffmpegPath == null ? { scanDirs } : { scanDirs, ffmpegPath }),
   });
 }
 
