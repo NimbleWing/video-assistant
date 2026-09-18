@@ -6,10 +6,30 @@ interface Props {
   onPlay: (it: RawFileRow) => void;
   /** 提供「变更记录」入口（归档页用）；原始资料页不传则不渲染。 */
   onHistory?: (it: RawFileRow) => void;
+  /** 提供删除入口（原始资料页用）：删磁盘文件 + 库记录；不传则不渲染。 */
+  onDelete?: (it: RawFileRow) => void;
 }
 
 /** 浏览器可原生解码的视频格式（直连省转码；mkv 靠 Chromium 内置 matroska demuxer，失败回退 HLS）。 */
 export const NATIVE_VIDEO_EXTS = new Set(['mp4', 'webm', 'm4v', 'mov', 'mkv']);
+
+/** 删除图标按钮（卡片行/查重文件行共用）。 */
+export function TrashButton({ label, title, disabled, onClick }: { label: string; title: string; disabled?: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      className="flex size-6 shrink-0 items-center justify-center rounded-md bg-raised text-dim transition-colors hover:bg-err-soft hover:text-err disabled:cursor-default disabled:opacity-40"
+      aria-label={label}
+      title={title}
+      disabled={disabled}
+      onClick={onClick}
+    >
+      <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <path d="M4 7h16M9.5 7V5a1.5 1.5 0 0 1 1.5-1.5h2A1.5 1.5 0 0 1 14.5 5v2M6.5 7l.8 12a2 2 0 0 0 2 1.9h5.4a2 2 0 0 0 2-1.9l.8-12M10 11v6M14 11v6" />
+      </svg>
+    </button>
+  );
+}
 
 /** 当前名（path 末段去扩展名；archived 行的 path 随文件更新，name 列停留在最初名）。 */
 function currentNameOf(p: string): string {
@@ -57,7 +77,7 @@ function VideoArt({ it, onPlay }: Props) {
 }
 
 /** 原始资料卡片（Raw/Archive 两页共享）：图片=真缩略图；视频=图标卡；archived 副行最初名；missing 灰化。 */
-export function RawCard({ it, onPlay, onHistory }: Props) {
+export function RawCard({ it, onPlay, onHistory, onDelete }: Props) {
   const gone = it.missing || it.pending_missing;
   const currentName = currentNameOf(it.path);
   return (
@@ -99,6 +119,13 @@ export function RawCard({ it, onPlay, onHistory }: Props) {
           <span>{fmtSize(it.size)}</span>
           <span className="font-mono uppercase">{it.volume}</span>
           <span className="ml-auto">{fmtDate(it.mtime)}</span>
+          {onDelete ? (
+            <TrashButton
+              label={`删除文件 ${it.path}`}
+              title={`删除 ${it.path}（磁盘文件 + 库记录，不可恢复）`}
+              onClick={() => onDelete(it)}
+            />
+          ) : null}
         </div>
         {gone ? (
           <div className="mt-2">

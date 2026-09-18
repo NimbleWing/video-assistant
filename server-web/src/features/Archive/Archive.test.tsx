@@ -66,6 +66,7 @@ describe('Archive 归档资料页', () => {
     expect(screen.getByText('最初：origin')).toBeTruthy();
     expect(screen.getByText('变更记录 →')).toBeTruthy();
     expect(onStat).toHaveBeenCalledWith('归档 1 · 视频 1 · 图片 0');
+    expect(screen.queryByRole('button', { name: /^删除文件/ })).toBeNull(); // 归档页不提供删除入口
   });
 
   it('空态引导文案', async () => {

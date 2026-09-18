@@ -263,6 +263,16 @@ describe('Raw 文件浏览', () => {
     expect(screen.getByText('最初：origin')).toBeTruthy();
   });
 
+  it('文件卡片删除：垃圾桶按钮 → 确认弹窗 → 调用接口并刷新列表', async () => {
+    renderRaw();
+    await screen.findByText('a');
+    fireEvent.click(screen.getByRole('button', { name: '删除文件 d:/rawfiles/a.mp4' }));
+    expect(await screen.findByText('删除文件及记录？')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '删除' }));
+    await waitFor(() => expect(mockedDelete).toHaveBeenCalledWith(7));
+    await waitFor(() => expect(mockedFiles.mock.calls.length).toBeGreaterThanOrEqual(2)); // refreshKey 刷新列表
+  });
+
   it('页面不渲染变更记录区块（已迁移至归档资料页）', async () => {
     renderRaw();
     await screen.findByText('a');

@@ -11,7 +11,7 @@ import {
 } from '@/lib/api';
 import type { PlaySource } from '@/components/PlayerDialog';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
-import { RawCard } from '@/components/RawCard';
+import { RawCard, TrashButton } from '@/components/RawCard';
 import { Pager } from '@/components/Pager';
 import type { RawDuplicatesResponse, RawDupGroup, RawFileRow, RawFilesResponse, RawScanStatus, RawType, RawVolumesResponse } from '@/lib/types';
 import { fmtDate, fmtSize } from '@/utils/format';
@@ -72,24 +72,6 @@ function VolumeCard({
       <div className="mt-1.5 text-[11px] text-dim">
         {total > 0 ? `剩 ${fmtSize(free)} / ${fmtSize(total)}` : '容量未知'}
       </div>
-    </button>
-  );
-}
-
-/** 删除图标按钮（查重面板行级/共用样式）。 */
-function TrashButton({ label, title, disabled, onClick }: { label: string; title: string; disabled?: boolean; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      className="flex size-6 shrink-0 items-center justify-center rounded-md bg-raised text-dim transition-colors hover:bg-err-soft hover:text-err disabled:cursor-default disabled:opacity-40"
-      aria-label={label}
-      title={title}
-      disabled={disabled}
-      onClick={onClick}
-    >
-      <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-        <path d="M4 7h16M9.5 7V5a1.5 1.5 0 0 1 1.5-1.5h2A1.5 1.5 0 0 1 14.5 5v2M6.5 7l.8 12a2 2 0 0 0 2 1.9h5.4a2 2 0 0 0 2-1.9l.8-12M10 11v6M14 11v6" />
-      </svg>
     </button>
   );
 }
@@ -186,6 +168,8 @@ export function Raw({ onStat, onPlay }: Props) {
   const [dupRefresh, setDupRefresh] = useState(0);
   /** 待确认的删除清单（非 null 时弹确认框）。 */
   const [pendingDelete, setPendingDelete] = useState<RawFileRow[] | null>(null);
+  /** 删除失败汇总（页面级横幅，查重面板与文件卡片共用）。 */
+  const [delErr, setDelErr] = useState('');
   // 文件浏览
   const [qInput, setQInput] = useState('');
   const [q, setQ] = useState('');
@@ -298,10 +282,12 @@ export function Raw({ onStat, onPlay }: Props) {
     setDupPage(1);
   }
 
-  /** 删除重复副本（磁盘文件 + 库记录，不可恢复）：确认弹窗放行后逐个调用，完成后双刷新。 */
-  async function deleteDupFiles(list: RawFileRow[]) {
+  /** 删除文件（磁盘文件 + 库记录，不可恢复；查重面板与文件卡片共用）：
+   *  确认弹窗放行后逐个调用，完成后刷新查重与文件列表；失败项汇总进页面级横幅。 */
+  async function deleteFiles(list: RawFileRow[]) {
     if (!list.length || dupBusy) return;
     setPendingDelete(null);
+    setDelErr('');
     setDupBusy(true);
     const errs: string[] = [];
     for (const f of list) {
@@ -312,7 +298,7 @@ export function Raw({ onStat, onPlay }: Props) {
       }
     }
     setDupBusy(false);
-    if (errs.length) setDupErr(errs.join('\n'));
+    if (errs.length) setDelErr(errs.join('\n'));
     setDupRefresh((k) => k + 1);
     setRefreshKey((k) => k + 1);
   }
@@ -474,6 +460,18 @@ export function Raw({ onStat, onPlay }: Props) {
         </div>
       ) : null}
 
+      {/* 删除失败横幅（查重面板与文件卡片共用） */}
+      {delErr ? (
+        <div className="mb-4 shrink-0 rounded-xl border border-err/40 bg-err-soft px-4 py-3">
+          <div className="flex items-start gap-3">
+            <span className="flex-1 whitespace-pre-wrap break-all text-xs leading-relaxed text-err">{delErr}</span>
+            <button type="button" className="act shrink-0" onClick={() => setDelErr('')}>
+              知道了
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       {/* 查重面板 */}
       {dupOpen ? (
         <div className="card mb-4 shrink-0 p-5">
@@ -587,7 +585,7 @@ export function Raw({ onStat, onPlay }: Props) {
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-4">
             {items.map((it) => (
-              <RawCard key={it.id} it={it} onPlay={play} />
+              <RawCard key={it.id} it={it} onPlay={play} onDelete={(f) => setPendingDelete([f])} />
             ))}
           </div>
         </div>
@@ -613,7 +611,7 @@ export function Raw({ onStat, onPlay }: Props) {
           title={pendingDelete.length === 1 ? '删除文件及记录？' : `删除 ${pendingDelete.length} 个文件及记录？`}
           danger
           confirmText="删除"
-          onConfirm={() => void deleteDupFiles(pendingDelete)}
+          onConfirm={() => void deleteFiles(pendingDelete)}
           onCancel={() => setPendingDelete(null)}
           description={
             <>

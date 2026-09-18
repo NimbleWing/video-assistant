@@ -17,12 +17,12 @@
 | `src/components/Pager/index.tsx` | 共享分页条：上一页/下一页 + 页码（可选跳页输入框：回车/失焦提交、钳位 1..pages）+ 右侧可选「每页 N 条」选择器 |
 | `src/components/PlayerDialog/index.tsx` | 共享播放弹窗（自 Videos 泛化）：原生 `<dialog>` + `closedby="any"`，双源 `{direct, hls, preferDirect}`——默认 hls.js 主路径 + 降级链（见下）；`preferDirect` 时直连优先、`<video>` error 事件回退 hls；关闭/换源时停流清理，复制路径；由 App 持有状态全局挂载（tab 切换不卸载） |
 | `src/components/ConfirmDialog/index.tsx` | 共享确认弹窗：原生 `<dialog>` + `closedby="any"`（Esc/遮罩点击即取消），挂载式受控（父组件条件渲染，onConfirm 后卸载即关闭）；`danger` 红系确认按钮（`.act-danger`）；Raw 页查重删除使用 |
-| `src/components/RawCard/index.tsx` | 原始资料卡片（Raw/Archive 两页共享）：标题=当前名（path basename）；archived=1 时副行「最初：xx」；可选 `onHistory` 时信息区渲染「变更记录」入口（归档页用）；图片条目头图 = `/api/raw/file/:id/content`；视频条目 = 类型图标 + ext 大字占位；hover 播放遮罩仅视频；missing 灰化 + 角标 |
+| `src/components/RawCard/index.tsx` | 原始资料卡片（Raw/Archive 两页共享）：标题=当前名（path basename）；archived=1 时副行「最初：xx」；可选 `onHistory` 时信息区渲染「变更记录」入口（归档页用）；可选 `onDelete` 时元信息行尾渲染删除图标按钮（原始资料页用：删磁盘文件 + 库记录）；导出共用 `TrashButton`；图片条目头图 = `/api/raw/file/:id/content`；视频条目 = 类型图标 + ext 大字占位；hover 播放遮罩仅视频；missing 灰化 + 角标 |
 | `src/features/Videos/index.ts` | 桶导出：`Videos`、`VideoCard` |
 | `src/features/Videos/Videos.tsx` | **视频库页面**：搜索防抖 300ms、盘符/类型筛选（选中盘符消失自动回退全部）、分页可调每页条数（20/50/100）与跳页 |
 | `src/features/Videos/VideoCard.tsx` | 单卡（参考 tauri-react VideoProbeCard：封面/占位 + 时长/大小/盘符角标 + hover 播放遮罩与封面缩放 + 信息区；无封面用 art 渐变占位） |
 | `src/features/Raw/index.ts` | 桶导出：`Raw` |
-| `src/features/Raw/Raw.tsx` | **原始资料页面**（顶部扫描面板 + 下方卡片浏览）：磁盘卡片多选（`/api/raw/volumes`，容量条）+ 类型勾选（视频/图片，记忆自 meta）+ 开始扫描/进度条/取消（EventSource 订阅 `/api/raw/scan/events`：snapshot/progress/done）；待决策消失横幅（done 的 missingCount → 拉清单 + 批量删除/标记）；查重面板（工具栏「查重」按钮开合，`/api/raw/duplicates` 分组分页：组头类型徽标/份数/单份大小/冗余空间/hash 短码 + 文件行路径/盘符/日期、视频可播；**删除**：行级 🗑 与组级「删除多余副本」（保留组内第一个），`ConfirmDialog` 二次确认（列路径清单，超 10 条截断）后逐个 `POST /api/raw/file/:id/delete`，完成后刷新查重与文件列表；扫描 done 后随 refreshKey 自动刷新）；文件卡片分页浏览（搜索防抖 + 类型/盘符/missing 筛选） |
+| `src/features/Raw/Raw.tsx` | **原始资料页面**（顶部扫描面板 + 下方卡片浏览）：磁盘卡片多选（`/api/raw/volumes`，容量条）+ 类型勾选（视频/图片，记忆自 meta）+ 开始扫描/进度条/取消（EventSource 订阅 `/api/raw/scan/events`：snapshot/progress/done）；待决策消失横幅（done 的 missingCount → 拉清单 + 批量删除/标记）；查重面板（工具栏「查重」按钮开合，`/api/raw/duplicates` 分组分页：组头类型徽标/份数/单份大小/冗余空间/hash 短码 + 文件行路径/盘符/日期、视频可播；**删除**：行级 🗑 与组级「删除多余副本」（保留组内第一个），`ConfirmDialog` 二次确认（列路径清单，超 10 条截断）后逐个 `POST /api/raw/file/:id/delete`，完成后刷新查重与文件列表；扫描 done 后随 refreshKey 自动刷新）；文件卡片分页浏览（搜索防抖 + 类型/盘符/missing 筛选；卡片删除入口 → 同一 ConfirmDialog/删除链路，失败汇总页面级横幅） |
 | `src/features/Archive/index.ts` | 桶导出：`Archive`、`EventsDialog` |
 | `src/features/Archive/Archive.tsx` | **归档资料页面**：archived=1 逻辑文件的卡片分页浏览（`/api/raw/archived`：搜索防抖 + 类型/盘符筛选 + 每页条数/跳页）；卡片「变更记录」入口弹出 `EventsDialog`（该文件全部事件，时间正序） |
 | `src/features/Archive/EventsDialog.tsx` | 单文件变更记录弹窗：当前名 + 最初名 + 事件时间线（kind 徽标 + result + 时间），`fetchRawEvents({ fileId })` |
