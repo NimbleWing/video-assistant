@@ -4,7 +4,8 @@ import { fmtDate, fmtDur, fmtSize } from '../format';
 import type { VideoItem, VideosResponse } from '../types';
 import { Pager } from './Pager';
 
-const PAGE_SIZE = 50;
+const DEFAULT_PAGE_SIZE = 50;
+const PAGE_SIZE_OPTIONS = [20, 50, 100];
 
 interface Props {
   onStat: (text: string) => void;
@@ -83,6 +84,7 @@ export function VideosSection({ onStat, onPlay }: Props) {
   const [volume, setVolume] = useState('');
   const [type, setType] = useState<'video' | 'cover'>('video');
   const [page, setPage] = useState(1);
+  const [size, setSize] = useState(DEFAULT_PAGE_SIZE);
   const [data, setData] = useState<VideosResponse | null>(null);
   const [error, setError] = useState('');
 
@@ -101,7 +103,7 @@ export function VideosSection({ onStat, onPlay }: Props) {
 
   useEffect(() => {
     let alive = true;
-    fetchVideos({ page, size: PAGE_SIZE, q, volume: effVolume || undefined, type })
+    fetchVideos({ page, size, q, volume: effVolume || undefined, type })
       .then((d) => {
         if (!alive) return;
         setData(d);
@@ -115,11 +117,11 @@ export function VideosSection({ onStat, onPlay }: Props) {
     return () => {
       alive = false;
     };
-  }, [page, q, effVolume, type, onStat]);
+  }, [page, size, q, effVolume, type, onStat]);
 
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
-  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const pages = Math.max(1, Math.ceil(total / size));
 
   return (
     <section className="flex min-h-0 flex-1 flex-col">
@@ -193,6 +195,13 @@ export function VideosSection({ onStat, onPlay }: Props) {
         total={total}
         onPrev={() => setPage((p) => p - 1)}
         onNext={() => setPage((p) => p + 1)}
+        onJump={setPage}
+        size={size}
+        sizeOptions={PAGE_SIZE_OPTIONS}
+        onSizeChange={(n) => {
+          setSize(n);
+          setPage(1);
+        }}
       />
     </section>
   );

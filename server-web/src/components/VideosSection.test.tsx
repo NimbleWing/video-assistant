@@ -60,9 +60,26 @@ describe('VideosSection', () => {
     const next = screen.getByText('下一页') as HTMLButtonElement;
     expect(prev.disabled).toBe(true);
     expect(next.disabled).toBe(false);
-    expect(screen.getByText('1 / 3（共 120）')).toBeTruthy();
+    expect(screen.getByText('/ 3 页（共 120）')).toBeTruthy();
     fireEvent.click(next);
     await waitFor(() => expect(mocked).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2 })));
+  });
+
+  it('跳页：输入页码提交后以该页拉取', async () => {
+    mocked.mockResolvedValue(resp({ total: 120 }));
+    render(<VideosSection onStat={() => {}} onPlay={() => {}} />);
+    await screen.findByText('a');
+    fireEvent.change(screen.getByLabelText('跳转页码'), { target: { value: '3' } });
+    fireEvent.keyDown(screen.getByLabelText('跳转页码'), { key: 'Enter' });
+    await waitFor(() => expect(mocked).toHaveBeenLastCalledWith(expect.objectContaining({ page: 3 })));
+  });
+
+  it('每页条数切换：回到第一页并按新 size 拉取', async () => {
+    mocked.mockResolvedValue(resp({ total: 200 }));
+    render(<VideosSection onStat={() => {}} onPlay={() => {}} />);
+    await screen.findByText('a');
+    fireEvent.change(screen.getByLabelText('每页条数'), { target: { value: '100' } });
+    await waitFor(() => expect(mocked).toHaveBeenLastCalledWith(expect.objectContaining({ size: 100, page: 1 })));
   });
 
   it('类型筛选切换到封面并回到第一页', async () => {

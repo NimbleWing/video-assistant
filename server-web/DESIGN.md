@@ -15,11 +15,11 @@
 | `src/api.ts` | 类型化 API 客户端（fetch 包装：`ok:false` / HTTP 错误统一抛 `Error`，带服务端 error 信息） |
 | `src/types.ts` | 接口模型（字段名对齐 `server/db.js` 的列名，如 `video_id`、`updated_at`） |
 | `src/format.ts` | 纯函数：`fmtSize` / `fmtDur` / `fmtTime` |
-| `src/components/VideosSection.tsx` | **卡片网格**（参考 tauri-react VideoProbeCard：封面/占位 + 时长/大小/盘符角标 + hover 播放遮罩与封面缩放；无封面用 art 渐变占位）、搜索防抖 300ms、盘符/类型筛选（选中盘符消失自动回退全部）、分页 50/页 |
+| `src/components/VideosSection.tsx` | **卡片网格**（参考 tauri-react VideoProbeCard：封面/占位 + 时长/大小/盘符角标 + hover 播放遮罩与封面缩放；无封面用 art 渐变占位）、搜索防抖 300ms、盘符/类型筛选（选中盘符消失自动回退全部）、分页可调每页条数（20/50/100）与跳页 |
 | `src/components/LedgerSection.tsx` | 状态 chips（全部 + failed/complete/downloading/canceled/skipped 计数，默认 failed）、分页 |
 | `src/components/SettingsSection.tsx` | 扫描目录保存（POST /api/config）、立即扫描、日志尾部查看 |
 | `src/components/PlayerDialog.tsx` | 原生 `<dialog>` + `closedby="any"`，`/stream/:id` 播放，关闭/换源时停流清理，复制路径 |
-| `src/components/Pager.tsx` | 共享分页条 |
+| `src/components/Pager.tsx` | 共享分页条：上一页/下一页 + 页码（可选跳页输入框：回车/失焦提交、钳位 1..pages）+ 右侧可选「每页 N 条」选择器 |
 | `src/styles.css` | Tailwind `@theme` 主题色（沿用旧版暗色调色板）+ `@layer components`（act/badge/chip/table/dialog） |
 
 ## 视觉规范（对齐 rou.video 站点暗色主题）
