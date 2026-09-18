@@ -10,6 +10,7 @@ import {
   startRawScan,
 } from '@/lib/api';
 import type { PlaySource } from '@/components/PlayerDialog';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { RawCard } from '@/components/RawCard';
 import { Pager } from '@/components/Pager';
 import type { RawDuplicatesResponse, RawDupGroup, RawFileRow, RawFilesResponse, RawScanStatus, RawType, RawVolumesResponse } from '@/lib/types';
@@ -183,6 +184,8 @@ export function Raw({ onStat, onPlay }: Props) {
   const [dupErr, setDupErr] = useState('');
   const [dupBusy, setDupBusy] = useState(false);
   const [dupRefresh, setDupRefresh] = useState(0);
+  /** 待确认的删除清单（非 null 时弹确认框）。 */
+  const [pendingDelete, setPendingDelete] = useState<RawFileRow[] | null>(null);
   // 文件浏览
   const [qInput, setQInput] = useState('');
   const [q, setQ] = useState('');
@@ -295,15 +298,10 @@ export function Raw({ onStat, onPlay }: Props) {
     setDupPage(1);
   }
 
-  /** 删除重复副本（磁盘文件 + 库记录，不可恢复）：confirm 二次确认后逐个调用，完成后双刷新。 */
+  /** 删除重复副本（磁盘文件 + 库记录，不可恢复）：确认弹窗放行后逐个调用，完成后双刷新。 */
   async function deleteDupFiles(list: RawFileRow[]) {
     if (!list.length || dupBusy) return;
-    const shown = list
-      .slice(0, 10)
-      .map((f) => f.path)
-      .join('\n');
-    const suffix = list.length > 10 ? `\n… 等共 ${list.length} 个` : '';
-    if (!window.confirm(`确定删除以下文件？\n${shown}${suffix}\n\n磁盘文件与库记录将一并删除，不可恢复。`)) return;
+    setPendingDelete(null);
     setDupBusy(true);
     const errs: string[] = [];
     for (const f of list) {
@@ -505,8 +503,8 @@ export function Raw({ onStat, onPlay }: Props) {
                   key={g.hash}
                   g={g}
                   onPlay={play}
-                  onDeleteFile={(f) => void deleteDupFiles([f])}
-                  onDeleteExtras={(gr) => void deleteDupFiles(gr.files.slice(1))}
+                  onDeleteFile={(f) => setPendingDelete([f])}
+                  onDeleteExtras={(gr) => setPendingDelete(gr.files.slice(1))}
                   busy={dupBusy}
                 />
               ))}
@@ -608,6 +606,30 @@ export function Raw({ onStat, onPlay }: Props) {
           setPage(1);
         }}
       />
+
+      {/* 删除确认弹窗 */}
+      {pendingDelete ? (
+        <ConfirmDialog
+          title={pendingDelete.length === 1 ? '删除文件及记录？' : `删除 ${pendingDelete.length} 个文件及记录？`}
+          danger
+          confirmText="删除"
+          onConfirm={() => void deleteDupFiles(pendingDelete)}
+          onCancel={() => setPendingDelete(null)}
+          description={
+            <>
+              <div>磁盘文件与库记录将一并删除，不可恢复。</div>
+              <ul className="m-0 mt-2 max-h-52 w-[480px] max-w-[80vw] list-none overflow-y-auto rounded-lg bg-raised/50 p-2 font-mono text-xs leading-relaxed">
+                {pendingDelete.slice(0, 10).map((f) => (
+                  <li key={f.id} className="truncate" title={f.path}>
+                    {f.path}
+                  </li>
+                ))}
+                {pendingDelete.length > 10 ? <li className="text-dim">… 等共 {pendingDelete.length} 个</li> : null}
+              </ul>
+            </>
+          }
+        />
+      ) : null}
     </section>
   );
 }

@@ -104,6 +104,15 @@
     background: var(--color-brand-hover);
     color: var(--color-on-brand);
   }
+  .act-danger {
+    background: var(--color-err);
+    color: #2b120c;
+    font-weight: 650;
+  }
+  .act-danger:hover:not(:disabled) {
+    background: #ffa290;
+    color: #2b120c;
+  }
 
   .side-item {
     display: flex;

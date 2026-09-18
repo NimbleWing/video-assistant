@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   cancelRawScan,
@@ -372,34 +372,37 @@ describe('Raw 查重删除', () => {
     await screen.findByText('2 份相同');
   }
 
-  it('行级删除：confirm 确认后调用接口并刷新查重', async () => {
+  it('行级删除：确认弹窗列出路径，点「删除」后调用接口并刷新查重', async () => {
     const { f2 } = dupWithGroup();
-    const confirm = vi.fn(() => true);
-    vi.stubGlobal('confirm', confirm);
     await openPanel();
     expect(mockedDup).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole('button', { name: `删除文件 ${f2.path}` }));
-    expect(confirm).toHaveBeenCalled();
+    expect(await screen.findByText('删除文件及记录？')).toBeTruthy();
+    expect(screen.getAllByText(f2.path).length).toBe(2); // 面板行 + 弹窗清单
+    fireEvent.click(screen.getByRole('button', { name: '删除' }));
     await waitFor(() => expect(mockedDelete).toHaveBeenCalledWith(12));
     await waitFor(() => expect(mockedDup).toHaveBeenCalledTimes(2)); // dupRefresh 重新拉取
   });
 
-  it('confirm 取消则不调用删除', async () => {
+  it('取消弹窗则不调用删除', async () => {
     dupWithGroup();
-    vi.stubGlobal('confirm', vi.fn(() => false));
     await openPanel();
     fireEvent.click(screen.getByRole('button', { name: '删除文件 e:/rawfiles/dup2.mp4' }));
-    await waitFor(() => expect(screen.getByText('2 份相同')).toBeTruthy());
+    await screen.findByText('删除文件及记录？');
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+    await waitFor(() => expect(screen.queryByText('删除文件及记录？')).toBeNull());
     expect(mockedDelete).not.toHaveBeenCalled();
   });
 
-  it('组级删除多余副本：保留第一个，其余逐个调用', async () => {
+  it('组级删除多余副本：确认后保留第一个，其余逐个调用', async () => {
     dupWithGroup();
-    const confirm = vi.fn(() => true);
-    vi.stubGlobal('confirm', confirm);
     await openPanel();
     fireEvent.click(screen.getByRole('button', { name: '删除多余副本' }));
-    expect(confirm).toHaveBeenCalled();
+    expect(await screen.findByText('删除文件及记录？')).toBeTruthy(); // 多余副本仅 1 个，走单数标题
+    const dlg = within(document.querySelector('dialog') as HTMLElement);
+    expect(dlg.getByText('e:/rawfiles/dup2.mp4')).toBeTruthy(); // 弹窗清单含被删副本
+    expect(dlg.queryByText('d:/rawfiles/dup.mp4')).toBeNull(); // 保留份不在弹窗清单
+    fireEvent.click(screen.getByRole('button', { name: '删除' }));
     await waitFor(() => expect(mockedDelete).toHaveBeenCalledTimes(1));
     expect(mockedDelete).toHaveBeenCalledWith(12); // f1（id 11，path 序在前）保留
     expect(mockedDelete).not.toHaveBeenCalledWith(11);
@@ -407,10 +410,10 @@ describe('Raw 查重删除', () => {
 
   it('部分失败时错误信息展示', async () => {
     dupWithGroup();
-    vi.stubGlobal('confirm', vi.fn(() => true));
     mockedDelete.mockRejectedValue(new Error('文件被占用'));
     await openPanel();
     fireEvent.click(screen.getByRole('button', { name: '删除多余副本' }));
+    fireEvent.click(await screen.findByRole('button', { name: '删除' }));
     await waitFor(() => expect(mockedDelete).toHaveBeenCalled());
     await waitFor(() => expect(screen.getByText(/e:\/rawfiles\/dup2.mp4：文件被占用/)).toBeTruthy());
   });
