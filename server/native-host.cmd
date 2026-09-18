@@ -1,2 +1,2 @@
 @echo off
-node --no-warnings "%~dp0native-host.js" %*
+node --no-warnings "%~dp0native-host.ts" %*

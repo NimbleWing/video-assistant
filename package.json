@@ -8,7 +8,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "coverage": "vitest run --coverage",
-    "lint": "eslint src tests server",
+    "lint": "eslint src tests",
     "typecheck": "tsc --noEmit",
     "check": "npm run lint && npm run typecheck && npm run test"
   },

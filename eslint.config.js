@@ -4,8 +4,8 @@ import globals from 'globals';
 // 不含任何 stylistic 规则，避免大规模重排。
 export default [
   {
-    // server/public 为 server-web 构建产物；server-web 有独立工具链，均不归本配置管
-    ignores: ['server/public/**', 'server-web/**'],
+    // server（TS 化后有独立工具链 tsc+vitest）、server-web 均有独立检查，不归本配置管
+    ignores: ['server/**', 'server-web/**'],
   },
   {
     files: ['src/**/*.js', 'tests/**/*.js'],
@@ -16,35 +16,6 @@ export default [
         ...globals.browser,
         ...globals.serviceworker,
         chrome: 'readonly',
-      },
-    },
-    rules: {
-      'no-undef': 'error',
-      'no-unused-vars': ['error', { argsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_' }],
-      'no-unreachable': 'error',
-      'no-constant-condition': ['error', { checkLoops: false }],
-      'no-dupe-keys': 'error',
-      'no-duplicate-case': 'error',
-      'no-empty': ['error', { allowEmptyCatch: true }],
-      'no-fallthrough': 'error',
-      'no-redeclare': 'error',
-      'no-self-assign': 'error',
-      'no-useless-catch': 'error',
-      'no-implied-eval': 'error',
-      'no-new-native-nonconstructor': 'error',
-      'no-var': 'error',
-      'prefer-const': 'error',
-      eqeqeq: ['error', 'allow-null'],
-    },
-  },
-  {
-    files: ['server/**/*.js'],
-    languageOptions: {
-      ecmaVersion: 2022,
-      sourceType: 'module',
-      globals: {
-        ...globals.node,
-        console: 'readonly',
       },
     },
     rules: {

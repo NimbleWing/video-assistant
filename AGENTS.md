@@ -26,11 +26,14 @@
 ## 常用命令
 
 ```bash
-# 根目录（扩展本体 + server）
+# 根目录（扩展本体）
 npm run check   # lint + typecheck + test（提交前必跑，覆盖率棘轮只升不降；pre-commit 钩子已配置 tools/hooks）
 npm run coverage
 
-# 管理页前端（server-web/ 内执行；根 check 不覆盖该目录）
+# 本地媒体库服务（server/ 内执行；TS + Node ≥22.18 原生 type stripping，独立 npm 包）
+npm run check   # typecheck + vitest（运行时零依赖，npm install 仅开发期需要）
+
+# 管理页前端（server-web/ 内执行）
 npm run check   # typecheck + test + build（改动后必跑，产物直出 ../server/public 并随仓库提交）
 npm run dev     # Vite 开发服（热更，/api、/stream 代理到 127.0.0.1:17321）
 ```

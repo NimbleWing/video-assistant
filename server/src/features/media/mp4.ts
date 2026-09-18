@@ -1,15 +1,13 @@
 // mp4 时长解析（零依赖，流式 box 遍历）。
 // 兼容 moov 置尾（本扩展保存管线即如此）与 64bit largesize；
 // mvhd 固定在 moov 子 box 前部，最多读 moov 前 16MB 足够。
-
 import { open } from 'node:fs/promises';
 
 /**
- * @param {string} p 绝对路径
- * @returns {Promise<number | null>} 秒；无法解析返回 null
+ * @param p 绝对路径
+ * @returns 秒；无法解析返回 null
  */
-export async function mp4Duration(p) {
-  /** @type {import('node:fs/promises').FileHandle | null} */
+export async function mp4Duration(p: string): Promise<number | null> {
   let fh = null;
   try {
     fh = await open(p, 'r');
@@ -45,12 +43,8 @@ export async function mp4Duration(p) {
   }
 }
 
-/**
- * moov 子 box 顶层顺序找 mvhd。
- * @param {Buffer} moov @param {number} start moov 内容起始偏移
- * @returns {number | null}
- */
-function findMvhd(moov, start) {
+/** moov 子 box 顶层顺序找 mvhd。@param start moov 内容起始偏移 */
+function findMvhd(moov: Buffer, start: number): number | null {
   let pos = start;
   while (pos < moov.length - 8) {
     const size = moov.readUInt32BE(pos);

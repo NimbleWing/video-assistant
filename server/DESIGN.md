@@ -40,13 +40,50 @@
 
 ## 3. 技术选型与运行方式
 
-- **零 npm 依赖**：Node 22+ 内置 `node:sqlite` + `node:http`，单目录脚本。
+- **语言 TypeScript，Node 原生 type stripping 运行**：要求 **Node ≥ 22.18**（本机 22.19）。源码即运行时（`node src/server.ts`），零构建、零产物入库、**零运行时 npm 依赖**（`node:sqlite` + `node:http`）。约束：仅 erasable 语法（不用 enum/namespace/参数属性）；import 必须带 `.ts` 扩展；类型检查只在开发期 `npm run check`（tsc --noEmit + vitest，devDeps：typescript / @types/node / vitest，**npm install 不是运行前提**）。
+- **`server/package.json` 必须显式 `"type": "module"`**——否则 `.ts` 按 CJS 解析直接崩溃。
+- **目录按 feature 组织**（对齐 server-web / tauri-react 的 features 模式），为后续模块（字幕库、元数据等）打地基：
+
+```
+server/src/
+├── server.ts            # 入口：createApp().listen + 启动日志
+├── app.ts               # createApp()：极简路由表（method+pattern+handler，零框架）注册各 feature、静态服务兜底、Origin 守卫、异常→JSON
+├── lib/                 # 共享基础设施（无业务语义）
+│   ├── db.ts            # DatabaseSync 单例（media.db 锚定 src/..；env ROU_MEDIA_DB 可覆盖，测试用 :memory:）+ WAL
+│   ├── meta.ts          # meta KV 表 get/set（scan_dirs 等配置存储，后续 feature 可复用）
+│   ├── http.ts          # json() / readJson() / asRecord() / HttpError / Route 与 RequestContext 类型
+│   ├── static.ts        # public/ 静态服务（MIME 表 + 防路径穿越）
+│   └── paths.ts         # normPath / stemOf / volumeOf / typeOfExt 纯函数
+└── features/
+    ├── media/           # 媒体库：磁盘实况（files 表）
+    │   ├── index.ts     # 桶导出
+    │   ├── files.ts     # files 表 DDL + 全部操作（upsert×2 / queryExists / listVideos / listVolumes / purge / setFileDuration / getFileBasic）
+    │   ├── scanner.ts   # 扫描（消费 lib/meta 的 scan_dirs）
+    │   ├── mp4.ts       # mvhd 流式时长解析
+    │   ├── stream.ts    # /stream/:id Range 流播放
+    │   ├── routes.ts    # /api/videos、/api/files、/api/exists、/api/scan、/api/config
+    │   └── types.ts     # FileRow / VideoItem / ScanResult / 各响应 DTO（纯类型）
+    ├── ledger/          # 下载账本（downloads 表）
+    │   ├── index.ts / downloads.ts / routes.ts / types.ts
+    └── system/          # 服务级
+        └── index.ts / routes.ts   # /api/ping（聚合 media+ledger 统计）、/api/log
+```
+
+组织规则：
+
+- **feature 自治**：表 DDL 跟着 feature 走（单库多表），数据操作不跨 feature；`features/system` 的 ping 是唯一允许的跨 feature 聚合点。
+- **feature 之间禁止互相 import**；新增功能模块 = 新增 `features/xxx/` 目录 + `app.ts` 注册一行。
+- **lib/ 只放无业务语义的基础设施**，不放任何表操作。
+- **类型单一来源**：API DTO 定义在 server 各 feature 的 `types.ts`，`server-web/src/lib/types.ts` 相对路径 re-export，字段漂移由编译器抓住。
+- 测试按 feature 就近放置；vitest `setupFiles` 统一设 `ROU_MEDIA_DB=:memory:`（每测试文件隔离实例）。
+
 - **管理页前端**：源码在 `../server-web`（独立 npm 包：React + TypeScript + Tailwind CSS + Vite + Vitest），`npm run build` 产物直出 `server/public`（文件名不带哈希、随仓库提交——服务侧维持零依赖、`start.bat` 开箱即用，代价是构建产物入库）。开发走 `npm run dev`（Vite dev server 代理 `/api`、`/stream` 到 17321；服务端写操作 Origin 白名单已含 dev origin）。
 - 监听 `127.0.0.1:17321`。
 - **启动方式**（二选一）：
-  - 手动：`server/start.bat`
-  - 面板一键：离线指示灯点击 → `chrome.runtime.sendNativeMessage('com.rouvideo.media', {cmd:'start'})` → native host（`native-host.js`，经 `native-host.cmd` 包装）以 detached 方式 spawn server.js 后即退出，服务独立存活；面板轮询 ping 确认上线。需先运行 `server/install-native.bat` 注册（HKCU 注册表 + host manifest，`allowed_origins` 锁扩展 ID；卸载用 `uninstall-native.bat`）。依赖 node 在 PATH。
-- 数据库文件 `server/media.db`，脚本目录下。
+  - 手动：`server/start.bat`（`node --no-warnings --experimental-sqlite src/server.ts`）
+  - 面板一键：离线指示灯点击 → `chrome.runtime.sendNativeMessage('com.rouvideo.media', {cmd:'start'})` → native host（`native-host.ts`，经 `native-host.cmd` 包装）以 detached 方式 spawn `src/server.ts` 后即退出，服务独立存活；面板轮询 ping 确认上线。需先运行 `server/install-native.bat` 注册（HKCU 注册表 + host manifest，`allowed_origins` 锁扩展 ID；卸载用 `uninstall-native.bat`）。依赖 node 在 PATH。
+- 数据库文件 `server/media.db`、日志 `server/server.log`（均锚定 server 根，代码经 `src/..` 相对定位，不依赖 cwd）。
+- 开发命令：`server/` 内 `npm run check`（typecheck + test）。根目录 lint/typecheck 已排除 server（对齐 server-web 策略：无 eslint，tsc strict + 测试把关）。
 
 ## 4. 数据库设计（三张表）
 
