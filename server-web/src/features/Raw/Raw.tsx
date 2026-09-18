@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   cancelRawScan,
+  deleteRawFile,
+  fetchRawDuplicates,
   fetchRawFiles,
   fetchRawMissing,
   fetchRawVolumes,
@@ -10,12 +12,13 @@ import {
 import type { PlaySource } from '@/components/PlayerDialog';
 import { RawCard } from '@/components/RawCard';
 import { Pager } from '@/components/Pager';
-import type { RawFileRow, RawFilesResponse, RawScanStatus, RawType, RawVolumesResponse } from '@/lib/types';
-import { fmtSize } from '@/utils/format';
+import type { RawDuplicatesResponse, RawDupGroup, RawFileRow, RawFilesResponse, RawScanStatus, RawType, RawVolumesResponse } from '@/lib/types';
+import { fmtDate, fmtSize } from '@/utils/format';
 import { NATIVE_VIDEO_EXTS } from '@/components/RawCard';
 
 const DEFAULT_PAGE_SIZE = 50;
 const PAGE_SIZE_OPTIONS = [20, 50, 100];
+const DUP_PAGE_SIZE = 20;
 
 interface Props {
   onStat: (text: string) => void;
@@ -72,6 +75,95 @@ function VolumeCard({
   );
 }
 
+/** 删除图标按钮（查重面板行级/共用样式）。 */
+function TrashButton({ label, title, disabled, onClick }: { label: string; title: string; disabled?: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      className="flex size-6 shrink-0 items-center justify-center rounded-md bg-raised text-dim transition-colors hover:bg-err-soft hover:text-err disabled:cursor-default disabled:opacity-40"
+      aria-label={label}
+      title={title}
+      disabled={disabled}
+      onClick={onClick}
+    >
+      <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <path d="M4 7h16M9.5 7V5a1.5 1.5 0 0 1 1.5-1.5h2A1.5 1.5 0 0 1 14.5 5v2M6.5 7l.8 12a2 2 0 0 0 2 1.9h5.4a2 2 0 0 0 2-1.9l.8-12M10 11v6M14 11v6" />
+      </svg>
+    </button>
+  );
+}
+
+/** 重复文件组：组头（份数/单份大小/冗余/hash 短码）+ 文件行（路径/盘符/日期，视频可播，可删）。 */
+function DupGroup({
+  g,
+  onPlay,
+  onDeleteFile,
+  onDeleteExtras,
+  busy,
+}: {
+  g: RawDupGroup;
+  onPlay: (it: RawFileRow) => void;
+  onDeleteFile: (it: RawFileRow) => void;
+  onDeleteExtras: (g: RawDupGroup) => void;
+  busy: boolean;
+}) {
+  return (
+    <div className="rounded-xl border border-line bg-raised/40 p-3">
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <span className={`badge ${g.type === 'video' ? 'badge-video' : 'badge-cover'}`}>{g.type === 'video' ? '视频' : '图片'}</span>
+        <b className="text-ink">{g.count} 份相同</b>
+        <span className="text-dim">每份 {fmtSize(g.size)}</span>
+        <span className="text-warn">冗余 {fmtSize(g.wasted)}</span>
+        <span className="ml-auto font-mono text-dim" title={g.hash}>
+          #{g.hash.slice(0, 8)}
+        </span>
+        <button
+          type="button"
+          className="act !py-1 !px-2.5 hover:!bg-err-soft hover:!text-err"
+          disabled={busy}
+          title={`保留第一个（${g.files[0]?.path ?? ''}），删除其余 ${g.count - 1} 个文件及记录`}
+          onClick={() => onDeleteExtras(g)}
+        >
+          删除多余副本
+        </button>
+      </div>
+      <div className="mt-2 space-y-1">
+        {g.files.map((f) => (
+          <div key={f.id} className="flex min-w-0 items-center gap-2">
+            {f.type === 'video' ? (
+              <button
+                type="button"
+                className="flex size-6 shrink-0 items-center justify-center rounded-md bg-raised text-dim transition-colors hover:bg-brand-soft hover:text-brand-hover"
+                aria-label={`播放 ${f.name}`}
+                title={`播放 ${f.path}`}
+                onClick={() => onPlay(f)}
+              >
+                <svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor" aria-hidden>
+                  <path d="M8.5 5.5v13l11-6.5z" />
+                </svg>
+              </button>
+            ) : (
+              <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-raised text-dim" title={f.path}>
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" />
+                  <circle cx="9" cy="10" r="1.6" />
+                  <path d="M4 17l4.8-4.5L13 16l3-2.8 4.2 3.8" />
+                </svg>
+              </span>
+            )}
+            <span className="min-w-0 flex-1 truncate font-mono text-xs text-dim" title={f.path}>
+              {f.path}
+            </span>
+            <span className="shrink-0 font-mono text-xs uppercase text-dim">{f.volume}</span>
+            <span className="shrink-0 text-xs text-dim">{fmtDate(f.mtime)}</span>
+            <TrashButton label={`删除文件 ${f.path}`} title={`删除 ${f.path}（磁盘文件 + 库记录，不可恢复）`} disabled={busy} onClick={() => onDeleteFile(f)} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function Raw({ onStat, onPlay }: Props) {
   // 扫描面板
   const [volumes, setVolumes] = useState<RawVolumesResponse['volumes']>([]);
@@ -84,6 +176,13 @@ export function Raw({ onStat, onPlay }: Props) {
   const [missingCount, setMissingCount] = useState(0);
   const [missingItems, setMissingItems] = useState<RawFileRow[] | null>(null);
   const [resolving, setResolving] = useState(false);
+  // 查重面板
+  const [dupOpen, setDupOpen] = useState(false);
+  const [dupPage, setDupPage] = useState(1);
+  const [dupData, setDupData] = useState<RawDuplicatesResponse | null>(null);
+  const [dupErr, setDupErr] = useState('');
+  const [dupBusy, setDupBusy] = useState(false);
+  const [dupRefresh, setDupRefresh] = useState(0);
   // 文件浏览
   const [qInput, setQInput] = useState('');
   const [q, setQ] = useState('');
@@ -167,6 +266,58 @@ export function Raw({ onStat, onPlay }: Props) {
   }, [refreshMissing]);
 
   const running = status?.running === true;
+
+  // 查重面板取数：开面板/翻页/扫描 done（refreshKey）/删除后（dupRefresh）时拉取
+  useEffect(() => {
+    if (!dupOpen) return;
+    let alive = true;
+    fetchRawDuplicates({ page: dupPage, size: DUP_PAGE_SIZE })
+      .then((d) => {
+        if (!alive) return;
+        // 删除后当前页清空（组数减少）→ 回第 1 页重拉
+        if (!d.items.length && dupPage > 1 && d.total > 0) {
+          setDupPage(1);
+          return;
+        }
+        setDupData(d);
+        setDupErr('');
+      })
+      .catch((e: unknown) => {
+        if (alive) setDupErr(String((e as Error)?.message || e));
+      });
+    return () => {
+      alive = false;
+    };
+  }, [dupOpen, dupPage, refreshKey, dupRefresh]);
+
+  function toggleDup() {
+    setDupOpen((v) => !v);
+    setDupPage(1);
+  }
+
+  /** 删除重复副本（磁盘文件 + 库记录，不可恢复）：confirm 二次确认后逐个调用，完成后双刷新。 */
+  async function deleteDupFiles(list: RawFileRow[]) {
+    if (!list.length || dupBusy) return;
+    const shown = list
+      .slice(0, 10)
+      .map((f) => f.path)
+      .join('\n');
+    const suffix = list.length > 10 ? `\n… 等共 ${list.length} 个` : '';
+    if (!window.confirm(`确定删除以下文件？\n${shown}${suffix}\n\n磁盘文件与库记录将一并删除，不可恢复。`)) return;
+    setDupBusy(true);
+    const errs: string[] = [];
+    for (const f of list) {
+      try {
+        await deleteRawFile(f.id);
+      } catch (e) {
+        errs.push(`${f.path}：${(e as Error)?.message || e}`);
+      }
+    }
+    setDupBusy(false);
+    if (errs.length) setDupErr(errs.join('\n'));
+    setDupRefresh((k) => k + 1);
+    setRefreshKey((k) => k + 1);
+  }
 
   function toggleSel(v: string) {
     setSel((prev) => {
@@ -325,6 +476,55 @@ export function Raw({ onStat, onPlay }: Props) {
         </div>
       ) : null}
 
+      {/* 查重面板 */}
+      {dupOpen ? (
+        <div className="card mb-4 shrink-0 p-5">
+          <div className="mb-3 flex flex-wrap items-center gap-3">
+            <div className="text-[13px] font-semibold">文件查重</div>
+            {dupData ? (
+              <span className="text-xs text-dim" title="清理每组多余副本后理论上可释放的空间">
+                共 {dupData.total} 组 · 重复占用 {fmtSize(dupData.wastedTotal)}
+              </span>
+            ) : null}
+            <button type="button" className="act ml-auto" onClick={toggleDup}>
+              收起
+            </button>
+          </div>
+          {dupErr ? (
+            <div className="text-xs text-err">{dupErr}</div>
+          ) : dupData == null ? (
+            <div className="py-6 text-center text-xs text-dim">加载中…</div>
+          ) : dupData.items.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-line px-4 py-6 text-center text-dim">
+              没有重复文件（内容指纹相同的现存文件 ≥2 份才成组）
+            </div>
+          ) : (
+            <div className="max-h-72 space-y-2.5 overflow-y-auto">
+              {dupData.items.map((g) => (
+                <DupGroup
+                  key={g.hash}
+                  g={g}
+                  onPlay={play}
+                  onDeleteFile={(f) => void deleteDupFiles([f])}
+                  onDeleteExtras={(gr) => void deleteDupFiles(gr.files.slice(1))}
+                  busy={dupBusy}
+                />
+              ))}
+            </div>
+          )}
+          {dupData && dupData.total > DUP_PAGE_SIZE ? (
+            <Pager
+              page={dupPage}
+              pages={Math.ceil(dupData.total / DUP_PAGE_SIZE)}
+              total={dupData.total}
+              onPrev={() => setDupPage((p) => p - 1)}
+              onNext={() => setDupPage((p) => p + 1)}
+              onJump={setDupPage}
+            />
+          ) : null}
+        </div>
+      ) : null}
+
       {/* 文件浏览 */}
       <div className="mb-4 flex shrink-0 flex-wrap items-center gap-2.5">
         <input
@@ -373,6 +573,9 @@ export function Raw({ onStat, onPlay }: Props) {
           <option value="only">仅已消失</option>
           <option value="all">全部</option>
         </select>
+        <button type="button" className={`act ml-auto ${dupOpen ? 'border-brand/60 bg-brand-soft' : ''}`} onClick={toggleDup}>
+          查重
+        </button>
       </div>
       {error ? (
         <div className="shrink-0 rounded-xl border border-dashed border-line py-14 text-center text-dim">加载失败：{error}</div>

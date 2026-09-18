@@ -74,7 +74,7 @@ server/src/
     │   ├── scanner.ts   # 扫描任务（单任务、作用域消失判定、协作取消、SSE 广播）
     │   ├── stream.ts    # /api/raw/file/:id/content（图片/原生视频 Range 直连）
     │   ├── hls.ts       # raw 适配层：raw_files.id → 行 → ffmpeg 探时长 → lib/hls-core 会话
-    │   ├── routes.ts    # /api/raw/*（volumes/scan 启停/状态/SSE/files/missing/archived/file/events）
+    │   ├── routes.ts    # /api/raw/*（volumes/scan 启停/状态/SSE/files/missing/duplicates/archived/file/events）
     │   └── types.ts     # RawFileRow / RawScanStatus 等响应 DTO（纯类型）
     ├── ledger/          # 下载账本（downloads 表）
     │   ├── index.ts / downloads.ts / routes.ts / types.ts
@@ -212,6 +212,8 @@ raw 已定决策记录：
 | 行身份 | 单行跟随（逻辑文件） | 移动/改名不换行：UPDATE path/volume，name 永远=最初名；行仅 resolve 接口可删 |
 | 移动/改名自动判定 | 同会话配对，四条件全满足 | ①恰好 1 消失行+1 新建行同 hash ②全库无第三条 missing=0 同 hash 行 ③本次扫描正常完成；命中→旧行合并（archived=1）+写归档/事件，改名+移动同发记两条事件；不满足→回退 pending 由用户定夺，宁缺毋错 |
 | 跨会话追认 | 不做 | 分次扫描的移动由用户工作流兜底：待决策确认后手动删除，新位置行成为唯一记录 |
+| 查重口径 | 抽样 hash 分组，仅现存行 | missing=1 与待决策（pending_missing=1）行排除（文件可能已不在盘上）；size=0 排除（hash 输入仅 size，全部 0 B 文件同指纹互聚成假组）；hash 输入含 size，同组必同大小，冗余=(n-1)×size；抽样指纹理论碰撞经生产库全量 sha256 抽检 8/8 通过，误报风险靠组内展示完整路径人工复核兜底，不做全文件校验 |
+| 查重删除 | 磁盘文件 + 行同删 | 仅查重面板入口（行级/组级删多余副本）；前端 window.confirm 二次确认；护栏=路径前缀校验；不做回收站（磁盘 unlink 直删，不可恢复） |
 | 归档表粒度 | 一行一文件 | file_id UNIQUE；name=最新名；中间历代名字不单存，沿革看 raw_events.result |
 
 ### 匹配与维护语义
@@ -247,7 +249,9 @@ raw 已定决策记录：
 | `GET /api/raw/scan/events` | 页面 | **SSE**：连接即推 `snapshot` → 运行中 ~500ms 推 `progress` → 结束推 `done`（含 missingCount 摘要）；15s 心跳注释行保活 |
 | `GET /api/raw/files?page=&size=&q=&type=&volume=&missing=` | 页面 | 分页 + 名称搜索 + 类型/盘符筛选，`ORDER BY last_seen DESC, id DESC`；missing 取值 hide(默认)/only/all |
 | `GET /api/raw/missing` | 页面 | 待决策消失清单（pending_missing=1，全量返回） |
+| `GET /api/raw/duplicates?page=&size=` | 页面 | 文件查重：按抽样 hash 聚合现存行（missing=0 且 pending_missing=0），≥2 份成组，组内文件按 path 排序，组按冗余空间（(n-1)×size）降序分页；响应附全库组数 total 与重复占用总量 wastedTotal |
 | `POST /api/raw/missing/resolve` | 页面 | `{op:'delete'\|'mark'}` 批量处理全部待决策行：delete 删行；mark 置 missing=1；均清 pending_missing |
+| `POST /api/raw/file/:id/delete` | 页面 | 查重清理：unlink 磁盘文件（ENOENT 视为已删）+ 删 raw_files 行；**护栏：路径前缀必须为所在盘 `{volume}/rawfiles/`**（防库外路径误删）；文件被占用等 unlink 失败 → 报错保留行；raw_archive/raw_events 悬空保留（对齐 resolveMissing） |
 | `GET /api/raw/events?page=&size=&kind=&file_id=` | 页面 | 变更日志：通用列表分页（kind 筛选，倒序）；`file_id` 时返回该文件全部事件（正序，弹窗用）；条目关联 raw_files 带出当前 path/hash/volume/最初名，行已删则 file=null |
 | `GET /api/raw/archived?page=&size=&q=&type=&volume=` | 页面 | 归档文件分页（`archived=1` 且 missing=0 的逻辑文件）：搜索/类型/盘符筛选；条目附最新名（raw_archive.name）与变更计数（event_count） |
 | `GET /api/raw/file/:id/content` | 页面 | 图片缩略图 / 原生格式视频 Range 直连（mp4/webm/m4v/mov/mkv） |

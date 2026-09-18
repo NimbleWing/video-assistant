@@ -1,7 +1,24 @@
-// raw_files 表操作单测：upsert / 三键 touch / 作用域消失判定 / 决策 / 列表筛选。
+// raw_files 表操作单测：upsert / 三键 touch / 作用域消失判定 / 决策 / 列表筛选 / 查重 / 物理删除。
 import { afterAll, describe, expect, it } from 'vitest';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { db } from '../../lib/db.ts';
-import { findRawByPath, listPendingMissing, listRawFiles, markPendingMissing, rawTypeOfExt, rawVolumeStats, resolveMissing, touchRawSeen, upsertRawScanned } from './files.ts';
+import { normPath } from '../../lib/paths.ts';
+import {
+  deleteRawPhysical,
+  findRawByPath,
+  getRawByPath,
+  listPendingMissing,
+  listRawDuplicates,
+  listRawFiles,
+  markPendingMissing,
+  rawTypeOfExt,
+  rawVolumeStats,
+  resolveMissing,
+  touchRawSeen,
+  upsertRawScanned,
+} from './files.ts';
 
 afterAll(() => {
   db.exec('DELETE FROM raw_files');
@@ -91,5 +108,87 @@ describe('listRawFiles', () => {
     const v = rawVolumeStats().find((x) => x.volume === 'd:');
     expect(v?.videos).toBe(2); // a.mp4 + Name.MP4
     expect(v?.images).toBe(1); // b.jpg
+  });
+});
+
+describe('listRawDuplicates', () => {
+  it('同 hash 现存行成组；missing/待决策行排除；冗余与汇总正确', () => {
+    // dup-h1：d:/e: 两份存活 + 一份 missing + 一份待决策 → 组内只有 2 份
+    upsertRawScanned(row({ path: 'd:/rawfiles/dup1.mp4', name: 'dup1', hash: 'dup-h1', size: 100, seen: 1000 }));
+    upsertRawScanned(row({ path: 'e:/rawfiles/dup1-copy.mp4', name: 'dup1-copy', hash: 'dup-h1', size: 100, volume: 'e:', seen: 1000 }));
+    upsertRawScanned(row({ path: 'f:/rawfiles/dup1-gone.mp4', name: 'dup1-gone', hash: 'dup-h1', size: 100, volume: 'f:', seen: 1000 }));
+    db.exec("UPDATE raw_files SET missing = 1 WHERE path = 'f:/rawfiles/dup1-gone.mp4'");
+    upsertRawScanned(row({ path: 'g:/rawfiles/dup1-pending.mp4', name: 'dup1-pending', hash: 'dup-h1', size: 100, volume: 'g:', seen: 1000 }));
+    db.exec("UPDATE raw_files SET pending_missing = 1 WHERE path = 'g:/rawfiles/dup1-pending.mp4'");
+    // dup-h2：三份存活（含跨类型同 hash 场景的 size 一致）
+    for (const [i, vol] of ['d:', 'e:', 'h:'].entries()) {
+      upsertRawScanned(row({ path: `${vol}/rawfiles/dup2-${i}.mp4`, name: `dup2-${i}`, hash: 'dup-h2', size: 50, volume: vol, seen: 1000 }));
+    }
+
+    const r = listRawDuplicates({});
+    expect(r.total).toBe(2);
+    expect(r.wastedTotal).toBe(200); // (2-1)*100 + (3-1)*50
+    // 冗余大的组排前：dup-h2（冗余 100）与 dup-h1（冗余 100）并列 → 按 hash 稳定排序
+    const byHash = new Map(r.items.map((g) => [g.hash, g]));
+    const g1 = byHash.get('dup-h1');
+    expect(g1?.count).toBe(2);
+    expect(g1?.size).toBe(100);
+    expect(g1?.wasted).toBe(100);
+    expect(g1?.files.map((f) => f.path)).toEqual(['d:/rawfiles/dup1.mp4', 'e:/rawfiles/dup1-copy.mp4']);
+    const g2 = byHash.get('dup-h2');
+    expect(g2?.count).toBe(3);
+    expect(g2?.wasted).toBe(100);
+    expect(g2?.files.map((f) => f.volume)).toEqual(['d:', 'e:', 'h:']);
+  });
+
+  it('零字节文件不成组（hash 输入仅 size，0 B 文件互聚为假组）', () => {
+    upsertRawScanned(row({ path: 'd:/rawfiles/zero1.mkv', name: 'zero1', hash: 'dup-zero', size: 0, seen: 1000 }));
+    upsertRawScanned(row({ path: 'e:/rawfiles/zero2.jpg', name: 'zero2', hash: 'dup-zero', size: 0, ext: 'jpg', type: 'image', volume: 'e:', seen: 1000 }));
+    const r = listRawDuplicates({});
+    expect(r.items.find((g) => g.hash === 'dup-zero')).toBeUndefined();
+    db.exec("DELETE FROM raw_files WHERE hash = 'dup-zero'");
+  });
+
+  it('唯一 hash 不成组；分页按组生效', () => {
+    upsertRawScanned(row({ path: 'd:/rawfiles/unique.mp4', name: 'unique', hash: 'dup-unique', seen: 1000 }));
+    expect(listRawDuplicates({}).total).toBe(2); // 上一用例的两组，unique 不入组
+    const p1 = listRawDuplicates({ page: 1, size: 1 });
+    expect(p1.items).toHaveLength(1);
+    const p2 = listRawDuplicates({ page: 2, size: 1 });
+    expect(p2.items).toHaveLength(1);
+    expect(p1.items[0]?.hash).not.toBe(p2.items[0]?.hash);
+    expect(listRawDuplicates({ page: 3, size: 1 }).items).toHaveLength(0);
+    // 清理本 describe 造的行（定向路径前缀）
+    db.exec("DELETE FROM raw_files WHERE path LIKE '%/rawfiles/dup%' OR path LIKE '%/rawfiles/unique%'");
+  });
+});
+
+describe('deleteRawPhysical', () => {
+  it('删磁盘文件与行；文件已不在盘上仅删行；行不存在返回 null', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'rou-raw-del-'));
+    try {
+      // 存活文件：unlink + 删行
+      const target = path.join(dir, 'x.mp4');
+      await fs.writeFile(target, 'data');
+      const np = normPath(target);
+      upsertRawScanned(row({ path: np, name: 'x', hash: 'del-h1', seen: 1100 }));
+      const id1 = getRawByPath(np)?.id as number;
+      const r1 = await deleteRawPhysical(id1);
+      expect(r1?.fileDeleted).toBe(true);
+      expect(getRawByPath(np)).toBeNull();
+      await expect(fs.stat(target)).rejects.toThrow();
+
+      // 行指向的文件已消失（ENOENT）：容忍，仅删行
+      const np2 = normPath(path.join(dir, 'gone.mp4'));
+      upsertRawScanned(row({ path: np2, name: 'gone', hash: 'del-h2', seen: 1100 }));
+      const id2 = getRawByPath(np2)?.id as number;
+      const r2 = await deleteRawPhysical(id2);
+      expect(r2?.fileDeleted).toBe(false);
+      expect(getRawByPath(np2)).toBeNull();
+
+      expect(await deleteRawPhysical(999_999_999)).toBeNull();
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 });

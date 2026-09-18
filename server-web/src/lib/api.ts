@@ -3,7 +3,9 @@ import type {
   DownloadsResponse,
   LogResponse,
   RawArchivedResponse,
+  RawDuplicatesResponse,
   RawEventsResponse,
+  RawFileDeleteResponse,
   RawFilesResponse,
   RawMissingResponse,
   RawResolveOp,
@@ -139,6 +141,20 @@ export function resolveRawMissing(op: RawResolveOp): Promise<RawResolveResponse>
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ op }),
   });
+}
+
+/** 重复文件分组查询（组为单位分页）。 */
+export function fetchRawDuplicates(query: { page: number; size: number }): Promise<RawDuplicatesResponse> {
+  const p = new URLSearchParams({
+    page: String(query.page),
+    size: String(query.size),
+  });
+  return api(`/api/raw/duplicates?${p.toString()}`);
+}
+
+/** 删除磁盘文件 + raw_files 行（查重清理，不可恢复）。 */
+export function deleteRawFile(id: number): Promise<RawFileDeleteResponse> {
+  return api(`/api/raw/file/${id}/delete`, { method: 'POST' });
 }
 
 export interface RawEventsQuery {

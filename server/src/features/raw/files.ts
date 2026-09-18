@@ -1,7 +1,8 @@
 // raw_files 表：原始资料库（各盘 RawFiles/ 盘点 + 抽样 hash）。DDL + 全部数据操作，仅此文件触碰本表。
+import { promises as fs } from 'node:fs';
 import { db, numOf, strOf, type SqlRow } from '../../lib/db.ts';
 import type { SQLInputValue } from 'node:sqlite';
-import type { ArchivedItem, RawEventItem, RawFileRow, RawType, RawVolumeStat } from './types.ts';
+import type { ArchivedItem, RawDupGroup, RawEventItem, RawFileRow, RawType, RawVolumeStat } from './types.ts';
 
 /** 原始资料类型→扩展名清单（内聚本 feature，不动 lib/paths 的媒体判定）。 */
 const RAW_VIDEO_EXTS = new Set(['mp4', 'ts', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'webm', 'm4v', 'mpg', 'mpeg', 'rm', 'rmvb']);
@@ -180,6 +181,47 @@ export function listPendingMissing(): RawFileRow[] {
   ).all() as SqlRow[]).map(toRow);
 }
 
+/**
+ * 文件查重：按抽样 hash 聚合现存行（missing=0 且 pending_missing=0），≥2 份成组；
+ * 组按冗余空间降序分页，附全库组数与重复占用总量。零字节文件排除（hash 输入仅 size，
+ * 全部 0 B 文件同指纹互聚成假组——失败下载的垃圾文件，非重复）。
+ */
+export function listRawDuplicates(opt: { page?: number; size?: number }): {
+  total: number;
+  wastedTotal: number;
+  items: RawDupGroup[];
+} {
+  const page = Math.max(1, Number(opt.page) || 1);
+  const size = Math.min(50, Math.max(1, Number(opt.size) || 20));
+  const live = 'missing = 0 AND pending_missing = 0 AND size > 0';
+  const agg = `SELECT hash, COUNT(*) AS cnt, MIN(size) AS size FROM raw_files
+               WHERE ${live} GROUP BY hash HAVING COUNT(*) >= 2`;
+  const summary = db.prepare(`SELECT COUNT(*) AS n, COALESCE(SUM((cnt - 1) * size), 0) AS wasted FROM (${agg})`).get() as SqlRow;
+  const hashes = (db.prepare(`${agg} ORDER BY (cnt - 1) * size DESC, hash LIMIT ? OFFSET ?`)
+    .all(size, (page - 1) * size) as SqlRow[]).map((r) => strOf(r.hash));
+  const items: RawDupGroup[] = [];
+  if (hashes.length) {
+    const byHash = new Map<string, RawFileRow[]>();
+    for (const r of db.prepare(
+      `SELECT id, path, hash, name, ext, type, size, mtime, volume, missing, pending_missing, archived, first_seen, last_seen
+       FROM raw_files WHERE ${live}
+       AND hash IN (${hashes.map(() => '?').join(',')}) ORDER BY path`,
+    ).all(...hashes) as SqlRow[]) {
+      const row = toRow(r);
+      const arr = byHash.get(row.hash) ?? [];
+      arr.push(row);
+      byHash.set(row.hash, arr);
+    }
+    for (const h of hashes) {
+      const files = byHash.get(h) ?? [];
+      if (files.length < 2) continue;
+      const first = files[0] as RawFileRow;
+      items.push({ hash: h, count: files.length, size: first.size, type: first.type, wasted: (files.length - 1) * first.size, files });
+    }
+  }
+  return { total: numOf(summary.n), wastedTotal: numOf(summary.wasted), items };
+}
+
 /** 批量处理全部待决策行：delete=删行；mark=置 missing=1。返回受影响行数。 */
 export function resolveMissing(op: 'delete' | 'mark'): number {
   if (op === 'delete') return Number(db.prepare('DELETE FROM raw_files WHERE pending_missing = 1').run().changes);
@@ -199,6 +241,27 @@ export function getRawFile(id: number): RawFileRow | null {
     'SELECT id, path, hash, name, ext, type, size, mtime, volume, missing, pending_missing, archived, first_seen, last_seen FROM raw_files WHERE id = ?',
   ).get(id) as SqlRow | undefined;
   return row ? toRow(row) : null;
+}
+
+/**
+ * 删除单个物理文件及其行（查重清理）：unlink 磁盘文件（ENOENT 视为已删）后删行；
+ * unlink 其他失败（占用/权限）抛错且保留行。调用方负责 RawFiles 前缀护栏。
+ * raw_archive/raw_events 悬空保留（对齐 resolveMissing 删行语义）。
+ */
+export async function deleteRawPhysical(id: number): Promise<{ fileDeleted: boolean } | null> {
+  const row = getRawFile(id);
+  if (!row) return null;
+  let fileDeleted = false;
+  try {
+    await fs.unlink(row.path);
+    fileDeleted = true;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw new Error(`删除文件失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  db.prepare('DELETE FROM raw_files WHERE id = ?').run(id);
+  return { fileDeleted };
 }
 
 // ---------------------------------------------------------------------------

@@ -1,13 +1,15 @@
 // 原始资料库 API 路由：/api/raw/*（volumes/scan 启停/状态/SSE/files/missing/file 内容与 HLS）。
 import { asRecord, HttpError, json, readJson, type Route } from '../../lib/http.ts';
-import { listArchivedFiles, listRawEvents, listRawFiles, listPendingMissing, resolveMissing, rawVolumeStats } from './files.ts';
+import { deleteRawPhysical, listArchivedFiles, listRawDuplicates, listRawEvents, listRawFiles, listPendingMissing, resolveMissing, rawVolumeStats, getRawFile } from './files.ts';
 import { probeRawVolumes } from './volumes.ts';
 import { cancelRawScan, rawLastSelection, rawScanStatus, startRawScan } from './scanner.ts';
 import { rawContentHandler } from './stream.ts';
 import { rawManifestHandler, rawSegmentHandler } from './hls.ts';
 import type {
   RawArchivedResponse,
+  RawDuplicatesResponse,
   RawEventsResponse,
+  RawFileDeleteResponse,
   RawFilesResponse,
   RawMissingResponse,
   RawResolveOp,
@@ -96,12 +98,34 @@ const missingRoute: Route['handler'] = ({ res }) => {
   json(res, 200, body);
 };
 
+const duplicatesRoute: Route['handler'] = ({ res, url }) => {
+  const r = listRawDuplicates({
+    page: Number(url.searchParams.get('page')) || 1,
+    size: Number(url.searchParams.get('size')) || 20,
+  });
+  const body: RawDuplicatesResponse = { ok: true, ...r };
+  json(res, 200, body);
+};
+
 const resolveRoute: Route['handler'] = async ({ req, res }) => {
   const body = asRecord(await readJson(req));
   const op = body?.op;
   if (op !== 'delete' && op !== 'mark') throw new HttpError(400, 'op 应为 delete 或 mark');
   const r: RawResolveResponse = { ok: true, affected: resolveMissing(op as RawResolveOp) };
   json(res, 200, r);
+};
+
+/** 查重清理：删磁盘文件 + 删行。护栏：路径必须在所在盘 RawFiles 根内（防库外路径误删）。 */
+const deleteFileRoute: Route['handler'] = async ({ res, params }) => {
+  const id = Number(params.id);
+  if (!Number.isInteger(id) || id <= 0) throw new HttpError(400, '非法 id');
+  const row = getRawFile(id);
+  if (!row) throw new HttpError(404, '记录不存在');
+  if (!row.path.startsWith(`${row.volume}/rawfiles/`)) throw new HttpError(400, '路径不在 RawFiles 目录内，拒绝删除');
+  const r = await deleteRawPhysical(id);
+  if (!r) throw new HttpError(404, '记录不存在');
+  const body: RawFileDeleteResponse = { ok: true, fileDeleted: r.fileDeleted, rowDeleted: true };
+  json(res, 200, body);
 };
 
 const rawEventsRoute: Route['handler'] = ({ res, url }) => {
@@ -135,11 +159,13 @@ export const rawRoutes: Route[] = [
   { method: 'GET', path: '/api/raw/scan/events', handler: eventsRoute },
   { method: 'GET', path: '/api/raw/files', handler: filesRoute },
   { method: 'GET', path: '/api/raw/missing', handler: missingRoute },
+  { method: 'GET', path: '/api/raw/duplicates', handler: duplicatesRoute },
   { method: 'POST', path: '/api/raw/missing/resolve', handler: resolveRoute },
   { method: 'GET', path: '/api/raw/events', handler: rawEventsRoute },
   { method: 'GET', path: '/api/raw/archived', handler: archivedRoute },
   { method: 'GET', path: '/api/raw/file/:id/content', handler: rawContentHandler },
   { method: 'HEAD', path: '/api/raw/file/:id/content', handler: rawContentHandler },
+  { method: 'POST', path: '/api/raw/file/:id/delete', handler: deleteFileRoute },
   { method: 'GET', path: '/api/raw/file/:id/index.m3u8', handler: rawManifestHandler },
   { method: 'HEAD', path: '/api/raw/file/:id/index.m3u8', handler: rawManifestHandler },
   { method: 'GET', path: '/api/raw/file/:id/seg/:seg', handler: rawSegmentHandler },

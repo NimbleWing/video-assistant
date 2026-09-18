@@ -102,6 +102,36 @@ export interface RawResolveResponse {
   affected: number;
 }
 
+/** 重复文件分组：同抽样 hash 的现存行（missing=0 且 pending_missing=0）。 */
+export interface RawDupGroup {
+  hash: string;
+  /** 副本数。 */
+  count: number;
+  /** 单份大小（hash 输入含 size，同组必同大小）。 */
+  size: number;
+  type: RawType;
+  /** 冗余占用 = (count-1)×size。 */
+  wasted: number;
+  files: RawFileRow[];
+}
+
+export interface RawDuplicatesResponse {
+  ok: boolean;
+  /** 全库重复组数。 */
+  total: number;
+  /** 全库重复占用总量（字节）。 */
+  wastedTotal: number;
+  items: RawDupGroup[];
+}
+
+/** POST /api/raw/file/:id/delete 响应。 */
+export interface RawFileDeleteResponse {
+  ok: boolean;
+  /** 磁盘文件是否实际删除（false=文件本就不在盘上，仅删了行）。 */
+  fileDeleted: boolean;
+  rowDeleted: boolean;
+}
+
 /** 变更日志条目：事件 + 关联的 raw_files 行（行被删则为 null，悬空保留）。 */
 export interface RawEventItem {
   id: number;
