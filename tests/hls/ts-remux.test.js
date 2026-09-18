@@ -194,3 +194,82 @@ describe('muxMp4 结构', () => {
     expect(Buffer.from(asChunks).equals(Buffer.from(asWhole))).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// B 帧时间轴（v1.11.4：stts=DTS 差分 + ctts 合成偏移）
+// ---------------------------------------------------------------------------
+
+/** 解码序 I P B B P B B——pts 锯齿（0/3000/1000/2000/6000/4000/5000），AUD 分隔 AU。 */
+function makeBFrameTs() {
+  const sps = makeSps(3, 1);
+  const pps = [0x68, 0xeb, 0x3c, 0x80];
+  const aud = [0x09, 0x10];
+  const frames = [
+    { nal: [0x65, 0x88, 0x84, 0x00, 0x21], pts: 0, first: true },
+    { nal: [0x41, 0x9a, 0x22, 0x11, 0x01], pts: 3000 },
+    { nal: [0x41, 0x9b, 0x22, 0x11, 0x02], pts: 1000 },
+    { nal: [0x41, 0x9c, 0x22, 0x11, 0x03], pts: 2000 },
+    { nal: [0x41, 0x9d, 0x22, 0x11, 0x04], pts: 6000 },
+    { nal: [0x41, 0x9e, 0x22, 0x11, 0x05], pts: 4000 },
+    { nal: [0x41, 0x9f, 0x22, 0x11, 0x06], pts: 5000 },
+  ];
+  const parts = frames.map((f) => {
+    const nals = f.first
+      ? [...annexB(sps), ...annexB(pps), ...annexB(f.nal)]
+      : [...annexB(aud), ...annexB(f.nal)];
+    return tsPackets(VID_PID, 0xe0, new Uint8Array(nals), f.pts);
+  });
+  const out = new Uint8Array(parts.reduce((s, p) => s + p.length, 0));
+  let o = 0;
+  for (const p of parts) { out.set(p, o); o += p.length; }
+  return out;
+}
+
+/** 解析 stts/ctts 条目（body 含 fullBox 头 4 字节）。 @param {Uint8Array} body @returns {{cnt: number, v: number}[]} */
+function readEntries(body) {
+  const n = ru32(body, 4);
+  /** @type {{cnt: number, v: number}[]} */
+  const entries = [];
+  for (let i = 0; i < n; i++) entries.push({ cnt: ru32(body, 8 + i * 8), v: ru32(body, 12 + i * 8) });
+  return entries;
+}
+
+/** 由 stts+ctts 重建逐样本 (dts, pts)。 @param {Uint8Array} mp4 @returns {{ dts: number[], pts: number[] } | null} */
+function reconstruct(mp4) {
+  const stts = findBox(mp4, 'moov/trak[0]/mdia/minf/stbl/stts');
+  const ctts = findBox(mp4, 'moov/trak[0]/mdia/minf/stbl/ctts');
+  if (!stts) return null;
+  const durs = [];
+  for (const e of readEntries(stts.body)) for (let i = 0; i < e.cnt; i++) durs.push(e.v);
+  /** @type {number[]} */
+  const offs = [];
+  if (ctts) for (const e of readEntries(ctts.body)) for (let i = 0; i < e.cnt; i++) offs.push(e.v);
+  /** @type {number[]} */
+  const dts = [];
+  let acc = 0;
+  for (const d of durs) { dts.push(acc); acc += d; } // 首样本 DTS=0，差分累计
+  const pts = dts.map((d, i) => d + (offs[i] ?? 0));
+  return { dts, pts };
+}
+
+describe('B 帧时间轴（ctts）', () => {
+  it('写出 ctts：DTS 严格递增且从 0 起，呈现时间（DTS+ctts）与原始 PTS 逐帧相等', () => {
+    const mp4 = TsRemux.remux(makeBFrameTs());
+    const stbl = 'moov/trak[0]/mdia/minf/stbl';
+    expect(findBox(mp4, `${stbl}/ctts`)?.type).toBe('ctts');
+    const r = nn(reconstruct(mp4));
+    // 原始解码序 PTS 逐帧还原（呈现时间轴 = 源流，音画同步零改动）
+    expect(r.pts).toEqual([0, 3000, 1000, 2000, 6000, 4000, 5000]);
+    // DTS 单调严格递增、首样本贴 0
+    expect(r.dts[0]).toBe(0);
+    for (let i = 1; i < r.dts.length; i++) expect(r.dts[i]).toBeGreaterThan(r.dts[i - 1]);
+    // ctts 偏移全 ≥0（v0 无符号语义）
+    const ctts = nn(findBox(mp4, `${stbl}/ctts`));
+    for (const e of readEntries(ctts.body)) expect(e.v).toBeGreaterThanOrEqual(0);
+  });
+
+  it('无 B 帧流不写 ctts（行为与旧版一致）', () => {
+    const mp4 = TsRemux.remux(makeVideoTs());
+    expect(findBox(mp4, 'moov/trak[0]/mdia/minf/stbl/ctts')).toBeNull();
+  });
+});

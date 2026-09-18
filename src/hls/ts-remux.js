@@ -51,6 +51,9 @@
 /** 时长游程（stts 条目） @typedef {Object} RleEntry @property {number} cnt @property {number} dur */
 
 /**
+ * 合成偏移游程（ctts 条目） @typedef {Object} CttsEntry @property {number} cnt @property {number} off（pts − dts，≥0） */
+
+/**
  * @typedef {Object} StreamingRemuxSession
  * @property {Uint8Array} ftyp 文件头（stco 基准，长度恒定）
  * @property {number} mdatHeaderSize mdat 头长（largesize 模式）
@@ -76,6 +79,7 @@
  * @property {number[]} vSizes
  * @property {number[]} vOffs mdat 负载内偏移
  * @property {RleEntry[]} vRLE
+ * @property {number[]} [vPts] 逐样本 PTS（v1.11.4 起，B 帧重排时间轴用；旧快照缺省 = 回退旧逻辑）
  * @property {number[]} vKeys 1-based 关键帧序号
  * @property {number | null} vPendingPts
  * @property {number} vLastDur
@@ -530,6 +534,67 @@ function sttsEntriesBox(entries) {
   return fullBox('stts', 0, 0, concat(body));
 }
 
+/** @param {CttsEntry[]} entries @returns {Uint8Array} */
+function cttsEntriesBox(entries) {
+  /** @type {Uint8Array[]} */
+  const body = [u32(entries.length)];
+  for (const e of entries) body.push(u32(e.cnt), u32(e.off));
+  return fullBox('ctts', 0, 0, concat(body));
+}
+
+/**
+ * B 帧流视频时间轴构造（解码序 PTS 存在负差时启用）。
+ * TS PES 只有 PTS：后向 min 构造原始 DTS（逐样本间距 ≥ tick），前向钳位（首样本贴 0、
+ * 严格递增、≤pts），stts 写 DTS 差分、ctts 写 pts−dts 合成偏移（全 0 由调用方省 box）。
+ * PTS 保持原值 → 音画同步零改动；首段 DTS 为负时贴地，差值被 ctts 吸收（呈现时间不变）。
+ * @param {number[]} pts 解码序样本 PTS
+ * @returns {{ stts: RleEntry[], ctts: CttsEntry[] | null, duration: number }}
+ */
+function buildVideoTiming(pts) {
+  const n = pts.length;
+  // 帧距估计：解码序正差是「帧距的 k 倍」（B 帧数可变），须取呈现序（PTS 升序）相邻差的中位数
+  const sorted = pts.slice().sort((a, b) => a - b);
+  /** @type {number[]} */
+  const spans = [];
+  for (let i = 1; i < n; i++) {
+    const d = sorted[i] - sorted[i - 1];
+    if (d > 0) spans.push(d);
+  }
+  spans.sort((a, b) => a - b);
+  const tick = spans.length ? spans[Math.floor(spans.length / 2)] : Math.round(90000 / 30);
+  // 后向构造：保证 DTS 逐样本间距 ≥ tick 且 ≤ pts
+  const raw = new Array(n);
+  raw[n - 1] = pts[n - 1];
+  for (let i = n - 2; i >= 0; i--) raw[i] = Math.min(pts[i], raw[i + 1] - tick);
+  // 前向钳位：首样本 ≥0、严格递增；病态流宁可局部间距 <tick 也不产生负 ctts
+  /** @type {number[]} */
+  const dts = new Array(n);
+  for (let i = 0; i < n; i++) {
+    let d = raw[i] > pts[i] ? pts[i] : raw[i];
+    if (i === 0 ? d < 0 : d <= dts[i - 1]) d = i === 0 ? 0 : dts[i - 1] + 1;
+    if (d > pts[i]) d = pts[i];
+    dts[i] = d;
+  }
+  /** @type {RleEntry[]} */
+  const stts = [];
+  const pushStts = (/** @type {number} */ dur) => {
+    if (stts.length && stts[stts.length - 1].dur === dur) stts[stts.length - 1].cnt++;
+    else stts.push({ cnt: 1, dur });
+  };
+  for (let i = 1; i < n; i++) pushStts(Math.max(1, dts[i] - dts[i - 1]));
+  pushStts(tick); // 末样本时长
+  /** @type {CttsEntry[]} */
+  const ctts = [];
+  let allZero = true;
+  for (let i = 0; i < n; i++) {
+    const off = Math.max(0, pts[i] - dts[i]);
+    if (ctts.length && ctts[ctts.length - 1].off === off) ctts[ctts.length - 1].cnt++;
+    else ctts.push({ cnt: 1, off });
+    if (off > 0) allZero = false;
+  }
+  return { stts, ctts: allZero ? null : ctts, duration: dts[n - 1] + tick };
+}
+
 /**
  * @param {Object} p
  * @param {number} p.id
@@ -539,6 +604,7 @@ function sttsEntriesBox(entries) {
  * @param {number} p.tkhdDur
  * @param {number} p.mdhdDur
  * @param {RleEntry[]} p.sttsEntries
+ * @param {CttsEntry[] | null} [p.cttsEntries] 合成偏移（B 帧流）；null/空则省 ctts box
  * @param {number[] | null} p.keys 视频关键帧（1-based）；空则兜底 [1]
  * @param {number[]} p.sizes
  * @param {number[]} p.stco 最终绝对偏移（单遍路径传相对值，由 patchStco 补齐）
@@ -566,6 +632,7 @@ function trakBox(p) {
   const dinf = box('dinf', box('dref', concat([new Uint8Array([0, 0, 0, 0]), u32(1), fullBox('url ', 0, 1, new Uint8Array(0))])));
   const stsd = fullBox('stsd', 0, 0, concat([u32(1), isVideo ? avc1Box(meta) : mp4aBox(meta)]));
   const sttsBox = sttsEntriesBox(p.sttsEntries);
+  const cttsBox = p.cttsEntries && p.cttsEntries.length ? cttsEntriesBox(p.cttsEntries) : new Uint8Array(0);
   /** @type {Uint8Array} */
   let stssBox = new Uint8Array(0);
   if (isVideo) {
@@ -586,7 +653,7 @@ function trakBox(p) {
   const co = [u32(p.stco.length)];
   for (const o of p.stco) co.push(u32(o));
   const stco = fullBox('stco', 0, 0, concat(co));
-  const stbl = box('stbl', concat([stsd, sttsBox, stssBox, stsc, stsz, stco].filter((x) => x.length)));
+  const stbl = box('stbl', concat([stsd, sttsBox, cttsBox, stssBox, stsc, stsz, stco].filter((x) => x.length)));
   const minf = box('minf', concat([mediaHead, dinf, stbl]));
   const mdia = box('mdia', concat([mdhd, hdlr, minf]));
   return box('trak', concat([tkhd, mdia]));
@@ -620,21 +687,43 @@ function muxMp4(demuxed) {
   const vTimescale = 90000;
   const aTimescale = meta.sampleRate || 44100;
 
+  // B 帧检出（解码序 PTS 负差）：重构 DTS/ctts 时间轴；无 B 帧走原逻辑（行为不变）
+  /** @type {number[]} */
+  const vPtsList = video.map((s) => s.pts);
+  const hasReorder = vPtsList.some((p, i) => i > 0 && p < vPtsList[i - 1]);
+  /** @type {RleEntry[]} */
+  let vEntries;
+  /** @type {CttsEntry[] | null} */
+  let vCtts = null;
+  let vDuration = 0;
   /** @type {number[]} */
   const vDurs = [];
-  for (let i = 0; i < video.length; i++) {
-    if (i + 1 < video.length) vDurs.push(Math.max(1, video[i + 1].pts - video[i].pts));
-  }
-  const vFallback = vDurs.length ? vDurs[vDurs.length - 1] : Math.round(vTimescale / 30);
-  if (vDurs.length < video.length) vDurs.push(vFallback);
-  let vDuration = vDurs.reduce((a, b) => a + b, 0);
-  if (audio.length) {
-    const aTicks = Math.round(audio.length * 1024 * vTimescale / aTimescale);
-    if (aTicks > 0 && (vDuration > aTicks * 1.12 || vDuration < aTicks * 0.75)) {
-      const tick = Math.max(1, Math.round(aTicks / video.length));
-      vDuration = tick * video.length;
-      vDurs.length = 0;
-      for (let i = 0; i < video.length; i++) vDurs.push(tick);
+  if (hasReorder) {
+    const t = buildVideoTiming(vPtsList);
+    vEntries = t.stts;
+    vCtts = t.ctts;
+    vDuration = t.duration;
+  } else {
+    for (let i = 0; i < video.length; i++) {
+      if (i + 1 < video.length) vDurs.push(Math.max(1, video[i + 1].pts - video[i].pts));
+    }
+    const vFallback = vDurs.length ? vDurs[vDurs.length - 1] : Math.round(vTimescale / 30);
+    if (vDurs.length < video.length) vDurs.push(vFallback);
+    vDuration = vDurs.reduce((a, b) => a + b, 0);
+    // CBR 重写仅用于旧时间轴路径（新构造保证时基正确，无需）
+    if (audio.length) {
+      const aTicks = Math.round(audio.length * 1024 * vTimescale / aTimescale);
+      if (aTicks > 0 && (vDuration > aTicks * 1.12 || vDuration < aTicks * 0.75)) {
+        const tick = Math.max(1, Math.round(aTicks / video.length));
+        vDuration = tick * video.length;
+        vDurs.length = 0;
+        for (let i = 0; i < video.length; i++) vDurs.push(tick);
+      }
+    }
+    vEntries = [];
+    for (const d of vDurs) {
+      if (vEntries.length && vEntries[vEntries.length - 1].dur === d) vEntries[vEntries.length - 1].cnt++;
+      else vEntries.push({ cnt: 1, dur: d });
     }
   }
 
@@ -648,12 +737,6 @@ function muxMp4(demuxed) {
   const aDuration = aDurs.reduce((a, b) => a + b, 0);
   const duration = Math.max(vDuration, aDuration);
 
-  /** @type {RleEntry[]} */
-  const vEntries = [];
-  for (const d of vDurs) {
-    if (vEntries.length && vEntries[vEntries.length - 1].dur === d) vEntries[vEntries.length - 1].cnt++;
-    else vEntries.push({ cnt: 1, dur: d });
-  }
   /** @type {number[]} */
   const vKeys = [];
   for (let i = 0; i < video.length; i++) if (video[i].isKey) vKeys.push(i + 1);
@@ -687,7 +770,7 @@ function muxMp4(demuxed) {
     trakBox({
       id: 1, isVideo: true, meta, timescale: vTimescale,
       tkhdDur: vDuration, mdhdDur: vDuration,
-      sttsEntries: vEntries, keys: vKeys,
+      sttsEntries: vEntries, cttsEntries: vCtts, keys: vKeys,
       sizes: video.map((s) => s.data.length), stco: vOff,
     }),
     ...(audio.length ? [trakBox({
@@ -847,6 +930,7 @@ function createStreamingRemux(snapshot) {
   /** @type {number[]} */ const vSizes = [];
   /** @type {number[]} */ const vOffs = [];
   /** @type {RleEntry[]} */ const vRLE = [];
+  /** @type {number[]} */ const vPts = [];
   /** @type {number[]} */ const vKeys = [];
   /** @type {number | null} */ let vPendingPts = null;
   let vLastDur = 0;
@@ -868,6 +952,7 @@ function createStreamingRemux(snapshot) {
     meta.pps = snapshot.pps ? b64ToU8(snapshot.pps) : undefined;
     vSizes.push(...snapshot.vSizes); vOffs.push(...snapshot.vOffs);
     for (const e of snapshot.vRLE) vRLE.push({ cnt: e.cnt, dur: e.dur });
+    if (Array.isArray(snapshot.vPts)) vPts.push(...snapshot.vPts);
     vKeys.push(...snapshot.vKeys);
     vPendingPts = snapshot.vPendingPts; vLastDur = snapshot.vLastDur;
     aSizes.push(...snapshot.aSizes); aOffs.push(...snapshot.aOffs);
@@ -1086,6 +1171,7 @@ function createStreamingRemux(snapshot) {
     if (kind === 'v') {
       vOffs.push(mdatPayload);
       vSizes.push(s.data.length);
+      vPts.push(s.pts);
       if (/** @type {VideoSample} */ (s).isKey) vKeys.push(vSizes.length);
       if (vPendingPts != null) {
         const d = Math.max(1, s.pts - vPendingPts);
@@ -1191,9 +1277,19 @@ function createStreamingRemux(snapshot) {
       /** @param {RleEntry[]} rle @returns {number} */
       const sumRle = (rle) => rle.reduce((s, e) => s + e.cnt * e.dur, 0);
       let vEntries = vRLE;
+      /** @type {CttsEntry[] | null} */
+      let vCtts = null;
       let vDuration = sumRle(vRLE);
-      // 与单遍一致的视频时基校正（音频 tick 为基准重采样视频时长）
-      if (aCount) {
+      // B 帧重排时间轴（vPts 完整 = 新版快照或本次会话全程）：stts=DTS 差分 + ctts 合成偏移；
+      // 旧快照（无 vPts）或无 B 帧流回退旧逻辑（含 CBR 校正）
+      const canRetime = vPts.length === vCount && vCount > 1 && vPts.some((p, i) => i > 0 && p < vPts[i - 1]);
+      if (canRetime) {
+        const t = buildVideoTiming(vPts);
+        vEntries = t.stts;
+        vCtts = t.ctts;
+        vDuration = t.duration;
+      } else if (aCount) {
+        // 与单遍一致的视频时基校正（音频 tick 为基准重采样视频时长）
         const aTicks = Math.round(aCount * 1024 * 90000 / aTimescale);
         if (aTicks > 0 && (vDuration > aTicks * 1.12 || vDuration < aTicks * 0.75)) {
           const tick = Math.max(1, Math.round(aTicks / vCount));
@@ -1218,7 +1314,7 @@ function createStreamingRemux(snapshot) {
         trakBox({
           id: 1, isVideo: true, meta: effMeta, timescale: 90000,
           tkhdDur: vDuration, mdhdDur: vDuration,
-          sttsEntries: vEntries, keys: vKeys,
+          sttsEntries: vEntries, cttsEntries: vCtts, keys: vKeys,
           sizes: vSizes, stco: vOffs.map((o) => base + o),
         }),
         ...(aCount ? [trakBox({
@@ -1256,6 +1352,7 @@ function createStreamingRemux(snapshot) {
         pps: meta.pps ? u8ToB64(meta.pps) : '',
         vSizes: [...vSizes], vOffs: [...vOffs],
         vRLE: vRLE.map((e) => ({ cnt: e.cnt, dur: e.dur })),
+        vPts: [...vPts],
         vKeys: [...vKeys], vPendingPts, vLastDur,
         aSizes: [...aSizes], aOffs: [...aOffs],
         aRLE: aRLE.map((e) => ({ cnt: e.cnt, dur: e.dur })),

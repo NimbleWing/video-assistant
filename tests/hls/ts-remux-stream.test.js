@@ -213,3 +213,84 @@ describe('流式 remux：状态与校验', () => {
     expect(ru32(mvhd.body, 16)).toBe(200 * 3000); // 时长 = 200 AU × 3000 tick
   });
 });
+
+// ---------------------------------------------------------------------------
+// B 帧时间轴（v1.11.4）：流式路径 stts=DTS 差分 + ctts 合成偏移；快照 vPts 往返
+// ---------------------------------------------------------------------------
+
+/** B 帧流（解码序 pts 锯齿），每 AU 一段，纯视频。 @param {{ pts?: number[] }} [opts] */
+function makeBFrameStream({ pts = [0, 3000, 1000, 2000, 6000, 4000, 5000] } = {}) {
+  const sps = makeSps(3, 1);
+  const pps = [0x68, 0xeb, 0x3c, 0x80];
+  const aud = [0x09, 0x10];
+  const segments = pts.map((p, k) => {
+    const vcl = k === 0 ? [0x65, 0x88, 0x84, 0x00, 0x21] : [0x41, 0x9a, 0x22, 0x11, k & 0xff];
+    const nals = k === 0
+      ? [...annexB(sps), ...annexB(pps), ...annexB(vcl)]
+      : [...annexB(aud), ...annexB(vcl)];
+    return tsPackets(VID_PID, 0xe0, new Uint8Array(nals), p);
+  });
+  return segments;
+}
+
+/** 解析 stts/ctts 并重建逐样本 pts（呈现时间）。 @param {Uint8Array} moov */
+function reconstructPts(moov) {
+  const stts = nn(findBox(moov, 'moov/trak[0]/mdia/minf/stbl/stts'));
+  const ctts = findBox(moov, 'moov/trak[0]/mdia/minf/stbl/ctts');
+  /** @param {Uint8Array} body @returns {{cnt: number, v: number}[]} */
+  const entries = (body) => {
+    const n = ru32(body, 4);
+    /** @type {{cnt: number, v: number}[]} */
+    const out = [];
+    for (let i = 0; i < n; i++) out.push({ cnt: ru32(body, 8 + i * 8), v: ru32(body, 12 + i * 8) });
+    return out;
+  };
+  const durs = [];
+  for (const e of entries(stts.body)) for (let i = 0; i < e.cnt; i++) durs.push(e.v);
+  const offs = [];
+  if (ctts) for (const e of entries(ctts.body)) for (let i = 0; i < e.cnt; i++) offs.push(e.v);
+  const pts = [];
+  let acc = 0;
+  for (let i = 0; i < durs.length; i++) { pts.push(acc + (offs[i] ?? 0)); acc += durs[i]; }
+  return { pts, hasCtts: !!ctts };
+}
+
+describe('流式 remux：B 帧时间轴', () => {
+  const PTS = [0, 3000, 1000, 2000, 6000, 4000, 5000];
+
+  it('finalize 写 ctts 且呈现时间逐帧还原原始 PTS', () => {
+    const session = TsRemux.createStreamingRemux();
+    for (const seg of makeBFrameStream()) session.push(seg);
+    const fin = session.finalize();
+    const { pts, hasCtts } = reconstructPts(fin.moov);
+    expect(hasCtts).toBe(true);
+    expect(pts).toEqual(PTS);
+  });
+
+  it('快照恢复（vPts 持久化）后 ctts 时间轴仍正确', () => {
+    const segments = makeBFrameStream();
+    let session = TsRemux.createStreamingRemux();
+    for (let i = 0; i < 3; i++) session.push(segments[i]);
+    const cp = session.checkpoint();
+    expect(cp.snapshot.vPts).toEqual(PTS.slice(0, 3));
+    session = TsRemux.createStreamingRemux(cp.snapshot);
+    for (let i = 3; i < segments.length; i++) session.push(segments[i]);
+    const { pts, hasCtts } = reconstructPts(session.finalize().moov);
+    expect(hasCtts).toBe(true);
+    expect(pts).toEqual(PTS);
+  });
+
+  it('旧版快照（无 vPts）回退旧时间轴逻辑——不写 ctts、不中断', () => {
+    const segments = makeBFrameStream();
+    let session = TsRemux.createStreamingRemux();
+    for (let i = 0; i < 3; i++) session.push(segments[i]);
+    const cp = session.checkpoint();
+    delete cp.snapshot.vPts; // 模拟 v1.11.3 及以前的 sidecar
+    session = TsRemux.createStreamingRemux(cp.snapshot);
+    for (let i = 3; i < segments.length; i++) session.push(segments[i]);
+    const fin = session.finalize();
+    const { pts, hasCtts } = reconstructPts(fin.moov);
+    expect(hasCtts).toBe(false); // 旧逻辑（钳位）产出，带病但不崩
+    expect(pts.length).toBe(PTS.length);
+  });
+});

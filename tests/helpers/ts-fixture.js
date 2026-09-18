@@ -166,7 +166,7 @@ export function findBox(mp4, path) {
     }
     if (!found) return null;
     // full box 多 4 字节 version/flags，跳过它进入子级
-    const FULL = new Set(['tkhd', 'mdhd', 'hdlr', 'stsd', 'stts', 'stss', 'stsc', 'stsz', 'stco', 'mvhd', 'dref', 'url ', 'esds', 'smhd', 'vmhd']);
+    const FULL = new Set(['tkhd', 'mdhd', 'hdlr', 'stsd', 'stts', 'ctts', 'stss', 'stsc', 'stsz', 'stco', 'mvhd', 'dref', 'url ', 'esds', 'smhd', 'vmhd']);
     if (FULL.has(found.type)) start = found.off + 8 + 4;
     else start = found.off + 8;
     end = found.off + found.size;

@@ -20,7 +20,8 @@ rou.video 的 Chrome MV3 扩展（由油猴脚本移植）：播放页解析 HLS
 ## 保存链路（无自定义目录功能，已整体移除——Chrome 对扩展的 FS Access 授权过于短命，缠斗无益）
 
 - 页面侧：分段下载+解密（保持页面 Origin/Referer，CDN 要求）→ 按序 16MB base64 分块直传 offscreen（SW 不在数据路径上，仅 begin 经 SW 确保 offscreen）。
-- offscreen 侧：`ts-remux.createStreamingRemux()` 增量 demux/mux → mdat 流式写 OPFS `<stem>.part`；每段 checkpoint（快照 = 游程时长/尺寸/偏移/关键帧）→ finalize 写 moov（置尾，stco 天然已知）→ 补丁 largesize → rename → objectURL → SW `chrome.downloads`（浏览器下载目录，子目录保留，`overwrite`）。非 H.264/非 TS 流自动透传存 `.ts`。
+- offscreen 侧：`ts-remux.createStreamingRemux()` 增量 demux/mux → mdat 流式写 OPFS `<stem>.part`；每段 checkpoint（快照 = 游程时长/尺寸/偏移/关键帧/**逐样本 PTS**）→ finalize 写 moov（置尾，stco 天然已知）→ 补丁 largesize → rename → objectURL → SW `chrome.downloads`（浏览器下载目录，子目录保留，`overwrite`）。非 H.264/非 TS 流自动透传存 `.ts`。
+- **视频时间轴构造（v1.11.4，B 帧流正确性修复）**：TS PES 只带 PTS，样本按解码序到达；H.264 含 B 帧时解码序 PTS 出现负差，旧实现把负差钳成 1 tick 且不写 ctts → MP4 合成时间轴错乱，Chrome 直连播周期丢帧（VLC/PotPlayer 靠码流 POC 容错无感）。现 finalize/mux 检出负差（B 帧）即重构视频轨时间轴：**后向 min 构造 DTS**（`rawDts[i] = min(pts[i], rawDts[i+1] − tick)`，tick 取**呈现序**（PTS 升序）相邻差中位数——解码序正差是帧距的 k 倍、中位数会偏大 3×，实测踩过）→ 前向钳位（≥0、严格递增、≤pts）→ **stts 写 DTS 差分、ctts 写 `pts − dts` 合成偏移**（全 0 时省 box），PTS 保持原值（音画同步零改动），音频轨与无 B 帧流完全不走新逻辑（行为不变）。快照新增 `vPts` 逐样本 PTS 持久化；**旧版快照无 `vPts` 时回退旧时间轴逻辑**（断点续传跨版本降级，不中断）。
 - 断点续传：`.part` + sidecar（`<stem>.part.json`：播放列表指纹 + segmentsDone + remux 快照），OPFS 内自洽；取消/失败保留半成品，重试时指纹一致即从断点续写（`.part` 大小校验防截断）。
 - 已下载判定（三层链）：本地媒体库服务（磁盘实况，权威；SW `fetch /api/exists`，300ms 超时）→ chrome.downloads 历史校验回退（basename 匹配 + 封面代理，服务未启动时兜底）→ `conflictAction:'overwrite'` 落盘自愈。命中时面板 toast 显示本地完整路径，跳过状态提供「仍然下载」逃生门（`download-force` 命令）。
 - 下载账本：生命周期（downloading/complete/failed/canceled/skipped）经 `src/net/ledger.js` → SW 中转（`rv-ledger-report`/`rv-ledger-query`，内容脚本不能直连 127.0.0.1）上报本地服务；落盘成功后 SW 自动 `POST /api/files` 登记物理文件；跨会话失败重试 = 面板「重试历史失败」拉账本 `status=failed` 复用批次 worker 标签页。
