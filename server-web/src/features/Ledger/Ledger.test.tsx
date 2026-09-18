@@ -1,10 +1,10 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fetchDownloads } from '../api';
-import type { DownloadItem, DownloadsResponse } from '../types';
-import { LedgerSection } from './LedgerSection';
+import { fetchDownloads } from '@/lib/api';
+import type { DownloadItem, DownloadsResponse } from '@/lib/types';
+import { Ledger } from './Ledger';
 
-vi.mock('../api', () => ({ fetchDownloads: vi.fn() }));
+vi.mock('@/lib/api', () => ({ fetchDownloads: vi.fn() }));
 const mocked = vi.mocked(fetchDownloads);
 
 function entry(partial: Partial<DownloadItem> = {}): DownloadItem {
@@ -41,10 +41,10 @@ beforeEach(() => {
   mocked.mockReset();
 });
 
-describe('LedgerSection', () => {
+describe('Ledger', () => {
   it('默认拉取 failed 并渲染行与计数', async () => {
     mocked.mockResolvedValue(resp());
-    render(<LedgerSection />);
+    render(<Ledger />);
     expect(mocked).toHaveBeenCalledWith(expect.objectContaining({ status: 'failed', page: 1, size: 50 }));
     expect(await screen.findByText('标题')).toBeTruthy();
     expect(screen.getByText('剧集')).toBeTruthy();
@@ -58,13 +58,13 @@ describe('LedgerSection', () => {
 
   it('错误信息优先于大小展示', async () => {
     mocked.mockResolvedValue(resp({ items: [entry({ error: '网络中断' })] }));
-    render(<LedgerSection />);
+    render(<Ledger />);
     expect(await screen.findByText('网络中断')).toBeTruthy();
   });
 
   it('点击 chip 切换 status 并回到第一页', async () => {
     mocked.mockResolvedValue(resp({ total: 120 }));
-    render(<LedgerSection />);
+    render(<Ledger />);
     await screen.findByText('标题');
     fireEvent.click(screen.getByText('complete'));
     await waitFor(() =>
@@ -74,7 +74,7 @@ describe('LedgerSection', () => {
 
   it('翻页', async () => {
     mocked.mockResolvedValue(resp({ total: 120 }));
-    render(<LedgerSection />);
+    render(<Ledger />);
     await screen.findByText('标题');
     fireEvent.click(screen.getByText('下一页'));
     await waitFor(() => expect(mocked).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2 })));
@@ -82,7 +82,7 @@ describe('LedgerSection', () => {
 
   it('空结果显示没有记录', async () => {
     mocked.mockResolvedValue(resp({ total: 0, items: [] }));
-    render(<LedgerSection />);
+    render(<Ledger />);
     expect(await screen.findByText('没有记录')).toBeTruthy();
   });
 });

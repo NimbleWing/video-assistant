@@ -1,10 +1,9 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import { Layout } from './components/Layout';
-import { LedgerSection } from './components/LedgerSection';
-import { PlayerDialog } from './components/PlayerDialog';
-import { SettingsSection } from './components/SettingsSection';
-import { VideosSection } from './components/VideosSection';
+import { Layout } from '@/components/Layout';
+import { PlayerDialog, Videos } from '@/features/Videos';
+import { Ledger } from '@/features/Ledger';
+import { Settings } from '@/features/Settings';
 
 type Tab = 'videos' | 'ledger' | 'settings';
 
@@ -76,9 +75,9 @@ export default function App() {
         activeTab={tab}
         onTabChange={setTab}
       >
-        {tab === 'videos' && <VideosSection onStat={setStat} onPlay={setPlaying} />}
-        {tab === 'ledger' && <LedgerSection />}
-        {tab === 'settings' && <SettingsSection />}
+        {tab === 'videos' && <Videos onStat={setStat} onPlay={setPlaying} />}
+        {tab === 'ledger' && <Ledger />}
+        {tab === 'settings' && <Settings />}
       </Layout>
       <PlayerDialog item={playing} onClose={() => setPlaying(null)} />
     </>

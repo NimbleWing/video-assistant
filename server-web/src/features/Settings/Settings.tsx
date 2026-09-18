@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import { fetchConfig, fetchLog, saveConfig, triggerScan } from '../api';
+import { fetchConfig, fetchLog, saveConfig, triggerScan } from '@/lib/api';
 
-export function SettingsSection() {
+export function Settings() {
   const [dirs, setDirs] = useState('');
   const [warn, setWarn] = useState('');
   const [scanResult, setScanResult] = useState<ReactNode>(null);

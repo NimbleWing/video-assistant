@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { Pager } from './Pager';
+import { Pager } from '.';
 
 describe('Pager', () => {
   it('基础渲染：页码信息与禁用态', () => {

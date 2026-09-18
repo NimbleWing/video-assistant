@@ -1,14 +1,14 @@
 import { useEffect, useState } from 'react';
-import { fetchDownloads } from '../api';
-import { fmtSize, fmtTime } from '../format';
-import type { DownloadsResponse } from '../types';
-import { Pager } from './Pager';
+import { fetchDownloads } from '@/lib/api';
+import { fmtSize, fmtTime } from '@/utils/format';
+import type { DownloadsResponse } from '@/lib/types';
+import { Pager } from '@/components/Pager';
 
 const PAGE_SIZE = 50;
 const STATUSES = ['failed', 'complete', 'downloading', 'canceled', 'skipped'] as const;
 type Status = '' | (typeof STATUSES)[number];
 
-export function LedgerSection() {
+export function Ledger() {
   const [status, setStatus] = useState<Status>('failed');
   const [page, setPage] = useState(1);
   const [data, setData] = useState<DownloadsResponse | null>(null);

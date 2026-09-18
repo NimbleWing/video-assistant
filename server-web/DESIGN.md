@@ -8,18 +8,24 @@
 
 ## 结构
 
+目录组织参考 `D:\NimbleWing\tauri-react\src`：**components**（通用组件，目录化 `index.tsx` 入口）、**features**（页面功能域，每页一目录 + `index.ts` 桶导出 + 页面专属子组件）、**lib**（API 客户端与接口模型）、**utils**（纯函数）。别名 `@/` 指向 `src/`（tsconfig paths + vite resolve.alias，源码/测试统一用 `@/...` 导入）。参考项目中的 router/store/locales/hooks/constants 因本包规模小（无路由、无全局状态、无 i18n、无跨页 hooks、常量均页面内聚）暂不引入，规模增长时再按参考结构补。
+
 | 文件 | 职责 |
 |------|------|
-| `src/App.tsx` | 组合 Layout 与三标签内容、头部统计、播放弹窗状态（视频 tab 卸载重挂即刷新，替代旧版 scan 后手动 loadVideos） |
-| `src/components/Layout.tsx` | 页面骨架抽象：顶栏（标题 + 补充信息 + 移动端汉堡）+ 左侧侧边栏导航（icon + 文字，可选）+ 内容区；泛型 `K extends string` 支撑标签 key 收窄 |
-| `src/api.ts` | 类型化 API 客户端（fetch 包装：`ok:false` / HTTP 错误统一抛 `Error`，带服务端 error 信息） |
-| `src/types.ts` | 接口模型（字段名对齐 `server/db.js` 的列名，如 `video_id`、`updated_at`） |
-| `src/format.ts` | 纯函数：`fmtSize` / `fmtDur` / `fmtTime` |
-| `src/components/VideosSection.tsx` | **卡片网格**（参考 tauri-react VideoProbeCard：封面/占位 + 时长/大小/盘符角标 + hover 播放遮罩与封面缩放；无封面用 art 渐变占位）、搜索防抖 300ms、盘符/类型筛选（选中盘符消失自动回退全部）、分页可调每页条数（20/50/100）与跳页 |
-| `src/components/LedgerSection.tsx` | 状态 chips（全部 + failed/complete/downloading/canceled/skipped 计数，默认 failed）、分页 |
-| `src/components/SettingsSection.tsx` | 扫描目录保存（POST /api/config）、立即扫描、日志尾部查看 |
-| `src/components/PlayerDialog.tsx` | 原生 `<dialog>` + `closedby="any"`，`/stream/:id` 播放，关闭/换源时停流清理，复制路径 |
-| `src/components/Pager.tsx` | 共享分页条：上一页/下一页 + 页码（可选跳页输入框：回车/失焦提交、钳位 1..pages）+ 右侧可选「每页 N 条」选择器 |
+| `src/App.tsx` | 组合 Layout 与三页面、头部统计、播放弹窗状态（视频 tab 卸载重挂即刷新，替代旧版 scan 后手动 loadVideos）；tab 配置（key/label/icon）定义于此 |
+| `src/components/Layout/index.tsx` | 页面骨架抽象：顶栏（标题 + 补充信息 + 移动端汉堡）+ 左侧侧边栏导航（icon + 文字，可选）+ 内容区；泛型 `K extends string` 支撑标签 key 收窄 |
+| `src/components/Pager/index.tsx` | 共享分页条：上一页/下一页 + 页码（可选跳页输入框：回车/失焦提交、钳位 1..pages）+ 右侧可选「每页 N 条」选择器 |
+| `src/features/Videos/index.ts` | 桶导出：`Videos`、`PlayerDialog` |
+| `src/features/Videos/Videos.tsx` | **视频库页面**：搜索防抖 300ms、盘符/类型筛选（选中盘符消失自动回退全部）、分页可调每页条数（20/50/100）与跳页 |
+| `src/features/Videos/VideoCard.tsx` | 单卡（参考 tauri-react VideoProbeCard：封面/占位 + 时长/大小/盘符角标 + hover 播放遮罩与封面缩放 + 信息区；无封面用 art 渐变占位） |
+| `src/features/Videos/PlayerDialog.tsx` | 原生 `<dialog>` + `closedby="any"`，`/stream/:id` 播放，关闭/换源时停流清理，复制路径；由 App 持有状态全局挂载（tab 切换不卸载） |
+| `src/features/Ledger/index.ts` | 桶导出：`Ledger` |
+| `src/features/Ledger/Ledger.tsx` | 下载账本页面：状态 chips（全部 + failed/complete/downloading/canceled/skipped 计数，默认 failed）、分页 |
+| `src/features/Settings/index.ts` | 桶导出：`Settings` |
+| `src/features/Settings/Settings.tsx` | 设置页面：扫描目录保存（POST /api/config）、立即扫描、日志尾部查看 |
+| `src/lib/api.ts` | 类型化 API 客户端（fetch 包装：`ok:false` / HTTP 错误统一抛 `Error`，带服务端 error 信息） |
+| `src/lib/types.ts` | 接口模型（字段名对齐 `server/db.js` 的列名，如 `video_id`、`updated_at`） |
+| `src/utils/format.ts` | 纯函数：`fmtSize` / `fmtDur` / `fmtTime` / `fmtDate` |
 | `src/styles.css` | Tailwind `@theme` 主题色（沿用旧版暗色调色板）+ `@layer components`（act/badge/chip/table/dialog） |
 
 ## 视觉规范（对齐 rou.video 站点暗色主题）
@@ -57,7 +63,7 @@
 ## 测试策略
 
 - Vitest + happy-dom + Testing Library，`globals: true` + `src/test/setup.ts`（`IS_REACT_ACT_ENVIRONMENT`）。
-- 组件测试统一 `vi.mock('../api')`；纯逻辑（format/api）直接测。
+- 组件测试统一 `vi.mock('@/lib/api')`（别名经 vite resolve.alias 解析，与源码导入同一模块）；纯逻辑（format/api）直接测。
 - 已知坑：RTL `getByText` 默认只匹配元素的**直接文本节点**——混合内容（如 `<b>剧名</b> / 标题`）需 span 包裹或用 `selector` / `textContent` 断言。
 - 覆盖：格式化边界、API 错误路径与参数拼接、三 Section 交互（筛选/分页/防抖/chips/保存/扫描/日志）。
 

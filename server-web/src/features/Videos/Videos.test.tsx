@@ -1,10 +1,10 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fetchVideos } from '../api';
-import type { VideoItem, VideosResponse } from '../types';
-import { VideosSection } from './VideosSection';
+import { fetchVideos } from '@/lib/api';
+import type { VideoItem, VideosResponse } from '@/lib/types';
+import { Videos } from './Videos';
 
-vi.mock('../api', () => ({ fetchVideos: vi.fn() }));
+vi.mock('@/lib/api', () => ({ fetchVideos: vi.fn() }));
 const mocked = vi.mocked(fetchVideos);
 
 function item(partial: Partial<VideoItem> = {}): VideoItem {
@@ -35,11 +35,11 @@ beforeEach(() => {
   mocked.mockReset();
 });
 
-describe('VideosSection', () => {
+describe('Videos', () => {
   it('渲染条目并上报头部统计', async () => {
     const onStat = vi.fn();
     mocked.mockResolvedValue(resp());
-    render(<VideosSection onStat={onStat} onPlay={() => {}} />);
+    render(<Videos onStat={onStat} onPlay={() => {}} />);
     expect(await screen.findByText('a')).toBeTruthy();
     expect(screen.getByText('MP4')).toBeTruthy();
     expect(screen.getByText('D:/v/a.mp4')).toBeTruthy();
@@ -48,13 +48,13 @@ describe('VideosSection', () => {
 
   it('空结果显示引导文案', async () => {
     mocked.mockResolvedValue(resp({ total: 0, items: [], volumes: [] }));
-    render(<VideosSection onStat={() => {}} onPlay={() => {}} />);
+    render(<Videos onStat={() => {}} onPlay={() => {}} />);
     expect(await screen.findByText('没有匹配的条目（先在设置页配置目录并扫描）')).toBeTruthy();
   });
 
   it('分页：首页上一页禁用，下一页翻页', async () => {
     mocked.mockResolvedValue(resp({ total: 120 }));
-    render(<VideosSection onStat={() => {}} onPlay={() => {}} />);
+    render(<Videos onStat={() => {}} onPlay={() => {}} />);
     await screen.findByText('a');
     const prev = screen.getByText('上一页') as HTMLButtonElement;
     const next = screen.getByText('下一页') as HTMLButtonElement;
@@ -67,7 +67,7 @@ describe('VideosSection', () => {
 
   it('跳页：输入页码提交后以该页拉取', async () => {
     mocked.mockResolvedValue(resp({ total: 120 }));
-    render(<VideosSection onStat={() => {}} onPlay={() => {}} />);
+    render(<Videos onStat={() => {}} onPlay={() => {}} />);
     await screen.findByText('a');
     fireEvent.change(screen.getByLabelText('跳转页码'), { target: { value: '3' } });
     fireEvent.keyDown(screen.getByLabelText('跳转页码'), { key: 'Enter' });
@@ -76,7 +76,7 @@ describe('VideosSection', () => {
 
   it('每页条数切换：回到第一页并按新 size 拉取', async () => {
     mocked.mockResolvedValue(resp({ total: 200 }));
-    render(<VideosSection onStat={() => {}} onPlay={() => {}} />);
+    render(<Videos onStat={() => {}} onPlay={() => {}} />);
     await screen.findByText('a');
     fireEvent.change(screen.getByLabelText('每页条数'), { target: { value: '100' } });
     await waitFor(() => expect(mocked).toHaveBeenLastCalledWith(expect.objectContaining({ size: 100, page: 1 })));
@@ -84,7 +84,7 @@ describe('VideosSection', () => {
 
   it('类型筛选切换到封面并回到第一页', async () => {
     mocked.mockResolvedValue(resp());
-    render(<VideosSection onStat={() => {}} onPlay={() => {}} />);
+    render(<Videos onStat={() => {}} onPlay={() => {}} />);
     await screen.findByText('a');
     fireEvent.change(screen.getByLabelText('类型'), { target: { value: 'cover' } });
     await waitFor(() =>
@@ -94,7 +94,7 @@ describe('VideosSection', () => {
 
   it('盘符筛选携带 volume 参数', async () => {
     mocked.mockResolvedValue(resp());
-    render(<VideosSection onStat={() => {}} onPlay={() => {}} />);
+    render(<Videos onStat={() => {}} onPlay={() => {}} />);
     await screen.findByText('a');
     fireEvent.change(screen.getByLabelText('盘符'), { target: { value: 'd:' } });
     await waitFor(() =>
@@ -104,7 +104,7 @@ describe('VideosSection', () => {
 
   it('搜索防抖 300ms 后携带 q 查询', async () => {
     mocked.mockResolvedValue(resp({ total: 0, items: [], volumes: [] }));
-    render(<VideosSection onStat={() => {}} onPlay={() => {}} />);
+    render(<Videos onStat={() => {}} onPlay={() => {}} />);
     await screen.findByText('没有匹配的条目（先在设置页配置目录并扫描）');
     fireEvent.change(screen.getByLabelText('搜索'), { target: { value: '  xx  ' } });
     await waitFor(
@@ -116,14 +116,14 @@ describe('VideosSection', () => {
   it('点击卡片播放回调携带 id 与路径', async () => {
     const onPlay = vi.fn();
     mocked.mockResolvedValue(resp());
-    render(<VideosSection onStat={() => {}} onPlay={onPlay} />);
+    render(<Videos onStat={() => {}} onPlay={onPlay} />);
     fireEvent.click(await screen.findByRole('button', { name: '播放 a' }));
     expect(onPlay).toHaveBeenCalledWith({ id: 7, path: 'D:/v/a.mp4' });
   });
 
   it('有关联封面时缩略图走 /stream/{cover_id}，无封面渲染占位', async () => {
     mocked.mockResolvedValue(resp({ items: [item(), item({ id: 8, stem: 'b', cover_id: 9 })] }));
-    const { container } = render(<VideosSection onStat={() => {}} onPlay={() => {}} />);
+    const { container } = render(<Videos onStat={() => {}} onPlay={() => {}} />);
     await screen.findByText('b');
     const imgs = container.querySelectorAll('img');
     expect(imgs).toHaveLength(1);
@@ -135,7 +135,7 @@ describe('VideosSection', () => {
 
   it('封面条目：缩略图即自身且不渲染播放按钮', async () => {
     mocked.mockResolvedValue(resp({ items: [item({ type: 'cover', ext: 'jpg', duration: null, cover_id: null })] }));
-    const { container } = render(<VideosSection onStat={() => {}} onPlay={() => {}} />);
+    const { container } = render(<Videos onStat={() => {}} onPlay={() => {}} />);
     await screen.findByText('a');
     const img = container.querySelector('img');
     expect(img?.getAttribute('src')).toBe('/stream/7');
