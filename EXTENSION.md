@@ -30,6 +30,8 @@ rou.video 的 Chrome MV3 扩展（由油猴脚本移植）：播放页解析 HLS
 
 发起页收割 → SW 开后台标签页（`storage.session` 记 id，完成自动关闭，被关可一键恢复）跑流水线；认领制（`expectedPath`）保证用户浏览不干扰批次。「继续剩余」带 `reprime` 标记：worker 标签页已停在目标页时不重导航，改发 `batch-continue` 命令踢闲置页面续跑（内容脚本失联则强制重导航兜底）——否则停止后被中止项回队首、继续后 expectedPath 与标签页 URL 相同，页面不刷新导致批次无人推进。
 
+**content_scripts matches 必须用通配结尾**（`/series*` 而非 `/series` 精确 + `/*`）：Chrome match pattern 的精确路径**不匹配带 query string 的 URL**（`/series?page=2` 不命中 `/series`）——连续下载翻页 URL（`?page=N`）将无内容脚本注入，`maybeContinueBatch` 不执行、批次卡死。`/v*`、`/home*`、`/search*`、`/t*`、`/series*` 通配同时覆盖无 query、带 query 与子路径三种形态。
+
 ## 开发与发布约定
 
 - 无构建步骤：扩展本体为原生 ESM，`web_accessible_resources` 直引；不引入运行时依赖（`server-web/` 是仓库内唯一例外，不影响扩展本体）。
