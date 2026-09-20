@@ -3,6 +3,7 @@
 import { promises as fs } from 'node:fs';
 import { asRecord, HttpError, json, readJson, type Route } from '../../lib/http.ts';
 import { ffmpegInfo, getFfmpegPath, resetFfmpegProbe, setFfmpegPath } from '../../lib/hls-core.ts';
+import { findDownloadedHit } from '../ledger/downloads.ts';
 import { listVideos, listVolumes, queryExists, setFileDuration, upsertFileRecorded } from './files.ts';
 import { hlsManifestHandler, hlsSegmentHandler } from './hls.ts';
 import { mp4Duration } from './mp4.ts';
@@ -32,9 +33,22 @@ const listVideosRoute: Route['handler'] = async ({ res, url }) => {
   json(res, 200, body);
 };
 
+// 判定：账本优先（complete/skipped 即「已在本地」，vid 精确 → filename 回退），
+// 未命中走 files（磁盘扫描实况）。账本命中时 matches 首位带账本 filename（相对路径）。
 const existsRoute: Route['handler'] = ({ res, url }) => {
   const rel = url.searchParams.get('rel') ?? url.searchParams.get('name') ?? '';
-  json(res, 200, { ok: true, ...queryExists(rel) });
+  const vid = url.searchParams.get('vid') ?? '';
+  const hit = findDownloadedHit(vid, rel);
+  const r = queryExists(rel);
+  if (hit) {
+    json(res, 200, {
+      ok: true,
+      exists: true,
+      matches: [{ path: hit.filename || rel, type: 'video', size: hit.size ?? 0 }, ...r.matches],
+    });
+    return;
+  }
+  json(res, 200, { ok: true, ...r });
 };
 
 const recordFileRoute: Route['handler'] = async ({ req, res }) => {

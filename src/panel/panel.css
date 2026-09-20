@@ -87,6 +87,22 @@ body {
   box-shadow: 0 0 0 3px rgba(255, 93, 93, .16);
 }
 
+/* 已下载探测 chip（meta 行内） */
+.hit {
+  padding: 1px 7px;
+  border-radius: 99px;
+  font-size: 11px;
+  background: rgba(255, 255, 255, .06);
+  border: 1px solid rgba(255, 255, 255, .08);
+  color: var(--muted);
+}
+
+.hit.ok {
+  color: #3dd68c;
+  background: rgba(61, 214, 140, .1);
+  border-color: rgba(61, 214, 140, .25);
+}
+
 /* 本地媒体库心跳指示：绿=服务在线 · 黄=探测中 · 红=离线（判定回退下载历史） */
 .srv-s {
   display: inline-flex;

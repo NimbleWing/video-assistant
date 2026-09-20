@@ -51,6 +51,17 @@ export function sanitizeName(name) {
 }
 
 /**
+ * 下载目标文件名（剧集归入以剧名命名的子目录，Chrome download 属性自动建目录）。
+ * 下载落盘与播放页已下载探测共用此函数——两处口径必须一致，否则探测会查错名字。
+ * @param {{ name?: string, seriesName?: string } | null} page 页面视频信息
+ * @returns {string} 可含子目录的相对文件名
+ */
+export function downloadFilename(page) {
+  const seriesDir = page?.seriesName ? `${sanitizeName(page.seriesName)}/` : '';
+  return `${seriesDir}${sanitizeName(page?.name || 'rouvideo')}.mp4`;
+}
+
+/**
  * 人性化字节数。
  * @param {number} n
  * @returns {string}

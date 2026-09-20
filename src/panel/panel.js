@@ -17,6 +17,7 @@ import { ICONS } from '../ui/icons.js';
  * @property {number} selectedHeight
  * @property {number} qualityHeight
  * @property {import('../state.js').DownloadUiState | null} download
+ * @property {import('../state.js').LocalHitState | null} downloaded
  * @property {boolean} holdBoost
  * @property {number} holdRate
  * @property {import('../features/batch.js').ListingInfo | null} listing
@@ -299,6 +300,11 @@ function render() {
   const selectedHeight = snap.selectedHeight;
   const pct = d?.running ? Math.max(0, Math.min(100, d.pct || 0)) : 0;
   const segInfo = stream?.segments ? `<span>·</span><span>${stream.segments} 段</span>` : '';
+  // 已下载探测 chip：探测中/下载进行中不显示（避免闪现与口径混乱）
+  const hit = snap.downloaded;
+  const hitChip = hit && !hit.checking && !d?.running
+    ? `<span>·</span><span class="hit${hit.exists ? ' ok' : ''}" title="${escapeHtml(hit.path || (hit.exists ? '本地媒体库已收录（路径未知，历史回退命中）' : '本地媒体库与下载历史均未命中'))}">${hit.exists ? '已下载' : '未下载'}</span>`
+    : '';
 
   const dlLabel = d?.running
     ? ((d.pct || 0) >= 99 ? '正在封装 MP4…' : `下载中 ${pct.toFixed(0)}% · 点按取消`)
@@ -309,7 +315,7 @@ function render() {
     <div class="head">
       <div class="who">
         <div class="title">${escapeHtml(title)}</div>
-        <div class="meta"><i class="dot ${st.dot}"></i><span>${st.text}</span>${dur ? `<span>·</span><span>${formatDuration(dur)}</span>` : ''}${segInfo}<span>·</span>${srvBadge()}<span>·</span><span class="ver">v${EXT_VERSION}</span></div>
+        <div class="meta"><i class="dot ${st.dot}"></i><span>${st.text}</span>${dur ? `<span>·</span><span>${formatDuration(dur)}</span>` : ''}${segInfo}${hitChip}<span>·</span>${srvBadge()}<span>·</span><span class="ver">v${EXT_VERSION}</span></div>
       </div>
     </div>
     <button class="dl" data-act="${d?.running ? 'abort' : 'download'}" ${!d?.running && !stream && snap.booting ? 'disabled' : ''}>

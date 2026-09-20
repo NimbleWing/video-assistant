@@ -1,6 +1,6 @@
 import { RATES } from './core/constants.js';
 import { Logger } from './core/logger.js';
-import { errText, isAbortError, pageVideo, sanitizeName, toAbsolute } from './core/utils.js';
+import { errText, isAbortError, downloadFilename, pageVideo, sanitizeName, toAbsolute } from './core/utils.js';
 import { downloadQuality } from './hls/downloader.js';
 import { cancelActiveSave, saveSmallFile } from './net/save.js';
 import { isPlaylistUrl, parseMasterPlaylist, parseMediaPlaylist, pickVariant, playlistCandidates } from './hls/playlist.js';
@@ -31,6 +31,7 @@ function snapshot() {
     selectedHeight: currentStream()?.height || 0,
     qualityHeight: state.qualityHeight,
     download: state.download ? { ...state.download } : null,
+    downloaded: state.downloaded ? { ...state.downloaded } : null,
     holdBoost: state.holdBoost,
     holdRate: state.holdRate,
     listing: batch.detectListing(),
@@ -38,6 +39,7 @@ function snapshot() {
 }
 
 function pushState() {
+  hud.showLocalHit(state.downloaded); // 页面 HUD 徽标与面板快照同步反映探测结果
   chrome.runtime.sendMessage({ type: 'rv-state', state: snapshot() }).catch(() => {});
 }
 
@@ -77,12 +79,31 @@ async function fillMediaInfo(v) {
 // 查询 SW：目标文件是否已在本地（本地媒体库服务 → 下载历史回退）
 /**
  * @param {string} filename
+ * @param {string} [videoId] 站点视频 id（服务端账本 vid 精确命中，站点改名也不漏）
  * @returns {Promise<{ exists: boolean, matches: { path: string, type: string, size: number }[] }>}
  */
-function checkDownloaded(filename) {
-  return chrome.runtime.sendMessage({ type: 'rv-file-exists', filename })
+function checkDownloaded(filename, videoId = '') {
+  return chrome.runtime.sendMessage({ type: 'rv-file-exists', filename, videoId })
     .then((r) => ({ exists: !!r?.exists, matches: Array.isArray(r?.matches) ? r.matches : [] }))
     .catch(() => ({ exists: false, matches: [] }));
+}
+
+// 播放页已下载探测：视频信息就绪后立即经上述判定链查询本地，
+// 结果（checking/exists/path）反映到页面 HUD 徽标与面板 meta 行。
+// 序号守卫：路由切换/重新解析会递增序号，迟到的过期响应直接丢弃。
+/** @type {number} */
+let probeSeq = 0;
+async function probeLocal() {
+  if (!state.page?.name) return;
+  const seq = ++probeSeq;
+  const filename = downloadFilename(state.page);
+  const videoId = state.page.id || videoIdFromPath();
+  state.downloaded = { checking: true, exists: false, path: '' };
+  pushState();
+  const verdict = await checkDownloaded(filename, videoId);
+  if (seq !== probeSeq) return;
+  state.downloaded = { checking: false, exists: verdict.exists, path: verdict.matches[0]?.path || '' };
+  pushState();
 }
 
 // 入口同步守卫：双击/连点（或面板点击与批次触发同时到达）时只有一个调用能穿过，
@@ -106,9 +127,8 @@ async function startDownloadInner(force = false) {
     quality = currentStream();
   }
   if (!quality || state.download?.running) return false;
-  // 剧集视频归入以剧名命名的子目录（Chrome 的 download 属性支持子目录并自动创建）
-  const seriesDir = state.page?.seriesName ? `${sanitizeName(state.page.seriesName)}/` : '';
-  const filename = `${seriesDir}${sanitizeName(state.page?.name || 'rouvideo')}.mp4`;
+  // 目标文件名与已下载探测共用 downloadFilename（口径一致，探测才不会查错名字）
+  const filename = downloadFilename(state.page);
   // 本地媒体库账本：上报下载生命周期（fire-and-forget）
   const videoId = state.page?.id || videoIdFromPath();
   /** @param {'downloading' | 'complete' | 'failed' | 'canceled' | 'skipped'} status @param {{ error?: string, size?: number, duration?: number }} [extra] */
@@ -125,12 +145,13 @@ async function startDownloadInner(force = false) {
       ...extra,
     });
   };
-  const verdict = force ? { exists: false, matches: [] } : await checkDownloaded(filename);
+  const verdict = force ? { exists: false, matches: [] } : await checkDownloaded(filename, videoId);
   if (verdict.exists) {
     Logger.info('DL', `本地已存在，跳过：${filename}`);
     const where = verdict.matches[0]?.path;
     hud.toast(where ? `本地已存在：${where}` : '本地已存在，已跳过下载', 3200);
     state.download = { running: false, finished: true, pct: 100, skipped: true, filename };
+    state.downloaded = { checking: false, exists: true, path: verdict.matches[0]?.path || '' };
     pushState();
     report('skipped');
     saveCover(state.page); // 封面仍补齐（覆盖写，代价极小）
@@ -151,6 +172,7 @@ async function startDownloadInner(force = false) {
       bytes: result.bytes || state.download.bytes || 0,
       filename: result.filename || filename,
     };
+    state.downloaded = { checking: false, exists: true, path: state.downloaded?.path || '' };
     report('complete', { size: state.download.bytes || undefined, duration: quality.duration || undefined });
     await saveCover(state.page);
     hud.toast(result.note || '下载完成');
@@ -224,6 +246,7 @@ async function bootVideo(force = false) {
   if (state.qualities.length && !force) return;
   state.booting = true;
   state.page = await getVideoInfoFresh();
+  probeLocal(); // 信息就绪即探测本地是否已下载（fire-and-forget，不打扰解析主链）
   pushState();
   const videoId = state.page?.id || videoIdFromPath();
   try {
@@ -315,6 +338,8 @@ function resetForRoute() {
   state.qualities = [];
   state.page = null;
   state.download = null;
+  state.downloaded = null;
+  probeSeq++; // 作废在途探测响应
   state.abort = null;
   state.booting = false;
   sniffedUrls.clear();

@@ -19,6 +19,13 @@ import { storage } from './core/storage.js';
  */
 
 /**
+ * @typedef {Object} LocalHitState
+ * @property {boolean} checking 探测中
+ * @property {boolean} exists 本地是否已有
+ * @property {string} path 本地完整路径（服务命中时；回退层为空串）
+ */
+
+/**
  * @typedef {Object} AppState
  * @property {boolean} booting
  * @property {boolean} starting startDownload 入口同步守卫（防双击并发下载）
@@ -26,6 +33,7 @@ import { storage } from './core/storage.js';
  * @property {boolean} open
  * @property {import('./hls/playlist.js').Variant[]} qualities
  * @property {DownloadUiState | null} download
+ * @property {LocalHitState | null} downloaded 播放页已下载探测结果（null = 未探测/非播放页）
  * @property {AbortController | null} abort
  * @property {import('./site/video-info.js').PageInfo | null} page
  * @property {boolean} holdBoost
@@ -42,6 +50,7 @@ export const state = {
   open: false,
   qualities: [],
   download: null,
+  downloaded: null,
   abort: null,
   page: null,
   holdBoost: false,

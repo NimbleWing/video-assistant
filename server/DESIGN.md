@@ -218,12 +218,12 @@ raw 已定决策记录：
 
 ### 匹配与维护语义
 
-- **判定匹配**：`/api/exists` 携带完整相对路径 `rel`（`剧名/xx.mp4`）与 `stem`；**路径后缀（`/{rel}`）优先，stem 相等回退**。匹配结果返回完整 path 列表，面板 toast 展示「已存在：D:\xxx.mp4」，误报（同名不同视频）一眼可辨。
+- **判定匹配（账本优先 → files）**：`/api/exists` 携带完整相对路径 `rel`（`剧名/xx.mp4`）与可选 `vid`（video_id）。**第一层查 downloads 账本**：`status ∈ complete/skipped`（均为「已在本地」证据；failed/canceled/downloading 不算），`vid` 精确命中优先，回退 `LOWER(filename)=rel` 相等；命中即 `exists=true`，matches 首位带账本 filename（相对路径）。**第二层查 files**：路径后缀（`/{rel}`）优先，stem 相等回退。匹配结果返回完整 path 列表，面板 toast 展示「已存在：D:\xxx.mp4」，误报（同名不同视频）一眼可辨。
 - **封面关联（管理页卡片）**：`/api/videos` 对视频条目补 `cover_id`——优先 `type='cover' AND stem = 视频stem`（单片），回退 `stem = 视频所在目录名`（剧集封面 stem=剧名）；同页 stem 集合一次 `IN` 查询，未命中为 null（前端渲染占位图）。
 - **files upsert（扫描）**：按 path 唯一。文件在 → 更新 `size/mtime/last_seen`，**不触碰 `video_id/source`**（保护登记数据）；文件消失 → 删行（判定自然回到未下载，正是期望行为）。全量重扫幂等。
 - **downloads upsert（登记）**：按 `(site, video_id)`。开始 → `downloading`（attempts+1）；终态 → `complete/failed/canceled/skipped`。
 - **两表不做硬外键**，靠 filename/stem 宽松关联——手动移动文件后 files.path 变，任务记录不失效。
-- **去重判定只查 files**：downloads 有 complete 记录但文件已被删时，仍应判「未下载」。
+- **账本命中即判已下载（已知取舍，2026-09-20 用户决策反转旧口径「只查 files」）**：downloads 有 complete/skipped 记录但文件事后被删时仍判「已下载」→ 扩展跳过下载；此时靠面板「仍然下载」逃生门（download-force）补录。换来的是扫描滞后 / 文件移动改名 / 站点改名（vid 命中不受 filename 影响）场景不重复下载。
 
 ## 5. 接口设计
 
@@ -231,7 +231,7 @@ raw 已定决策记录：
 |------|------|------|
 | `GET /api/ping` | 扩展面板 | 心跳：`{ok, uptime, videos, covers, downloads:{status:count}, ffmpeg:{available, path}}`；面板打开期间 30s 轮询——在线（绿）点击 = 新标签页打开管理页，离线（红）点击 = native messaging 启动服务 |
 | `GET /api/log` | 管理页 | 服务日志尾部 200 行（native 启动时重定向到 server/server.log） |
-| `GET /api/exists?rel=剧名/xx.mp4` | 扩展 | 路径后缀优先、stem 回退；返回 `{exists, matches:[{path,type,size}]}`；仅 `type='video'` 计为已下载 |
+| `GET /api/exists?rel=剧名/xx.mp4&vid=<videoId>` | 扩展 | 账本优先（`status∈complete/skipped`，vid 精确 → filename 相等回退，命中 matches 首位带账本 filename）→ files 回退（路径后缀优先、stem 回退）；返回 `{exists, matches:[{path,type,size}]}`；仅 `type='video'` 计为已下载 |
 | `POST /api/downloads` | 扩展 | 账本 upsert（一行一视频）：开始（downloading）/最终失败（failed+error）/取消/跳过/完成（complete，带 size/duration） |
 | `POST /api/files` | 扩展 | 落盘成功后登记物理文件（`{absPath, size}`，封面与视频统一经此入库，`source='recorded'`）；与账本分离、无竞态 |
 | `POST /api/scan` | 页面/手动 | 触发扫描（幂等） |

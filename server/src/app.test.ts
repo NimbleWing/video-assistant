@@ -34,6 +34,41 @@ describe('app 集成', () => {
     expect(j.exists).toBe(false);
   });
 
+  it('GET /api/exists 账本优先判定：complete/skipped 命中、failed 不算、vid 精确与 filename 回退', async () => {
+    const post = (body: Record<string, unknown>) => fetch(`${base}/api/downloads`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    // vid 精确命中：filename 完全不同的 rel 也能对上（站点改名场景）
+    await post({ videoId: 'ex-vid-1', status: 'complete', filename: '旧名/第1集.mp4', name: '第1集', size: 123 });
+    const byVid = await (await fetch(
+      `${base}/api/exists?vid=ex-vid-1&rel=${encodeURIComponent('新名/第1集.mp4')}`,
+    )).json() as { exists: boolean; matches: { path: string; type: string; size: number }[] };
+    expect(byVid.exists).toBe(true);
+    expect(byVid.matches[0]).toMatchObject({ path: '旧名/第1集.mp4', type: 'video', size: 123 });
+
+    // filename 相等回退命中（skipped 也是「已在本地」证据）；大小写不敏感
+    await post({ videoId: 'ex-vid-2', status: 'skipped', filename: '剧名/Skipped集.mp4', name: 'Skipped集' });
+    const byName = await (await fetch(
+      `${base}/api/exists?rel=${encodeURIComponent('剧名/skipped集.MP4')}`,
+    )).json() as { exists: boolean; matches: { path: string }[] };
+    expect(byName.exists).toBe(true);
+    expect(byName.matches[0].path).toBe('剧名/Skipped集.mp4');
+
+    // canceled / downloading 不构成已下载证据（failed 同一过滤器，不建行以免撞上文计数断言）
+    await post({ videoId: 'ex-c-1', status: 'canceled', filename: '剧名/取消集.mp4', name: '取消集' });
+    await post({ videoId: 'ex-d-1', status: 'downloading', filename: '剧名/进行中.mp4', name: '进行中' });
+    const missByName = await (await fetch(
+      `${base}/api/exists?rel=${encodeURIComponent('剧名/取消集.mp4')}`,
+    )).json() as { exists: boolean };
+    expect(missByName.exists).toBe(false);
+    const missByVid = await (await fetch(
+      `${base}/api/exists?vid=ex-d-1&rel=${encodeURIComponent('剧名/进行中.mp4')}`,
+    )).json() as { exists: boolean };
+    expect(missByVid.exists).toBe(false);
+  });
+
   it('未知路径 404', async () => {
     const r = await fetch(`${base}/api/nope`);
     expect(r.status).toBe(404);

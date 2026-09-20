@@ -120,14 +120,17 @@ function ledgerPost(path, body) {
 
 /**
  * 本地服务 exists 查询（磁盘实况，权威判定层）。
+ * 服务端账本优先：vid（video_id）精确命中不受站点改名影响；filename 回退。
  * @param {string} rel 完整相对路径（已归一化小写）
+ * @param {string} [vid] 站点视频 id（空串 = 仅按 rel 匹配）
  * @returns {Promise<{ exists: boolean, matches: { path: string, type: string, size: number }[] } | null>} null = 服务不可用
  */
-async function ledgerExists(rel) {
+async function ledgerExists(rel, vid = '') {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 300);
   try {
-    const r = await fetch(`${LEDGER_BASE}/api/exists?rel=${encodeURIComponent(rel)}`, { signal: ctrl.signal });
+    const q = `rel=${encodeURIComponent(rel)}${vid ? `&vid=${encodeURIComponent(vid)}` : ''}`;
+    const r = await fetch(`${LEDGER_BASE}/api/exists?${q}`, { signal: ctrl.signal });
     if (!r.ok) return null;
     const j = await r.json();
     if (!j || typeof j.exists !== 'boolean') return null;
@@ -143,11 +146,12 @@ async function ledgerExists(rel) {
  * 已下载判定（三层链第一二层的实现）：本地媒体库服务优先，
  * 不可用（未启动/超时）回退 chrome.downloads 历史校验。
  * @param {string} filename 可含子目录
+ * @param {string} [vid] 站点视频 id（透传服务端账本精确命中）
  * @returns {Promise<{ exists: boolean, matches: { path: string, type: string, size: number }[] }>}
  */
-async function fileExists(filename) {
+async function fileExists(filename, vid = '') {
   const rel = filename.replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase();
-  const local = await ledgerExists(rel);
+  const local = await ledgerExists(rel, vid);
   if (local) return local;
   return { exists: await fileExistsLegacy(filename), matches: [] };
 }
@@ -216,7 +220,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   // 已下载判定（本地媒体库服务 → 下载历史回退，无需 offscreen）
   if (message.type === 'rv-file-exists') {
-    fileExists(String(message.filename || ''))
+    fileExists(String(message.filename || ''), String(message.videoId || ''))
       .then((r) => sendResponse(r))
       .catch(() => sendResponse({ exists: false, matches: [] }));
     return true;

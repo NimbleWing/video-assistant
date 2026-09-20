@@ -1,5 +1,6 @@
 // downloads 表：下载账本（一行一视频）。DDL + 全部数据操作，仅此文件触碰本表。
 import { db, numOf, strOf, type SqlRow } from '../../lib/db.ts';
+import { normPath } from '../../lib/paths.ts';
 import type { SQLInputValue } from 'node:sqlite';
 import type { DownloadRow, DownloadUpsertRequest } from './types.ts';
 
@@ -108,4 +109,28 @@ export function dlStatusCounts(): Record<string, number> {
     counts[strOf(row.status)] = numOf(row.n);
   }
   return counts;
+}
+
+/** 已下载证据状态：complete = 真实下载成功；skipped = 此前判定本地已有而跳过。 */
+const OWNED_STATUSES = "status IN ('complete','skipped')";
+
+/**
+ * 账本已下载命中（/api/exists 第一层）：video_id 精确优先，filename 相等回退。
+ * 账本是一行一视频的小表，LOWER(filename) 全扫无压力，不另建索引。
+ * @param vid video_id（可空串 = 仅按 filename 匹配）
+ * @param rel 完整相对路径（与扩展侧 downloadFilename 同源，大小写不敏感）
+ */
+export function findDownloadedHit(vid: string, rel: string): DownloadRow | null {
+  if (vid) {
+    const byVid = db.prepare(
+      `SELECT * FROM downloads WHERE site = 'rou.video' AND ${OWNED_STATUSES} AND video_id = ?`,
+    ).get(vid) as SqlRow | undefined;
+    if (byVid) return toDownloadRow(byVid);
+  }
+  const normalized = normPath(rel);
+  if (!normalized) return null;
+  const byName = db.prepare(
+    `SELECT * FROM downloads WHERE site = 'rou.video' AND ${OWNED_STATUSES} AND LOWER(filename) = ?`,
+  ).get(normalized) as SqlRow | undefined;
+  return byName ? toDownloadRow(byName) : null;
 }

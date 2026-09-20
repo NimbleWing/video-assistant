@@ -17,4 +17,12 @@ export const CSS = `
   text-shadow:0 10px 40px rgba(255,45,106,.55);transition:opacity .12s,transform .12s;pointer-events:none;
 }
 .badge.on{opacity:1;transform:translate(-50%,-50%)}
+.hit{
+  position:fixed;top:16px;right:16px;
+  background:rgba(20,20,22,.82);border:1px solid rgba(255,255,255,.14);color:#c9c9d1;
+  padding:4px 11px;border-radius:999px;font-size:12px;font-weight:620;letter-spacing:.01em;
+  opacity:0;transition:.18s;pointer-events:none;
+}
+.hit.on{opacity:1}
+.hit.ok{color:#7ee2a8;border-color:rgba(126,226,168,.38)}
 `;
