@@ -7,9 +7,10 @@ import { Videos } from '@/features/Videos';
 import { Raw } from '@/features/Raw';
 import { Archive } from '@/features/Archive';
 import { Ledger } from '@/features/Ledger';
+import { Country } from '@/features/Country';
 import { Settings } from '@/features/Settings';
 
-type Tab = 'videos' | 'raw' | 'archive' | 'ledger' | 'settings';
+type Tab = 'videos' | 'raw' | 'archive' | 'ledger' | 'country' | 'settings';
 
 const icon = (path: ReactNode) => (
   <svg
@@ -71,6 +72,17 @@ const TABS = [
     ),
   },
   {
+    key: 'country',
+    label: '国家',
+    icon: icon(
+      <>
+        <circle cx="12" cy="12" r="8.5" />
+        <ellipse cx="12" cy="12" rx="3.5" ry="8.5" />
+        <path d="M3.5 12h17" />
+      </>,
+    ),
+  },
+  {
     key: 'settings',
     label: '设置',
     icon: icon(
@@ -112,6 +124,7 @@ export default function App() {
         {tab === 'raw' && <Raw onStat={setStat} onPlay={setPlaying} />}
         {tab === 'archive' && <Archive onStat={setStat} onPlay={setPlaying} />}
         {tab === 'ledger' && <Ledger />}
+        {tab === 'country' && <Country />}
         {tab === 'settings' && <Settings />}
       </Layout>
       <PlayerDialog item={playing} onClose={() => setPlaying(null)} />

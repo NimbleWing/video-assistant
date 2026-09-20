@@ -1,5 +1,8 @@
 import type {
   ConfigResponse,
+  CountriesResponse,
+  CountryMutationResponse,
+  CountryRow,
   DownloadsResponse,
   LogResponse,
   RawArchivedResponse,
@@ -85,6 +88,37 @@ export function triggerScan(): Promise<ScanResponse> {
 export function fetchLog(): Promise<LogResponse> {
   return api('/api/log');
 }
+
+// ---------------------------------------------------------------------------
+// 国家字典（演员体系基石）
+// ---------------------------------------------------------------------------
+
+export function fetchCountries(): Promise<CountriesResponse> {
+  return api('/api/countries');
+}
+
+export function createCountry(name: string): Promise<CountryMutationResponse> {
+  return api('/api/countries', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function renameCountry(id: number, name: string): Promise<CountryMutationResponse> {
+  return api(`/api/countries/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function deleteCountry(id: number): Promise<{ ok: boolean }> {
+  return api(`/api/countries/${id}/delete`, { method: 'POST' });
+}
+
+/** 类型再导出（组件直接用，避免另起 import 线）。 */
+export type { CountryRow };
 
 // ---------------------------------------------------------------------------
 // 原始资料库（SSE 进度不经此客户端，组件直连 EventSource）

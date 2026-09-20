@@ -78,6 +78,8 @@ server/src/
     │   └── types.ts     # RawFileRow / RawScanStatus 等响应 DTO（纯类型）
     ├── ledger/          # 下载账本（downloads 表）
     │   ├── index.ts / downloads.ts / routes.ts / types.ts
+    ├── country/         # 国家字典（countries 表，演员体系基石）
+    │   ├── index.ts / countries.ts / routes.ts / types.ts
     └── system/          # 服务级
         └── index.ts / routes.ts   # /api/ping（聚合 media+ledger 统计）、/api/log
 ```
@@ -99,7 +101,7 @@ server/src/
 - 数据库文件 `server/media.db`、日志 `server/server.log`（均锚定 server 根，代码经 `src/..` 相对定位，不依赖 cwd）。
 - 开发命令：`server/` 内 `npm run check`（typecheck + test）。根目录 lint/typecheck 已排除 server（对齐 server-web 策略：无 eslint，tsc strict + 测试把关）。
 
-## 4. 数据库设计（四张表）
+## 4. 数据库设计
 
 ```sql
 -- 1. files：磁盘实况，去重判定唯一依据
@@ -182,6 +184,15 @@ CREATE TABLE raw_events (
   created_at INTEGER NOT NULL     -- = 扫描 token
 );
 CREATE INDEX idx_raw_events_file ON raw_events (file_id, created_at);
+
+-- 7. countries：国家字典（演员体系基石；2026-09-21 首期仅 CRUD）
+CREATE TABLE countries (
+  id   INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE           -- trim 后非空、≤60 字符，重复返回 409
+);
+-- 终局语义（actor 页落地时实施）：actors 表带 country_id 引用本表；视频关联演员后
+-- 国家由演员推导；无演员视频人工指定国家。被演员引用的国家删除策略（禁删/置空）
+-- 届时定；当前无引用方，删除自由。列表 ORDER BY id 正序（添加顺序），不分页。
 ```
 
 已定决策记录：
@@ -243,6 +254,10 @@ raw 已定决策记录：
 | `GET /stream/:id/index.m3u8` | 页面 | HLS VOD 清单（服务端自生成，段数按时长算，详见 §7） |
 | `GET /stream/:id/seg/:n.ts` | 页面 | 按需驱动 ffmpeg 生成第 n 段 MPEG-TS 并回流（`-c copy` 无损重整） |
 | `GET /` | 页面 | 管理页：配置、视频分页浏览、播放、账本 |
+| `GET /api/countries` | 页面 | 国家字典全量列表（`ORDER BY id` 正序，不分页） |
+| `POST /api/countries` | 页面 | 新增 `{name}`：trim 非空、≤60，重复 409 |
+| `PUT /api/countries/:id` | 页面 | 改名 `{name}`（同校验；404 不存在） |
+| `POST /api/countries/:id/delete` | 页面 | 删除（404 不存在；无引用方，当前自由删） |
 | `GET /api/raw/volumes` | 页面 | 原始资料盘符列表：探测 `A:`–`Z:` 根下 `RawFiles/` 目录，**只返回存在的盘**，附 statfs 总容量/剩余空间；网络盘等无盘符形态不支持 |
 | `POST /api/raw/scan` | 页面 | 启动原始资料扫描 `{volumes:['d:'], types:['video','image']}`：202 即返（异步任务）；已有任务 409；请求时二次校验 RawFiles 存在性（拔盘跳过记 warning） |
 | `POST /api/raw/scan/cancel` | 页面 | 协作式取消（文件/目录间查标志位；取消**不做**消失判定，已入库数据保留） |

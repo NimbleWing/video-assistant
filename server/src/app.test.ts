@@ -122,6 +122,64 @@ describe('app 集成', () => {
   });
 });
 
+describe('app 集成：国家字典 CRUD', () => {
+  const post = (body: Record<string, unknown>) => fetch(`${base}/api/countries`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  it('新增 → 列表 id 正序 → 改名 → 删除', async () => {
+    const c1 = await (await post({ name: '  日本  ' })).json() as { ok: boolean; item: { id: number; name: string } };
+    expect(c1.ok).toBe(true);
+    expect(c1.item.name).toBe('日本'); // trim
+    await post({ name: '美国' });
+
+    const list = await (await fetch(`${base}/api/countries`)).json() as { items: { id: number; name: string }[] };
+    expect(list.items.map((i) => i.name)).toEqual(['日本', '美国']); // id 正序
+    const jp = list.items[0]!;
+
+    const renamed = await (await fetch(`${base}/api/countries/${jp.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Japan' }),
+    })).json() as { item: { name: string } };
+    expect(renamed.item.name).toBe('Japan');
+
+    const del = await fetch(`${base}/api/countries/${jp.id}/delete`, { method: 'POST' });
+    expect(del.status).toBe(200);
+    const after = await (await fetch(`${base}/api/countries`)).json() as { items: { name: string }[] };
+    expect(after.items.map((i) => i.name)).toEqual(['美国']);
+    // 清理本测试造的行（定向删除）
+    const ids = (await (await fetch(`${base}/api/countries`)).json() as { items: { id: number }[] }).items.map((i) => i.id);
+    for (const id of ids) await fetch(`${base}/api/countries/${id}/delete`, { method: 'POST' });
+  });
+
+  it('空名 400 / 超长 400 / 重名 409 / 目标不存在 404', async () => {
+    expect((await post({ name: '   ' })).status).toBe(400);
+    expect((await post({ name: 'x'.repeat(61) })).status).toBe(400);
+    const created = await post({ name: '韩国' });
+    expect(created.status).toBe(200);
+    expect((await post({ name: '韩国' })).status).toBe(409);
+    const id = (await (await created.json() as Promise<{ item: { id: number } }>)).item.id;
+    // 改名与自身同名不算重名
+    const self = await fetch(`${base}/api/countries/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: '韩国' }),
+    });
+    expect(self.status).toBe(200);
+    expect((await fetch(`${base}/api/countries/999999`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'x' }),
+    })).status).toBe(404);
+    expect((await fetch(`${base}/api/countries/999999/delete`, { method: 'POST' })).status).toBe(404);
+    // 清理
+    await fetch(`${base}/api/countries/${id}/delete`, { method: 'POST' });
+  });
+});
+
 describe('app 集成：raw feature', () => {
   it('GET /api/raw/volumes 返回盘符数组与上次勾选', async () => {
     const r = await fetch(`${base}/api/raw/volumes`);
