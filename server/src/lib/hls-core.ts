@@ -8,7 +8,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { getMeta, setMeta } from './meta.ts';
-import { HttpError } from './http.ts';
+import { HttpError, streamFile } from './http.ts';
 
 /** 分段时长（秒），与清单 TARGETDURATION 一致。 */
 const SEGMENT_SEC = 2;
@@ -450,5 +450,5 @@ export async function serveHlsSegment(s: HlsSession, segParam: string, req: Inco
     res.end();
     return;
   }
-  createReadStream(file).pipe(res);
+  streamFile(res, file);
 }

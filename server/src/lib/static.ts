@@ -1,7 +1,8 @@
 // 静态资源服务：public/（管理页构建产物，源码见 ../server-web）。
 // 归一化后限制在 public 目录内，防路径穿越；未命中返回 false 交回 API 路由。
-import { createReadStream, promises as fs } from 'node:fs';
+import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { streamFile } from './http.ts';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { SERVER_ROOT } from './db.ts';
 
@@ -44,6 +45,6 @@ export async function serveStatic(req: IncomingMessage, res: ServerResponse, pat
     res.end();
     return true;
   }
-  createReadStream(file).pipe(res);
+  streamFile(res, file);
   return true;
 }

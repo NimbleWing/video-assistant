@@ -1,6 +1,6 @@
 // /stream/:id：files.id 的 Range 流式播放（<video> 直接用）。
-import { createReadStream, promises as fs } from 'node:fs';
-import { HttpError, type RouteHandler } from '../../lib/http.ts';
+import { promises as fs } from 'node:fs';
+import { HttpError, streamFile, type RouteHandler } from '../../lib/http.ts';
 import { getFileBasic } from './files.ts';
 
 export const streamHandler: RouteHandler = async ({ req, res, params }) => {
@@ -47,13 +47,13 @@ export const streamHandler: RouteHandler = async ({ req, res, params }) => {
       res.end();
       return;
     }
-    createReadStream(row.path, { start: seg.start, end: seg.end }).pipe(res);
+    streamFile(res, row.path, { start: seg.start, end: seg.end });
   } else {
     res.writeHead(200, { ...headers, 'Content-Length': String(size) });
     if (req.method === 'HEAD') {
       res.end();
       return;
     }
-    createReadStream(row.path).pipe(res);
+    streamFile(res, row.path);
   }
 };

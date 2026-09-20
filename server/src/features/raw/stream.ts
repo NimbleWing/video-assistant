@@ -1,7 +1,7 @@
 // /api/raw/file/:id/content：图片缩略图 / 原生格式视频 Range 直连。
 // Range 语义与 media stream.ts 一致（<video> seek 依赖）。
-import { createReadStream, promises as fs } from 'node:fs';
-import { HttpError, type RouteHandler } from '../../lib/http.ts';
+import { promises as fs } from 'node:fs';
+import { HttpError, streamFile, type RouteHandler } from '../../lib/http.ts';
 import { getRawFile } from './files.ts';
 
 /** 扩展名 → Content-Type（未知回落 octet-stream，浏览器自行下载/嗅探）。 */
@@ -64,13 +64,13 @@ export const rawContentHandler: RouteHandler = async ({ req, res, params }) => {
       res.end();
       return;
     }
-    createReadStream(row.path, { start: seg.start, end: seg.end }).pipe(res);
+    streamFile(res, row.path, { start: seg.start, end: seg.end });
   } else {
     res.writeHead(200, { ...headers, 'Content-Length': String(size) });
     if (req.method === 'HEAD') {
       res.end();
       return;
     }
-    createReadStream(row.path).pipe(res);
+    streamFile(res, row.path);
   }
 };
