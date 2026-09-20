@@ -134,8 +134,8 @@ describe('scanRawRoots', () => {
 describe('scanRawRoots 配对合并（移动/改名自动判定）', () => {
   let root2 = '';
   const q = (name: string) => path.join(root2, name);
-  /** 本组测试的行（volume='m:'，排除前组 't:' 残留）。 */
-  const mRows = () => listRawFiles({ missing: 'all' }).items.filter((i) => i.volume === 'm:');
+  /** 本组测试的行（volume='m:'，排除前组 't:' 残留；归档口径全量——配对测试关注行本体）。 */
+  const mRows = () => listRawFiles({ missing: 'all', archived: 'all' }).items.filter((i) => i.volume === 'm:');
 
   beforeAll(() => {
     root2 = mkdtempSync(path.join(tmpdir(), 'rou-move-'));

@@ -347,7 +347,7 @@ raw 已定决策记录：
 | `POST /api/raw/scan/cancel` | 页面 | 协作式取消（文件/目录间查标志位；取消**不做**消失判定，已入库数据保留） |
 | `GET /api/raw/scan/status` | 页面 | 任务快照 `{running, currentVolume, scanned, videos, images, lastResult}`（无 SSE 环境兜底；结果保留到下次启动） |
 | `GET /api/raw/scan/events` | 页面 | **SSE**：连接即推 `snapshot` → 运行中 ~500ms 推 `progress` → 结束推 `done`（含 missingCount 摘要）；15s 心跳注释行保活 |
-| `GET /api/raw/files?page=&size=&q=&type=&volume=&missing=` | 页面 | 分页 + 名称搜索 + 类型/盘符筛选，`ORDER BY last_seen DESC, id DESC`；missing 取值 hide(默认)/only/all |
+| `GET /api/raw/files?page=&size=&q=&type=&volume=&missing=&archived=` | 页面 | 分页 + 名称搜索 + 类型/盘符筛选，`ORDER BY last_seen DESC, id DESC`；missing 取值 hide(默认)/only/all；**archived 取值 hide(默认，仅未归档——归档行在归档页有专属视图)/only(仅已归档)/all** |
 | `GET /api/raw/missing` | 页面 | 待决策消失清单（pending_missing=1，全量返回） |
 | `GET /api/raw/duplicates?page=&size=` | 页面 | 文件查重：按抽样 hash 聚合现存行（missing=0 且 pending_missing=0），≥2 份成组，组内文件按 path 排序，组按冗余空间（(n-1)×size）降序分页；响应附全库组数 total 与重复占用总量 wastedTotal |
 | `POST /api/raw/missing/resolve` | 页面 | `{op:'delete'\|'mark'}` 批量处理全部待决策行：delete 删行；mark 置 missing=1；均清 pending_missing |

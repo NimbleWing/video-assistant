@@ -88,6 +88,7 @@ const filesRoute: Route['handler'] = ({ res, url }) => {
     type: url.searchParams.get('type') ?? undefined,
     volume: url.searchParams.get('volume') ?? undefined,
     missing: url.searchParams.get('missing') ?? undefined,
+    archived: url.searchParams.get('archived') ?? undefined,
   });
   const body: RawFilesResponse = { ok: true, ...r, volumes: rawVolumeStats() };
   json(res, 200, body);

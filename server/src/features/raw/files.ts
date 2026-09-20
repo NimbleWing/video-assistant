@@ -140,6 +140,8 @@ export interface ListRawOpt {
   volume?: string;
   /** missing 行展示口径：hide=默认（missing=0）/ only（missing=1）/ all。 */
   missing?: string;
+  /** 归档行展示口径：hide=默认（archived=0，仅未归档）/ only（仅已归档）/ all。 */
+  archived?: string;
 }
 
 function toRow(r: SqlRow): RawFileRow {
@@ -169,7 +171,7 @@ export function getRawByPath(path: string): RawFileRow | null {
   return row ? toRow(row) : null;
 }
 
-/** 文件分页查询：名称搜索（大小写不敏感 LIKE）+ 类型/盘符/missing 筛选，最近扫到的排前面。 */
+/** 文件分页查询：名称搜索（大小写不敏感 LIKE）+ 类型/盘符/missing/归档状态筛选，最近扫到的排前面。 */
 export function listRawFiles(opt: ListRawOpt): { total: number; items: RawFileRow[] } {
   const page = Math.max(1, Number(opt.page) || 1);
   const size = Math.min(200, Math.max(1, Number(opt.size) || 50));
@@ -186,6 +188,10 @@ export function listRawFiles(opt: ListRawOpt): { total: number; items: RawFileRo
   if (opt.missing === 'only') where.push('missing = 1');
   else if (opt.missing === 'all') { /* 全部 */ }
   else where.push('missing = 0');
+  // 归档状态：hide（默认）= 仅未归档（归档行在归档资料页有专属视图）；only = 仅已归档；all = 全部
+  if (opt.archived === 'only') where.push('archived = 1');
+  else if (opt.archived === 'all') { /* 全部 */ }
+  else where.push('archived = 0');
   if (opt.q) {
     where.push("(name LIKE ? ESCAPE '\\' OR path LIKE ? ESCAPE '\\')");
     const like = `%${String(opt.q).replace(/[\\%_]/g, (c) => `\\${c}`)}%`;

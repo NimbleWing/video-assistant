@@ -159,6 +159,8 @@ export interface RawFilesQuery {
   type?: 'video' | 'image';
   volume?: string;
   missing?: 'hide' | 'only' | 'all';
+  /** 归档口径：hide=默认（仅未归档）/ only（仅已归档）/ all。 */
+  archived?: 'hide' | 'only' | 'all';
 }
 
 export function fetchRawFiles(query: RawFilesQuery): Promise<RawFilesResponse> {
@@ -170,6 +172,7 @@ export function fetchRawFiles(query: RawFilesQuery): Promise<RawFilesResponse> {
   if (query.type) p.set('type', query.type);
   if (query.volume) p.set('volume', query.volume);
   if (query.missing) p.set('missing', query.missing);
+  if (query.archived) p.set('archived', query.archived);
   return api(`/api/raw/files?${p.toString()}`);
 }
 

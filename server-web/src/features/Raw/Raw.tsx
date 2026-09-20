@@ -180,6 +180,8 @@ export function Raw({ onStat, onPlay }: Props) {
   const [type, setType] = useState<'' | RawType>('');
   const [volume, setVolume] = useState('');
   const [missingView, setMissingView] = useState<'hide' | 'only' | 'all'>('hide');
+  // 归档口径：默认仅未归档（归档行在归档资料页有专属视图）
+  const [archivedView, setArchivedView] = useState<'hide' | 'only' | 'all'>('hide');
   const [page, setPage] = useState(1);
   const [size, setSize] = useState(DEFAULT_PAGE_SIZE);
   const [data, setData] = useState<RawFilesResponse | null>(null);
@@ -225,7 +227,7 @@ export function Raw({ onStat, onPlay }: Props) {
 
   useEffect(() => {
     let alive = true;
-    fetchRawFiles({ page, size, q, type: type || undefined, volume: effVolume || undefined, missing: missingView })
+    fetchRawFiles({ page, size, q, type: type || undefined, volume: effVolume || undefined, missing: missingView, archived: archivedView })
       .then((d) => {
         if (!alive) return;
         setData(d);
@@ -240,7 +242,7 @@ export function Raw({ onStat, onPlay }: Props) {
     return () => {
       alive = false;
     };
-  }, [page, size, q, type, effVolume, missingView, refreshKey, onStat]);
+  }, [page, size, q, type, effVolume, missingView, archivedView, refreshKey, onStat]);
 
   // SSE 进度推送：snapshot/progress → 状态；done → 刷新列表与待决策数
   useEffect(() => {
@@ -573,6 +575,18 @@ export function Raw({ onStat, onPlay }: Props) {
           <option value="only">仅已消失</option>
           <option value="all">全部</option>
         </select>
+        <select
+          value={archivedView}
+          onChange={(e) => {
+            setArchivedView(e.target.value as 'hide' | 'only' | 'all');
+            setPage(1);
+          }}
+          aria-label="归档状态"
+        >
+          <option value="hide">仅未归档</option>
+          <option value="only">仅已归档</option>
+          <option value="all">全部</option>
+        </select>
         <button type="button" className={`act ml-auto ${dupOpen ? 'border-brand/60 bg-brand-soft' : ''}`} onClick={toggleDup}>
           查重
         </button>
@@ -581,7 +595,7 @@ export function Raw({ onStat, onPlay }: Props) {
         <div className="shrink-0 rounded-xl border border-dashed border-line py-14 text-center text-dim">加载失败：{error}</div>
       ) : items.length === 0 ? (
         <div className="shrink-0 rounded-xl border border-dashed border-line py-14 text-center text-dim">
-          {total === 0 && !q && !type && !effVolume && missingView === 'hide'
+          {total === 0 && !q && !type && !effVolume && missingView === 'hide' && archivedView === 'hide'
             ? '还没有原始资料（选择盘符开始扫描）'
             : '没有匹配的条目'}
         </div>

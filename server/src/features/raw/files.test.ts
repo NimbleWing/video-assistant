@@ -121,6 +121,18 @@ describe('listRawFiles', () => {
     expect(listRawFiles({ type: 'image', missing: 'only' }).items.map((i) => i.path)).toEqual(['d:/rawfiles/b.jpg']);
   });
 
+  it('归档筛选：默认仅未归档；only 只看已归档；all 全部', () => {
+    // d: 盘现有行：a.mp4（missing=1——前序用例所标，此处复活）、Name.MP4（未归档，path 列保留原始大小写）、b.jpg（missing=1）
+    db.exec("UPDATE raw_files SET missing = 0, pending_missing = 0 WHERE path = 'd:/rawfiles/a.mp4'");
+    db.exec("UPDATE raw_files SET archived = 1 WHERE path = 'd:/rawfiles/Name.MP4'");
+    const hide = listRawFiles({}).items.filter((i) => i.volume === 'd:');
+    expect(hide.map((i) => i.path)).toEqual(['d:/rawfiles/a.mp4']); // 默认仅未归档（missing=0 且 archived=0）
+    expect(listRawFiles({ archived: 'only' }).items.filter((i) => i.volume === 'd:').map((i) => i.path)).toEqual(['d:/rawfiles/Name.MP4']);
+    expect(listRawFiles({ archived: 'all' }).items.filter((i) => i.volume === 'd:').length).toBe(2); // a.mp4 + Name.MP4（b.jpg missing 仍隐藏）
+    db.exec("UPDATE raw_files SET archived = 0 WHERE path = 'd:/rawfiles/Name.MP4'"); // 还原
+    db.exec("UPDATE raw_files SET missing = 1 WHERE path = 'd:/rawfiles/a.mp4'"); // 还原（避免与 Name.MP4 同 hash 成组干扰查重用例）
+  });
+
   it('盘符统计分组', () => {
     const v = rawVolumeStats().find((x) => x.volume === 'd:');
     expect(v?.videos).toBe(2); // a.mp4 + Name.MP4
