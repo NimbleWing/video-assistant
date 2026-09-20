@@ -14,7 +14,7 @@ rou.video 的 Chrome MV3 扩展（由油猴脚本移植）：播放页解析 HLS
 | 内容脚本 | `src/content-loader.js` → `src/main.js` | 编排器，持有全部状态；侧边栏经 `rv-get-state`/`rv-state`/`rv-cmd` 遥控 |
 | Service Worker | `src/background.js` | 侧边栏开关、offscreen 生命周期、downloads 中转（os-url/封面）、已下载判定（本地媒体库服务 → 下载历史回退）、本地库登记中转、批次后台标签页开/关/复用 |
 | Offscreen | `src/offscreen.js` → `src/net/save-session.js` | 保存会话编排：模式判定（mp4/透传 ts）→ OPFS 流式写 `.part` → moov 置尾 → rename → objectURL 交 SW downloads |
-| 侧边栏 | `src/panel/` | 纯遥控器 UI，不持有业务状态 |
+| 侧边栏 | `src/panel/` | 纯遥控器 UI，不持有业务状态；本地库心跳指示灯（在线=打开管理页/离线=native 拉起/在线时旁置 `⟳` 重启按钮：shutdown → 确认离线 → native start → 轮询上线；shutdown 非成功即中止报因——旧版本服务无此接口，硬走启动段会撞端口形成假启动） |
 | 下载核心 | `src/hls/`（playlist/downloader/ts-remux）、`src/net/`（http/save/fswriter/rou-png/ledger）、`src/features/`（boost/batch） | 纯逻辑，测试覆盖集中于此 |
 
 ## 保存链路（无自定义目录功能，已整体移除——Chrome 对扩展的 FS Access 授权过于短命，缠斗无益）

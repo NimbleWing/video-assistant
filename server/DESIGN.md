@@ -97,7 +97,8 @@ server/src/
 - 监听 `127.0.0.1:17321`。
 - **启动方式**（二选一）：
   - 手动：`server/start.bat`（`node --no-warnings --experimental-sqlite src/server.ts`）
-  - 面板一键：离线指示灯点击 → `chrome.runtime.sendNativeMessage('com.rouvideo.media', {cmd:'start'})` → native host（`native-host.ts`，经 `native-host.cmd` 包装）以 detached 方式 spawn `src/server.ts` 后即退出，服务独立存活；面板轮询 ping 确认上线。需先运行 `server/install-native.bat` 注册（HKCU 注册表 + host manifest，`allowed_origins` 锁扩展 ID；卸载用 `uninstall-native.bat`）。依赖 node 在 PATH。
+   - 面板一键：离线指示灯点击 → `chrome.runtime.sendNativeMessage('com.rouvideo.media', {cmd:'start'})` → native host（`native-host.ts`，经 `native-host.cmd` 包装）以 detached 方式 spawn `src/server.ts` 后即退出，服务独立存活；面板轮询 ping 确认上线。需先运行 `server/install-native.bat` 注册（HKCU 注册表 + host manifest，`allowed_origins` 锁扩展 ID；卸载用 `uninstall-native.bat`）。依赖 node 在 PATH。
+   - 面板重启（v1.13.0）：在线时指示灯旁 `⟳` 按钮 → `POST /api/shutdown` → 确认离线（≤3s）→ native start 拉起 → 轮询至在线（≤15s）。服务无状态（数据全在 SQLite），重启安全；进行中的 raw 扫描会中断（扫描幂等可重跑）。
 - 数据库文件 `server/media.db`、日志 `server/server.log`（均锚定 server 根，代码经 `src/..` 相对定位，不依赖 cwd）。
 - 开发命令：`server/` 内 `npm run check`（typecheck + test）。根目录 lint/typecheck 已排除 server（对齐 server-web 策略：无 eslint，tsc strict + 测试把关）。
 
@@ -258,6 +259,7 @@ raw 已定决策记录：
 | `POST /api/countries` | 页面 | 新增 `{name}`：trim 非空、≤60，重复 409 |
 | `PUT /api/countries/:id` | 页面 | 改名 `{name}`（同校验；404 不存在） |
 | `POST /api/countries/:id/delete` | 页面 | 删除（404 不存在；无引用方，当前自由删） |
+| `POST /api/shutdown` | 扩展面板 | 优雅退出：响应 200 后延迟 200ms `process.exit(0)`（等响应刷盘）；面板「重启」按钮的下半程——先 shutdown 确认离线，再经 native messaging 拉起，避免双实例撞端口 |
 | `GET /api/raw/volumes` | 页面 | 原始资料盘符列表：探测 `A:`–`Z:` 根下 `RawFiles/` 目录，**只返回存在的盘**，附 statfs 总容量/剩余空间；网络盘等无盘符形态不支持 |
 | `POST /api/raw/scan` | 页面 | 启动原始资料扫描 `{volumes:['d:'], types:['video','image']}`：202 即返（异步任务）；已有任务 409；请求时二次校验 RawFiles 存在性（拔盘跳过记 warning） |
 | `POST /api/raw/scan/cancel` | 页面 | 协作式取消（文件/目录间查标志位；取消**不做**消失判定，已入库数据保留） |

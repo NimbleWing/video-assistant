@@ -63,6 +63,25 @@ function srvBadge() {
   return `<span class="srv-s"${i.off ? ' data-act="srv-start" role="button"' : (srv ? ' data-act="srv-open" role="button"' : '')} title="${i.tip}"><i class="dot ${i.cls}"></i>${i.txt}</span>`;
 }
 
+// 重启按钮：仅在线可用（离线时点指示灯本身就是启动）；pingServer 轮询同步禁用态
+function srvRestartBtn() {
+  return `<button type="button" class="srv-r" data-act="srv-restart" title="重启本地服务"${srv ? '' : ' disabled'}>⟳</button>`;
+}
+
+/** 探测服务是否在线（不更新指示灯状态，重启编排用）。 */
+async function pingOk() {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 1500);
+    const r = await fetch('http://127.0.0.1:17321/api/ping', { signal: ctrl.signal });
+    clearTimeout(timer);
+    const j = await r.json();
+    return !!j?.ok;
+  } catch {
+    return false;
+  }
+}
+
 async function pingServer() {
   try {
     const ctrl = new AbortController();
@@ -82,6 +101,9 @@ async function pingServer() {
     else if (srv) el.setAttribute('data-act', 'srv-open');
     else el.removeAttribute('data-act');
     el.innerHTML = `<i class="dot ${i.cls}"></i>${i.txt}`;
+  }
+  for (const b of document.querySelectorAll('.srv-r')) {
+    /** @type {HTMLButtonElement} */ (b).disabled = !srv;
   }
 }
 
@@ -104,6 +126,37 @@ async function startSrvFromPanel() {
     throw new Error('服务未在 10 秒内上线');
   } catch (e) {
     toast(`启动失败：${String(/** @type {Error} */ (e).message)}（可手动运行 server/start.bat）`, 6000);
+  }
+}
+
+// 重启本地服务（分两段编排，避免双实例撞 17321 端口）：
+// shutdown → 轮询确认离线（≤3s）→ 复用 native start 链路拉起（含上线轮询与提示）。
+// shutdown 非成功必须中止——旧版本服务无此接口（404）时若继续走启动段，
+// 新实例会撞端口静默退出、旧进程继续应答 ping，形成「假启动成功」。
+/** @type {boolean} */
+let restarting = false;
+async function restartServer() {
+  if (restarting) return;
+  restarting = true;
+  toast('正在重启本地服务…', 5000);
+  try {
+    try {
+      const r = await fetch('http://127.0.0.1:17321/api/shutdown', { method: 'POST' });
+      if (!r.ok) {
+        toast(`重启失败：运行中的服务版本过旧（无重启接口，HTTP ${r.status}）——请手动结束旧服务进程后重新启动`, 8000);
+        return;
+      }
+    } catch {
+      toast('重启失败：无法连接本地服务——可点击指示灯直接启动', 6000);
+      return;
+    }
+    for (let i = 0; i < 6; i++) {
+      await new Promise((res) => setTimeout(res, 500));
+      if (!(await pingOk())) break;
+    }
+    await startSrvFromPanel();
+  } finally {
+    restarting = false;
   }
 }
 
@@ -271,7 +324,7 @@ function render() {
       <div class="head">
         <div class="who">
           <div class="title">肉视频助手 <span class="ver">v${EXT_VERSION}</span></div>
-          <div class="meta"><i class="dot wait"></i><span>未在视频页</span>${srvBadge()}</div>
+          <div class="meta"><i class="dot wait"></i><span>未在视频页</span>${srvBadge()}${srvRestartBtn()}</div>
         </div>
       </div>
       <div class="empty">在 rou.video 的页面打开本侧边栏即可使用。<br><br>视频播放页可直接下载；列表根页（剧集库 / 视频库 / 首页 / 搜索页）可连续下载。<br><br>文件保存到浏览器下载目录（可在 Chrome 设置中更改位置）。快捷键 <kbd>Alt</kbd>+<kbd>D</kbd></div>`;
@@ -284,7 +337,7 @@ function render() {
       <div class="head">
         <div class="who">
           <div class="title">肉视频助手 <span class="ver">v${EXT_VERSION}</span></div>
-          <div class="meta"><i class="dot ${snap.listing ? '' : 'wait'}"></i><span>${snap.listing ? '列表页已就绪' : '打开视频页后可单独下载'}</span>${srvBadge()}</div>
+          <div class="meta"><i class="dot ${snap.listing ? '' : 'wait'}"></i><span>${snap.listing ? '列表页已就绪' : '打开视频页后可单独下载'}</span>${srvBadge()}${srvRestartBtn()}</div>
         </div>
       </div>
       ${batchHtml()}`;
@@ -315,7 +368,7 @@ function render() {
     <div class="head">
       <div class="who">
         <div class="title">${escapeHtml(title)}</div>
-        <div class="meta"><i class="dot ${st.dot}"></i><span>${st.text}</span>${dur ? `<span>·</span><span>${formatDuration(dur)}</span>` : ''}${segInfo}${hitChip}<span>·</span>${srvBadge()}<span>·</span><span class="ver">v${EXT_VERSION}</span></div>
+        <div class="meta"><i class="dot ${st.dot}"></i><span>${st.text}</span>${dur ? `<span>·</span><span>${formatDuration(dur)}</span>` : ''}${segInfo}${hitChip}<span>·</span>${srvBadge()}${srvRestartBtn()}<span>·</span><span class="ver">v${EXT_VERSION}</span></div>
       </div>
     </div>
     <button class="dl" data-act="${d?.running ? 'abort' : 'download'}" ${!d?.running && !stream && snap.booting ? 'disabled' : ''}>
@@ -381,6 +434,7 @@ app.addEventListener('click', (ev) => {
   else if (kind === 'download-force') cmd('download-force');
   else if (kind === 'srv-start') startSrvFromPanel();
   else if (kind === 'srv-open') openSrvPage();
+  else if (kind === 'srv-restart') restartServer();
   else if (kind === 'abort') cmd('abort');
   else if (kind === 'rescan') { toast('正在解析…'); cmd('rescan'); }
   else if (kind === 'pip') cmd('pip');

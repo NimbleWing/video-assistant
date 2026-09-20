@@ -1,5 +1,5 @@
-// 服务级 API 路由：/api/ping（心跳，聚合 media+ledger 统计）、/api/log（服务日志尾部）。
-// ping 是唯一允许的跨 feature 聚合点。
+// 服务级 API 路由：/api/ping（心跳，聚合 media+ledger 统计）、/api/log（服务日志尾部）、
+// /api/shutdown（面板重启的下半程）。ping 是唯一允许的跨 feature 聚合点。
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { json, type Route } from '../../lib/http.ts';
@@ -36,7 +36,23 @@ const logRoute: Route['handler'] = async ({ res }) => {
   }
 };
 
+/** 退出动作（延迟后执行）；测试经 setExitHandlerForTest 替换为 no-op/spy。 */
+let exitHandler: () => void = () => process.exit(0);
+
+/** 仅测试用：替换退出动作，避免集成测试真杀 vitest worker。 */
+export function setExitHandlerForTest(fn: () => void): void {
+  exitHandler = fn;
+}
+
+// 面板重启下半程：响应 200 后延迟 200ms 退出（等响应刷盘；服务无状态，直接 exit 安全）。
+// 上半程（确认离线 + native start 拉起）在扩展面板侧编排，避免双实例撞 17321 端口。
+const shutdownRoute: Route['handler'] = ({ res }) => {
+  json(res, 200, { ok: true });
+  setTimeout(exitHandler, 200);
+};
+
 export const systemRoutes: Route[] = [
   { method: 'GET', path: '/api/ping', handler: pingRoute },
   { method: 'GET', path: '/api/log', handler: logRoute },
+  { method: 'POST', path: '/api/shutdown', handler: shutdownRoute },
 ];

@@ -1,7 +1,8 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Server } from 'node:http';
 import { createApp } from './app.ts';
 import { upsertRawScanned } from './features/raw/files.ts';
+import { setExitHandlerForTest } from './features/system/routes.ts';
 import type { PingResponse } from './features/system/types.ts';
 
 let server: Server;
@@ -113,6 +114,17 @@ describe('app 集成', () => {
       body: JSON.stringify({ status: 'failed' }),
     });
     expect(r.status).toBe(400);
+  });
+
+  it('POST /api/shutdown 响应 200 并调度退出（exit 注入为 spy，不真杀 worker）', async () => {
+    const exit = vi.fn();
+    setExitHandlerForTest(exit);
+    const r = await fetch(`${base}/api/shutdown`, { method: 'POST' });
+    expect(r.status).toBe(200);
+    expect(((await r.json()) as { ok: boolean }).ok).toBe(true);
+    await new Promise((res) => setTimeout(res, 300)); // 越过 200ms 延迟
+    expect(exit).toHaveBeenCalledTimes(1);
+    setExitHandlerForTest(() => process.exit(0)); // 还原
   });
 
   it('GET / 提供管理页静态资源', async () => {

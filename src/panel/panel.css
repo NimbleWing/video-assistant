@@ -103,6 +103,34 @@ body {
   border-color: rgba(61, 214, 140, .25);
 }
 
+/* 本地库重启按钮（心跳指示灯旁，仅在线可用） */
+.srv-r {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  margin-left: 4px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.srv-r:hover:not(:disabled) {
+  color: #fff;
+  border-color: rgba(255, 255, 255, .28);
+}
+
+.srv-r:disabled {
+  opacity: .35;
+  cursor: default;
+}
+
 /* 本地媒体库心跳指示：绿=服务在线 · 黄=探测中 · 红=离线（判定回退下载历史） */
 .srv-s {
   display: inline-flex;
