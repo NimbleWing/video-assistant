@@ -1,4 +1,8 @@
 import type {
+  ActressesResponse,
+  ActressDisksResponse,
+  ActressMutationResponse,
+  ActressUpsertRequest,
   ConfigResponse,
   CountriesResponse,
   CountryMutationResponse,
@@ -271,6 +275,47 @@ export function setStudioLogo(id: number, payload: { b64?: string; url?: string 
 
 export function clearStudioLogo(id: number): Promise<{ ok: boolean }> {
   return api(`/api/studios/${id}/logo/delete`, { method: 'POST' });
+}
+
+// ---------------------------------------------------------------------------
+// 女优（演员体系核心；头像 = 归档的 raw 图片）
+// ---------------------------------------------------------------------------
+
+export function fetchActresses(q = ''): Promise<ActressesResponse> {
+  return api(`/api/actresses${q ? `?q=${encodeURIComponent(q)}` : ''}`);
+}
+
+export function fetchActressDisks(): Promise<ActressDisksResponse> {
+  return api('/api/actresses/disks');
+}
+
+export function createActress(payload: ActressUpsertRequest): Promise<ActressMutationResponse> {
+  return api('/api/actresses', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateActress(id: number, payload: ActressUpsertRequest): Promise<ActressMutationResponse> {
+  return api(`/api/actresses/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteActress(id: number): Promise<{ ok: boolean }> {
+  return api(`/api/actresses/${id}/delete`, { method: 'POST' });
+}
+
+/** 原始资料页设为头像：图片 raw 行归档移动到女优图集目录并更新引用。 */
+export function setActressAvatar(id: number, fileId: number): Promise<ActressMutationResponse> {
+  return api(`/api/actresses/${id}/avatar`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fileId }),
+  });
 }
 
 export interface RawEventsQuery {

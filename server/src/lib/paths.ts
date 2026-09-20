@@ -24,3 +24,16 @@ export function typeOfExt(ext: string): 'video' | 'cover' | null {
   if (e === 'jpg' || e === 'jpeg' || e === 'png' || e === 'webp') return 'cover';
   return null;
 }
+
+/**
+ * 目录段清洗：去 Windows 非法字符与控制字符、压缩空白、trim 尾点/空格（会被系统静默剥除）。
+ * 清洗后为空回退 'unnamed'。女优目录树（Archives/国家/女优/图集）用。
+ */
+export function dirName(name: string): string {
+  const s = String(name ?? '')
+    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[. ]+$/, '');
+  return s || 'unnamed';
+}

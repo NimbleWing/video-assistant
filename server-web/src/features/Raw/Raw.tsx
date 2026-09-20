@@ -12,6 +12,7 @@ import {
 import type { PlaySource } from '@/components/PlayerDialog';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { RawCard, TrashButton } from '@/components/RawCard';
+import { AvatarPicker } from '@/features/Actress';
 import { Pager } from '@/components/Pager';
 import type { RawDuplicatesResponse, RawDupGroup, RawFileRow, RawFilesResponse, RawScanStatus, RawType, RawVolumesResponse } from '@/lib/types';
 import { fmtDate, fmtSize } from '@/utils/format';
@@ -168,6 +169,9 @@ export function Raw({ onStat, onPlay }: Props) {
   const [dupRefresh, setDupRefresh] = useState(0);
   /** 待确认的删除清单（非 null 时弹确认框）。 */
   const [pendingDelete, setPendingDelete] = useState<RawFileRow[] | null>(null);
+  // 设为头像流：图片卡片 → 选择女优 → 归档移动 + 引用更新
+  const [avatarFile, setAvatarFile] = useState<RawFileRow | null>(null);
+  const [avatarMsg, setAvatarMsg] = useState('');
   /** 删除失败汇总（页面级横幅，查重面板与文件卡片共用）。 */
   const [delErr, setDelErr] = useState('');
   // 文件浏览
@@ -585,7 +589,13 @@ export function Raw({ onStat, onPlay }: Props) {
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-4">
             {items.map((it) => (
-              <RawCard key={it.id} it={it} onPlay={play} onDelete={(f) => setPendingDelete([f])} />
+              <RawCard
+                key={it.id}
+                it={it}
+                onPlay={play}
+                onDelete={(f) => setPendingDelete([f])}
+                onAvatar={(f) => setAvatarFile(f)}
+              />
             ))}
           </div>
         </div>
@@ -626,6 +636,21 @@ export function Raw({ onStat, onPlay }: Props) {
               </ul>
             </>
           }
+        />
+      ) : null}
+
+      {/* 设为头像：选择女优 → 归档移动到女优图集目录 */}
+      {avatarMsg ? <div className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-lg bg-ok-soft px-4 py-2 text-xs text-ok">{avatarMsg}</div> : null}
+      {avatarFile ? (
+        <AvatarPicker
+          file={avatarFile}
+          onClose={() => setAvatarFile(null)}
+          onDone={(msg) => {
+            setAvatarFile(null);
+            setAvatarMsg(msg);
+            setTimeout(() => setAvatarMsg(''), 3000);
+            setRefreshKey((k) => k + 1); // 文件已移出 RawFiles → 刷新列表
+          }}
         />
       ) : null}
     </section>

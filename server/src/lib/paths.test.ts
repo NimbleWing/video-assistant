@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normPath, stemOf, typeOfExt, volumeOf } from './paths.ts';
+import { dirName, normPath, stemOf, typeOfExt, volumeOf } from './paths.ts';
 
 describe('normPath', () => {
   it('反斜杠转正斜杠 + 去前导斜杠 + 小写', () => {
@@ -40,5 +40,21 @@ describe('typeOfExt', () => {
   it('未知返回 null', () => {
     expect(typeOfExt('txt')).toBeNull();
     expect(typeOfExt('')).toBeNull();
+  });
+});
+
+describe('dirName（女优目录树目录段清洗）', () => {
+  it('Windows 非法字符替换为空格并压缩', () => {
+    expect(dirName('a/b\\c:d*e?f"g<h>i|j')).toBe('a b c d e f g h i j');
+  });
+  it('尾部点/空格剥除（系统会静默剥）', () => {
+    expect(dirName('名字. ')).toBe('名字');
+  });
+  it('清洗后为空回退 unnamed', () => {
+    expect(dirName('???')).toBe('unnamed');
+    expect(dirName('')).toBe('unnamed');
+  });
+  it('正常名字原样保留', () => {
+    expect(dirName('樱空桃')).toBe('樱空桃');
   });
 });

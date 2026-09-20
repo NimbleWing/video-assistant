@@ -1,6 +1,7 @@
 // 国家字典 API 路由：/api/countries GET（全量）/ POST（新增）、
 // /api/countries/:id PUT（改名）/ POST /delete（删除——路由器不支持 DELETE 方法，沿用 raw 惯例）。
 import { asRecord, HttpError, json, readJson, type Route } from '../../lib/http.ts';
+import { countryInUse } from '../actress/actresses.ts';
 import { countryNameExists, deleteCountry, insertCountry, listCountries, renameCountry } from './countries.ts';
 
 const NAME_MAX = 60;
@@ -45,6 +46,7 @@ const renameRoute: Route['handler'] = async ({ req, res, params }) => {
 
 const deleteRoute: Route['handler'] = ({ res, params }) => {
   const id = parseId(params.id);
+  if (countryInUse(id)) throw new HttpError(409, '国家已被女优引用，请先解除关联'); // 删除保护（2026-09-21）
   if (!deleteCountry(id)) throw new HttpError(404, '国家不存在');
   json(res, 200, { ok: true });
 };

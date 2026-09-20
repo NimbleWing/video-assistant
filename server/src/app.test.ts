@@ -1,10 +1,32 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Server } from 'node:http';
 import http from 'node:http';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 import { createApp } from './app.ts';
-import { upsertRawScanned } from './features/raw/files.ts';
+import { db } from './lib/db.ts';
+import { normPath } from './lib/paths.ts';
+import { getRawByPath, upsertRawScanned } from './features/raw/files.ts';
 import { setExitHandlerForTest } from './features/system/routes.ts';
 import type { PingResponse } from './features/system/types.ts';
+
+/** 女优条目（本文件局部形状，断言用）。 */
+interface ActressItem {
+  id: number;
+  name: string;
+  country_id: number;
+  country_name: string;
+  rating: number | null;
+  disk: string;
+  avatar_file_id: number | null;
+  aliases: string[];
+  tags: { id: number; name: string; sort: number }[];
+  video_count: number;
+}
+
+/** 最小合法 png（1×1 透明，8 字节魔数足够过白名单；内容不解析）。 */
+const PNG_MAGIC = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
 
 let server: Server;
 let base = '';
@@ -266,9 +288,6 @@ describe('app 集成：片商字典 CRUD + logo 管理', () => {
   });
   const list = async (): Promise<StudioItem[]> =>
     (await ((await fetch(`${base}/api/studios`)).json() as Promise<{ items: StudioItem[] }>)).items;
-
-  // 最小合法 png（1×1 透明，8 字节魔数足够过白名单；内容不解析）
-  const PNG_MAGIC = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
   const b64 = (bytes: Uint8Array) => Buffer.from(bytes).toString('base64');
 
   it('CRUD 同款字典口径；列表不回 logo 字节', async () => {
@@ -378,6 +397,180 @@ describe('app 集成：片商字典 CRUD + logo 管理', () => {
     } finally {
       await new Promise<void>((r) => src.close(() => r()));
     }
+  });
+});
+
+describe('app 集成：女优（创建建目录 / CRUD / 头像归档流）', () => {
+  // 定向测试目录（D: 盘真实创建，测试后递归清理——只删本 describe 自己建的子树）
+  const TEST_COUNTRY = '冒烟测试国';
+  const TEST_ACTRESS = '冒烟测试女优';
+  const TEST_TREE = `d:/archives/${TEST_COUNTRY}/${TEST_ACTRESS}`;
+
+  async function cleanupTree() {
+    await fs.rm(TEST_TREE, { recursive: true, force: true }).catch(() => {});
+    await fs.rmdir(`d:/archives/${TEST_COUNTRY}`).catch(() => {}); // 国家层目录（空则删）
+  }
+
+  it('创建即建目录树（国家/女优/图集，幂等）；列表 join 国家/别名/标签；q 匹配主名与别名', async () => {
+    const country = await (await fetch(`${base}/api/countries`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: TEST_COUNTRY }),
+    })).json() as { item: { id: number } };
+    const tag = await (await fetch(`${base}/api/tags`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: '冒烟标签' }),
+    })).json() as { item: { id: number } };
+
+    const r = await fetch(`${base}/api/actresses`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: TEST_ACTRESS, countryId: country.item.id, rating: 87, disk: 'd:',
+        tagIds: [tag.item.id], aliases: ['别名甲', '别名乙'],
+      }),
+    });
+    expect(r.status).toBe(200);
+    const st = await fs.stat(`${TEST_TREE}/图集`);
+    expect(st.isDirectory()).toBe(true);
+
+    const items = (await ((await fetch(`${base}/api/actresses`)).json() as Promise<{ items: ActressItem[] }>)).items;
+    const me = items.find((i) => i.name === TEST_ACTRESS)!;
+    expect(me.country_name).toBe(TEST_COUNTRY);
+    expect(me.rating).toBe(87);
+    expect(me.aliases).toEqual(['别名甲', '别名乙']);
+    expect(me.tags.map((t) => t.name)).toEqual(['冒烟标签']);
+
+    // q 匹配主名与别名
+    const byAlias = (await ((await fetch(`${base}/api/actresses?q=${encodeURIComponent('别名乙')}`)).json() as Promise<{ items: ActressItem[] }>)).items;
+    expect(byAlias.some((i) => i.id === me.id)).toBe(true);
+
+    // 重名 409 / 缺国家 400 / 盘符非法 400 / 评分越界 400
+    expect((await fetch(`${base}/api/actresses`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: TEST_ACTRESS, countryId: country.item.id, disk: 'd:', tagIds: [], aliases: [] }),
+    })).status).toBe(409);
+    expect((await fetch(`${base}/api/actresses`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'x', countryId: 999999, disk: 'd:', tagIds: [], aliases: [] }),
+    })).status).toBe(400);
+    expect((await fetch(`${base}/api/actresses`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'y', countryId: country.item.id, disk: 'zz', tagIds: [], aliases: [] }),
+    })).status).toBe(400);
+    expect((await fetch(`${base}/api/actresses`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'z', countryId: country.item.id, disk: 'd:', rating: 101, tagIds: [], aliases: [] }),
+    })).status).toBe(400);
+
+    // 国家被引用禁删 409
+    expect((await fetch(`${base}/api/countries/${country.item.id}/delete`, { method: 'POST' })).status).toBe(409);
+
+    // 编辑全量替换（评分清空、别名/标签换血）
+    const tag2 = await (await fetch(`${base}/api/tags`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: '冒烟标签2' }),
+    })).json() as { item: { id: number } };
+    const upd = await (await fetch(`${base}/api/actresses/${me.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: TEST_ACTRESS, countryId: country.item.id, rating: null, tagIds: [tag2.item.id], aliases: ['新别名'] }),
+    })).json() as { item: ActressItem };
+    expect(upd.item.rating).toBeNull();
+    expect(upd.item.aliases).toEqual(['新别名']);
+    expect(upd.item.tags.map((t) => t.name)).toEqual(['冒烟标签2']);
+
+    // tags.actor_count 真实化
+    const tags = (await ((await fetch(`${base}/api/tags`)).json() as Promise<{ items: { name: string; actor_count: number }[] }>)).items;
+    expect(tags.find((t) => t.name === '冒烟标签2')?.actor_count).toBe(1);
+    expect(tags.find((t) => t.name === '冒烟标签')?.actor_count).toBe(0);
+
+    // 删除级联清关联；删除后国家可删；头像相关行留给下例
+    await fetch(`${base}/api/actresses/${me.id}/delete`, { method: 'POST' });
+    expect((await fetch(`${base}/api/countries/${country.item.id}/delete`, { method: 'POST' })).status).toBe(200);
+    await fetch(`${base}/api/tags/${tag.item.id}/delete`, { method: 'POST' }); // 级联清关系（无孤儿报错）
+    await fetch(`${base}/api/tags/${tag2.item.id}/delete`, { method: 'POST' });
+    await cleanupTree();
+  });
+
+  it('设为头像：图片 raw 行归档移动到 图集/head.ext（跨盘 copy+unlink），行跟随 + avatar 引用', async () => {
+    const country = await (await fetch(`${base}/api/countries`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: TEST_COUNTRY }),
+    })).json() as { item: { id: number } };
+    const actress = await (await fetch(`${base}/api/actresses`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: TEST_ACTRESS, countryId: country.item.id, disk: 'd:', tagIds: [], aliases: [] }),
+    })).json() as { item: ActressItem };
+
+    // 临时目录造一个图片 raw 行（跨盘：tmp 在 c: → 目标在 d:）
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'rou-avatar-'));
+    const src = path.join(dir, 'photo.png');
+    await fs.writeFile(src, Buffer.from(PNG_MAGIC));
+    upsertRawScanned({
+      path: normPath(src), hash: 'avatar-h1', name: 'photo', ext: 'png',
+      type: 'image', size: PNG_MAGIC.length, mtime: 1000, volume: 'c:', seen: 2000,
+    });
+    const rawRow = getRawByPath(normPath(src))!;
+
+    const r = await fetch(`${base}/api/actresses/${actress.item.id}/avatar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fileId: rawRow.id }),
+    });
+    expect(r.status).toBe(200);
+    const after = (await r.json()) as { item: ActressItem };
+    expect(after.item.avatar_file_id).toBe(rawRow.id);
+
+    // 文件已移动到图集/head.png；原文件不在
+    const moved = `${TEST_TREE}/图集/head.png`;
+    expect((await fs.readFile(moved)).equals(Buffer.from(PNG_MAGIC))).toBe(true);
+    await expect(fs.stat(src)).rejects.toThrow();
+
+    // raw 行跟随：path 更新、archived=1；归档登记最新名 head；事件含 move
+    const row = getRawByPath(normPath(moved))!;
+    expect(row.archived).toBe(true);
+    expect(row.volume).toBe('d:');
+    const arc = db.prepare('SELECT name FROM raw_archive WHERE file_id = ?').get(rawRow.id) as { name: string };
+    expect(arc.name).toBe('head');
+    const evs = db.prepare('SELECT kind FROM raw_events WHERE file_id = ?').all(rawRow.id) as { kind: string }[];
+    expect(evs.map((e) => e.kind)).toContain('move');
+    expect(evs.map((e) => e.kind)).toContain('rename'); // photo.png → head.png
+
+    // 非图片行 400；不存在的女优/文件 404
+    const vidDir = await fs.mkdtemp(path.join(os.tmpdir(), 'rou-avatar-v-'));
+    const vid = path.join(vidDir, 'clip.mp4');
+    await fs.writeFile(vid, 'x');
+    upsertRawScanned({ path: normPath(vid), hash: 'avatar-h2', name: 'clip', ext: 'mp4', type: 'video', size: 1, mtime: 1000, volume: 'c:', seen: 2000 });
+    const vidRow = getRawByPath(normPath(vid))!;
+    expect((await fetch(`${base}/api/actresses/${actress.item.id}/avatar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fileId: vidRow.id }),
+    })).status).toBe(400);
+    expect((await fetch(`${base}/api/actresses/999999/avatar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fileId: rawRow.id }),
+    })).status).toBe(404);
+
+    // 清理：raw 行、女优、国家、临时与目标目录
+    db.exec(`DELETE FROM raw_events WHERE file_id IN (${rawRow.id}, ${vidRow.id})`);
+    db.exec(`DELETE FROM raw_archive WHERE file_id = ${rawRow.id}`);
+    db.exec(`DELETE FROM raw_files WHERE id IN (${rawRow.id}, ${vidRow.id})`);
+    await fetch(`${base}/api/actresses/${actress.item.id}/delete`, { method: 'POST' });
+    await fetch(`${base}/api/countries/${country.item.id}/delete`, { method: 'POST' });
+    await fs.rm(vidDir, { recursive: true, force: true });
+    await fs.rm(dir, { recursive: true, force: true });
+    await cleanupTree();
   });
 });
 

@@ -18,6 +18,12 @@ export function listCountries(): CountryRow[] {
   return (db.prepare('SELECT id, name FROM countries ORDER BY id ASC').all() as SqlRow[]).map(toRow);
 }
 
+/** 按 id 取行（女优创建/头像流取国家名用）。 */
+export function getCountryById(id: number): CountryRow | null {
+  const r = db.prepare('SELECT id, name FROM countries WHERE id = ?').get(id) as SqlRow | undefined;
+  return r ? toRow(r) : null;
+}
+
 /** 新增：返回新行。name 已由路由层校验（trim 非空、≤60）。 */
 export function insertCountry(name: string): CountryRow {
   const r = db.prepare('INSERT INTO countries (name) VALUES (?)').run(name);

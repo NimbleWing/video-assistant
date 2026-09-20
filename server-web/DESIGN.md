@@ -4,7 +4,7 @@
 
 ## 定位
 
-本地媒体库服务（`127.0.0.1:17321`）的管理页前端，独立 npm 包。技术栈：React 19 + TypeScript（strict）+ Tailwind CSS v4 + Vite 7 + Vitest（happy-dom + Testing Library）。功能与旧版手写 `server/public/index.html` 完全对齐并持续演进：视频库/原始资料/归档资料/下载账本/国家/标签/片商/设置八标签 + Range 流播放弹窗。
+本地媒体库服务（`127.0.0.1:17321`）的管理页前端，独立 npm 包。技术栈：React 19 + TypeScript（strict）+ Tailwind CSS v4 + Vite 7 + Vitest（happy-dom + Testing Library）。功能与旧版手写 `server/public/index.html` 完全对齐并持续演进：视频库/原始资料/归档资料/下载账本/国家/标签/片商/女优/设置九标签 + Range 流播放弹窗。
 
 ## 结构
 
@@ -12,7 +12,7 @@
 
 | 文件 | 职责 |
 |------|------|
-| `src/App.tsx` | 组合 Layout 与八页面（视频库/原始资料/归档资料/下载账本/国家/标签/片商/设置）、头部统计、播放弹窗状态（视频 tab 卸载重挂即刷新，替代旧版 scan 后手动 loadVideos）；tab 配置（key/label/icon）定义于此 |
+| `src/App.tsx` | 组合 Layout 与九页面（视频库/原始资料/归档资料/下载账本/国家/标签/片商/女优/设置）、头部统计、播放弹窗状态（视频 tab 卸载重挂即刷新，替代旧版 scan 后手动 loadVideos）；tab 配置（key/label/icon）定义于此 |
 | `src/components/Layout/index.tsx` | 页面骨架抽象：顶栏（标题 + 补充信息 + 移动端汉堡）+ 左侧侧边栏导航（icon + 文字，可选）+ 内容区；泛型 `K extends string` 支撑标签 key 收窄 |
 | `src/components/Pager/index.tsx` | 共享分页条：上一页/下一页 + 页码（可选跳页输入框：回车/失焦提交、钳位 1..pages）+ 右侧可选「每页 N 条」选择器 |
 | `src/components/PlayerDialog/index.tsx` | 共享播放弹窗（自 Videos 泛化）：原生 `<dialog>` + `closedby="any"`，双源 `{direct, hls, preferDirect}`——默认 hls.js 主路径 + 降级链（见下）；`preferDirect` 时直连优先、`<video>` error 事件回退 hls；关闭/换源时停流清理，复制路径；由 App 持有状态全局挂载（tab 切换不卸载） |
@@ -22,7 +22,7 @@
 | `src/features/Videos/Videos.tsx` | **视频库页面**：搜索防抖 300ms、盘符/类型筛选（选中盘符消失自动回退全部）、分页可调每页条数（20/50/100）与跳页 |
 | `src/features/Videos/VideoCard.tsx` | 单卡（参考 tauri-react VideoProbeCard：封面/占位 + 时长/大小/盘符角标 + hover 播放遮罩与封面缩放 + 信息区；无封面用 art 渐变占位） |
 | `src/features/Raw/index.ts` | 桶导出：`Raw` |
-| `src/features/Raw/Raw.tsx` | **原始资料页面**（顶部扫描面板 + 下方卡片浏览）：磁盘卡片多选（`/api/raw/volumes`，容量条）+ 类型勾选（视频/图片，记忆自 meta）+ 开始扫描/进度条/取消（EventSource 订阅 `/api/raw/scan/events`：snapshot/progress/done）；待决策消失横幅（done 的 missingCount → 拉清单 + 批量删除/标记）；查重面板（工具栏「查重」按钮开合，`/api/raw/duplicates` 分组分页：组头类型徽标/份数/单份大小/冗余空间/hash 短码 + 文件行路径/盘符/日期、视频可播；**删除**：行级 🗑 与组级「删除多余副本」（保留组内第一个），`ConfirmDialog` 二次确认（列路径清单，超 10 条截断）后逐个 `POST /api/raw/file/:id/delete`，完成后刷新查重与文件列表；扫描 done 后随 refreshKey 自动刷新）；文件卡片分页浏览（搜索防抖 + 类型/盘符/missing 筛选；卡片删除入口 → 同一 ConfirmDialog/删除链路，失败汇总页面级横幅） |
+| `src/features/Raw/Raw.tsx` | **原始资料页面**（顶部扫描面板 + 下方卡片浏览）：磁盘卡片多选（`/api/raw/volumes`，容量条）+ 类型勾选（视频/图片，记忆自 meta）+ 开始扫描/进度条/取消（EventSource 订阅 `/api/raw/scan/events`：snapshot/progress/done）；待决策消失横幅（done 的 missingCount → 拉清单 + 批量删除/标记）；查重面板（工具栏「查重」按钮开合，`/api/raw/duplicates` 分组分页：组头类型徽标/份数/单份大小/冗余空间/hash 短码 + 文件行路径/盘符/日期、视频可播；**删除**：行级 🗑 与组级「删除多余副本」（保留组内第一个），`ConfirmDialog` 二次确认（列路径清单，超 10 条截断）后逐个 `POST /api/raw/file/:id/delete`，完成后刷新查重与文件列表；扫描 done 后随 refreshKey 自动刷新）；文件卡片分页浏览（搜索防抖 + 类型/盘符/missing 筛选；卡片删除入口 → 同一 ConfirmDialog/删除链路，失败汇总页面级横幅；**图片卡片「设为头像」入口**（`RawCard onAvatar`）→ `AvatarPicker` 选女优 → `POST /api/actresses/:id/avatar`，成功 toast + 刷新） |
 | `src/features/Archive/index.ts` | 桶导出：`Archive`、`EventsDialog` |
 | `src/features/Archive/Archive.tsx` | **归档资料页面**：archived=1 逻辑文件的卡片分页浏览（`/api/raw/archived`：搜索防抖 + 类型/盘符筛选 + 每页条数/跳页）；卡片「变更记录」入口弹出 `EventsDialog`（该文件全部事件，时间正序） |
 | `src/features/Archive/EventsDialog.tsx` | 单文件变更记录弹窗：当前名 + 最初名 + 事件时间线（kind 徽标 + result + 时间），`fetchRawEvents({ fileId })` |
@@ -34,6 +34,10 @@
 | `src/features/Tag/Tag.tsx` | **标签页面**（字典 CRUD + 拖拽排序）：卡片式管理——卡片含拖拽把手 `⠿`（mousedown 激活 draggable，防误触）、名字（**点击即进入改名编辑**）、`视频 N · 演员 N`（预留恒 0，关联表落地后真实计算）；改名/删除为 **hover 右上角浮现的小图标**（✎/🗑，TrashButton 同款弱化风格，平时零视觉占位，删除走 ConfirmDialog）；**网格（默认）/行视图**切换（`localStorage` 记忆，同侧边栏收合惯例；行视图保留表格操作列文字按钮）；HTML5 原生 DnD 双视图可用：把手拖动、插入位反馈（网格缘指示条/行高亮）、松手乐观重排 + 立即 `reorder`（失败 toast + 重拉回滚）；顶部添加行、行内改名 Enter/Esc |
 | `src/features/Studio/index.ts` | 桶导出：`Studio` |
 | `src/features/Studio/Studio.tsx` | **片商页面**（字典 CRUD + logo 管理，仅网格视图）：卡片 = logo 展示区（`/api/studios/:id/logo?v=` contain 适配固定高度；无 logo 渲染名字首字占位）+ 名字（点击改名）+ `视频 N · 演员 N`（预留恒 0，actor_count = 片商视频关联演员去重数）；hover 操作区 `🖼 logo / ✎ 改名 / 🗑 删除`（同标签页视觉语言）；LogoDialog（原生 `<dialog>`）：上传文件（FileReader→base64，带预览）/ 粘贴 URL（带预览）二选一提交、已有 logo 附「清除」；设置成功后 `?v=` 版本号 bust 缓存；顶部添加行、行内改名 Enter/Esc、ConfirmDialog 删除（注明 logo 一并删除） |
+| `src/features/Actress/index.ts` | 桶导出：`Actress` |
+| `src/features/Actress/Actress.tsx` | **女优页面**（演员体系核心，仅网格视图）：卡片 = 头像区（`avatar_file_id` → `/api/raw/file/:id/content`，无头像名字首字占位）+ 名字（点击开编辑弹窗）+ 国家小字 + 评分（`87` / 「未评分」）+ 标签 chips 前 2 + `+N`（title 全量）+ 别名灰字预览 + `视频 N`（预留恒 0）+ hover `✎ 编辑 / 🗑 删除`（ConfirmDialog）；顶部搜索（防抖 300ms，q 匹配主名+别名）+ 添加按钮 |
+| `src/features/Actress/ActressDialog.tsx` | 创建/编辑共用表单弹窗（原生 `<dialog>`）：名字、国家下拉（fetchCountries，空字典提示先建国家）、评分 slider（0-100 + 「未评分」清除）、标签多选 chips（按 sort 序）、磁盘单选（`/api/actresses/disks`）、别名动态列表（+ 添加 / ✕ 删除）；创建提交后服务端 mkdir `Archives/国家/女优/图集`；编辑时磁盘不可改 |
+| `src/features/Actress/AvatarPicker.tsx` | 设为头像弹窗（原生 `<dialog>`）：搜索 + 女优列表选择 → `POST /api/actresses/:id/avatar {fileId}`（原始资料页图片卡片发起） |
 | `src/features/Settings/index.ts` | 桶导出：`Settings` |
 | `src/features/Settings/Settings.tsx` | 设置页面：扫描目录保存、ffmpeg 路径配置与状态显示（POST /api/config）、立即扫描、日志尾部查看 |
 | `src/lib/api.ts` | 类型化 API 客户端（fetch 包装：`ok:false` / HTTP 错误统一抛 `Error`，带服务端 error 信息；raw 系列 + SSE 由组件直连 EventSource） |

@@ -67,24 +67,40 @@ describe('upsert / touch', () => {
 });
 
 describe('作用域消失判定', () => {
-  it('只判 (盘符,类型) 作用域内的过期行；missing=1 不重报；返回含历史待决策总数', () => {
-    // d: video（过期→待决策）/ d: image（不在作用域，不动）/ e: video（不在作用域，不动）
+  it('只判扫描根作用域内的过期行；missing=1 不重报；返回含历史待决策总数', () => {
+    // d:/rawfiles video（过期→待决策）/ d: image（不在作用域，不动）/ e: video（不在作用域，不动）
     upsertRawScanned(row({ seen: 100 }));
     upsertRawScanned(row({ path: 'd:/rawfiles/b.jpg', ext: 'jpg', type: 'image', volume: 'd:', seen: 100 }));
     upsertRawScanned(row({ path: 'e:/rawfiles/c.mp4', volume: 'e:', seen: 100 }));
-    const n = markPendingMissing([{ volume: 'd:', type: 'video' }], 500);
+    const n = markPendingMissing([{ volume: 'd:', root: 'd:/rawfiles', type: 'video' }], 500);
     const items = listPendingMissing();
     expect(items.map((i) => i.path)).toEqual(['d:/rawfiles/a.mp4']);
     expect(n).toBe(1);
 
     // 已决策 mark（missing=1）后，下次同作用域扫描不再上报
     resolveMissing('mark');
-    expect(markPendingMissing([{ volume: 'd:', type: 'video' }], 600)).toBe(0);
+    expect(markPendingMissing([{ volume: 'd:', root: 'd:/rawfiles', type: 'video' }], 600)).toBe(0);
 
     // 补 e: video 作用域 → e 行上报；d: image 行始终不动
-    expect(markPendingMissing([{ volume: 'e:', type: 'video' }], 700)).toBe(1);
+    expect(markPendingMissing([{ volume: 'e:', root: 'e:/rawfiles', type: 'video' }], 700)).toBe(1);
     const items2 = listPendingMissing();
     expect(items2.map((i) => i.path)).toEqual(['e:/rawfiles/c.mp4']);
+  });
+
+  it('根外豁免：路径不在扫描根内的行（头像移入 Archives 等）不判，archived 与否无关', () => {
+    // 独立 f: 盘，避免与前序用例遗留行相互干扰；根内存放对照行证明作用域生效
+    // 归档行在根外（女优头像典型位置）
+    upsertRawScanned(row({ path: 'f:/archives/日本/某女优/图集/head.png', ext: 'png', type: 'image', volume: 'f:', seen: 100 }));
+    db.exec("UPDATE raw_files SET archived = 1 WHERE path LIKE 'f:/archives/%'");
+    // 非归档行也在根外（用户手动移出）
+    upsertRawScanned(row({ path: 'f:/outside/x.png', ext: 'png', type: 'image', volume: 'f:', seen: 100 }));
+    // 根内对照行（应被判定）
+    upsertRawScanned(row({ path: 'f:/rawfiles/in.png', ext: 'png', type: 'image', volume: 'f:', seen: 100 }));
+    markPendingMissing([{ volume: 'f:', root: 'f:/rawfiles', type: 'image' }], 900);
+    const flagged = listPendingMissing().filter((i) => i.volume === 'f:');
+    expect(flagged.map((i) => i.path)).toEqual(['f:/rawfiles/in.png']); // 只判根内行
+    // 清理本用例行（定向盘符）
+    db.exec("DELETE FROM raw_files WHERE volume = 'f:'");
   });
 });
 

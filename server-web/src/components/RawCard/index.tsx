@@ -8,6 +8,8 @@ interface Props {
   onHistory?: (it: RawFileRow) => void;
   /** 提供删除入口（原始资料页用）：删磁盘文件 + 库记录；不传则不渲染。 */
   onDelete?: (it: RawFileRow) => void;
+  /** 提供「设为头像」入口（原始资料页图片卡片用）：归档移动到女优图集；不传或非图片不渲染。 */
+  onAvatar?: (it: RawFileRow) => void;
 }
 
 /** 浏览器可原生解码的视频格式（直连省转码；mkv 靠 Chromium 内置 matroska demuxer，失败回退 HLS）。 */
@@ -77,7 +79,7 @@ function VideoArt({ it, onPlay }: Props) {
 }
 
 /** 原始资料卡片（Raw/Archive 两页共享）：图片=真缩略图；视频=图标卡；archived 副行最初名；missing 灰化。 */
-export function RawCard({ it, onPlay, onHistory, onDelete }: Props) {
+export function RawCard({ it, onPlay, onHistory, onDelete, onAvatar }: Props) {
   const gone = it.missing || it.pending_missing;
   const currentName = currentNameOf(it.path);
   return (
@@ -119,6 +121,20 @@ export function RawCard({ it, onPlay, onHistory, onDelete }: Props) {
           <span>{fmtSize(it.size)}</span>
           <span className="font-mono uppercase">{it.volume}</span>
           <span className="ml-auto">{fmtDate(it.mtime)}</span>
+          {onAvatar && it.type === 'image' ? (
+            <button
+              type="button"
+              className="flex size-6 shrink-0 items-center justify-center rounded-md bg-raised text-dim transition-colors hover:bg-brand-soft hover:text-brand-hover disabled:cursor-default disabled:opacity-40"
+              aria-label={`设为头像 ${currentNameOf(it.path)}`}
+              title="设为女优头像"
+              onClick={() => onAvatar(it)}
+            >
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <circle cx="12" cy="8.2" r="3.4" />
+                <path d="M5.5 19.5c.9-3.3 3.5-5 6.5-5s5.6 1.7 6.5 5" />
+              </svg>
+            </button>
+          ) : null}
           {onDelete ? (
             <TrashButton
               label={`删除文件 ${it.path}`}

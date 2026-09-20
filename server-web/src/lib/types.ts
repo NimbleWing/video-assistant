@@ -49,3 +49,11 @@ export type { PingResponse, LogResponse } from '../../../server/src/features/sys
 export type { CountryRow, CountriesResponse, CountryMutationResponse } from '../../../server/src/features/country/types';
 export type { TagRow, TagsResponse, TagMutationResponse } from '../../../server/src/features/tag/types';
 export type { StudioRow, StudiosResponse, StudioMutationResponse } from '../../../server/src/features/studio/types';
+export type {
+  ActressRow,
+  ActressTag,
+  ActressesResponse,
+  ActressMutationResponse,
+  ActressDisksResponse,
+  ActressUpsertRequest,
+} from '../../../server/src/features/actress/types';

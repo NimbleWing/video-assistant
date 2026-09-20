@@ -9,6 +9,7 @@ import { ledgerRoutes } from './features/ledger/index.ts';
 import { countryRoutes } from './features/country/index.ts';
 import { tagRoutes } from './features/tag/index.ts';
 import { studioRoutes } from './features/studio/index.ts';
+import { actressRoutes } from './features/actress/index.ts';
 import { systemRoutes } from './features/system/index.ts';
 
 export const HOST = '127.0.0.1';
@@ -22,7 +23,7 @@ const ALLOWED_ORIGINS = [
   'http://127.0.0.1:5173',
 ];
 
-const ROUTES: Route[] = [...systemRoutes, ...mediaRoutes, ...rawRoutes, ...ledgerRoutes, ...countryRoutes, ...tagRoutes, ...studioRoutes];
+const ROUTES: Route[] = [...systemRoutes, ...mediaRoutes, ...rawRoutes, ...ledgerRoutes, ...countryRoutes, ...tagRoutes, ...studioRoutes, ...actressRoutes];
 
 /** 路径匹配：段精确相等；':x' 段为参数占位（如 /stream/:id）。未匹配返回 null。 */
 function matchPath(pattern: string, pathname: string): Record<string, string> | null {

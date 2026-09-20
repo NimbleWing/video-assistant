@@ -1,7 +1,7 @@
 // raw_files 表：原始资料库（各盘 RawFiles/ 盘点 + 抽样 hash）。DDL + 全部数据操作，仅此文件触碰本表。
 import { promises as fs } from 'node:fs';
 import { db, numOf, strOf, type SqlRow } from '../../lib/db.ts';
-import { normPath, stemOf } from '../../lib/paths.ts';
+import { normPath, stemOf, volumeOf } from '../../lib/paths.ts';
 import type { SQLInputValue } from 'node:sqlite';
 import type { ArchivedItem, RawDupGroup, RawEventItem, RawFileRow, RawType, RawVolumeStat } from './types.ts';
 
@@ -116,14 +116,19 @@ export function rawVideoMatches(rel: string): { path: string; size: number }[] {
 }
 
 /**
- * 作用域化消失判定：对本次实际扫过且遍历成功的 (盘符, 类型) 组合，
- * last_seen < token 且 missing=0 的行置 pending_missing=1。返回标记后全部待决策数（含历史未决策）。
+ * 作用域化消失判定：对本次实际扫过且遍历成功的每个 (扫描根, 类型) 组合，
+ * 行在扫描根内（路径前缀匹配）且 last_seen < token 且 missing=0 → 置 pending_missing=1。
+ * **根外豁免（2026-09-21）**：行路径不在任何扫描根内（如头像移入 Archives、手动移出
+ * RawFiles 的策展文件）不判——扫描对它们本就无从「看见」。范围内归档行照判
+ * （RawFiles 内移动/改名仍走配对或待决策原语义）。返回标记后全部待决策数（含历史未决策）。
  */
-export function markPendingMissing(scopes: { volume: string; type: RawType }[], token: number): number {
+export function markPendingMissing(scopes: { volume: string; root: string; type: RawType }[], token: number): number {
   const stmt = db.prepare(
-    'UPDATE raw_files SET pending_missing = 1 WHERE volume = ? AND type = ? AND last_seen < ? AND missing = 0',
+    `UPDATE raw_files SET pending_missing = 1
+     WHERE volume = ? AND type = ? AND last_seen < ? AND missing = 0
+       AND substr(path, 1, ?) = ?`,
   );
-  for (const s of scopes) stmt.run(s.volume, s.type, token);
+  for (const s of scopes) stmt.run(s.volume, s.type, token, s.root.length, s.root);
   return numOf((db.prepare('SELECT COUNT(*) AS n FROM raw_files WHERE pending_missing = 1').get() as SqlRow).n);
 }
 
@@ -283,6 +288,67 @@ export async function deleteRawPhysical(id: number): Promise<{ fileDeleted: bool
   }
   db.prepare('DELETE FROM raw_files WHERE id = ?').run(id);
   return { fileDeleted };
+}
+
+/**
+ * 手动归档到指定路径（女优头像流）：物理移动（同盘 rename，跨盘 copy+unlink）
+ * → 行跟随新路径并置 archived=1（真·归档语义，归档页持续可见）
+ * → raw_archive upsert 最新名 → raw_events 按需记 rename/move（对齐 mergeMove 事件格式）。
+ * DB 失败时尝试把文件移回原位。返回更新后的行。
+ */
+export async function archiveRawFileTo(id: number, newPath: string): Promise<RawFileRow | null> {
+  const row = getRawFile(id);
+  if (!row) return null;
+  const target = normPath(newPath);
+  const oldBase = row.path.slice(row.path.lastIndexOf('/') + 1);
+  const newBase = target.slice(target.lastIndexOf('/') + 1);
+  const oldDir = row.path.slice(0, row.path.lastIndexOf('/'));
+  const newDir = target.slice(0, target.lastIndexOf('/'));
+  const now = Date.now();
+
+  await fs.mkdir(newDir, { recursive: true });
+  const moved = async (from: string, to: string) => {
+    try {
+      await fs.rename(from, to);
+    } catch {
+      await fs.copyFile(from, to);
+      await fs.unlink(from);
+    }
+  };
+  await moved(row.path, target);
+  try {
+    const st = await fs.stat(target);
+    db.exec('BEGIN');
+    try {
+      db.prepare(
+        `UPDATE raw_files SET path = ?, volume = ?, size = ?, mtime = ?, archived = 1,
+         missing = 0, pending_missing = 0, last_seen = ? WHERE id = ?`,
+      ).run(target, volumeOf(target), st.size, Math.round(st.mtimeMs), now, id);
+      // raw_archive.name = 最新名去扩展名（对齐扫描器约定：name 列存去 ext 的 basename）
+      const newName = newBase.replace(/\.[a-z0-9]+$/i, '') || newBase;
+      db.prepare(
+        `INSERT INTO raw_archive (file_id, name, created_at, updated_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(file_id) DO UPDATE SET name = excluded.name, updated_at = excluded.updated_at`,
+      ).run(id, newName, now, now);
+      if (oldBase !== newBase) {
+        db.prepare('INSERT INTO raw_events (file_id, kind, result, created_at) VALUES (?, ?, ?, ?)')
+          .run(id, 'rename', `名称从「${oldBase}」改为「${newBase}」`, now);
+      }
+      if (oldDir !== newDir) {
+        db.prepare('INSERT INTO raw_events (file_id, kind, result, created_at) VALUES (?, ?, ?, ?)')
+          .run(id, 'move', `从「${row.path}」移动到「${target}」`, now);
+      }
+      db.exec('COMMIT');
+    } catch (e) {
+      db.exec('ROLLBACK');
+      throw e;
+    }
+  } catch (e) {
+    // DB 失败：文件已在新位置，尽力移回原位保持一致
+    await moved(target, row.path).catch(() => {});
+    throw e;
+  }
+  return getRawFile(id);
 }
 
 // ---------------------------------------------------------------------------

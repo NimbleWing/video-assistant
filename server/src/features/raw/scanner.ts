@@ -168,7 +168,7 @@ async function executeScan(scopes: ScanScope[], st: ScanState): Promise<RawScanR
   const t0 = Date.now();
   const token = nextToken();
   const warnings: string[] = [];
-  const completed: { volume: string; type: RawType }[] = [];
+  const completed: { volume: string; root: string; type: RawType }[] = [];
   let newCount = 0;
   let updatedCount = 0;
   const newPaths: string[] = [];
@@ -188,7 +188,8 @@ async function executeScan(scopes: ScanScope[], st: ScanState): Promise<RawScanR
       const r = await walkRoot(sc.root, sc.volume, st, token, newPaths);
       newCount += r.newCount;
       updatedCount += r.updatedCount;
-      for (const t of st.types) completed.push({ volume: sc.volume, type: t });
+      const rootNorm = normPath(sc.root); // 判定作用域按归一化路径前缀
+      for (const t of st.types) completed.push({ volume: sc.volume, root: rootNorm, type: t });
     } catch (e) {
       warnings.push(`${sc.volume}: ${e instanceof Error ? e.message : String(e)}`);
     }

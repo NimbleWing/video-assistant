@@ -84,6 +84,8 @@ server/src/
     │   ├── index.ts / tags.ts / routes.ts / types.ts
     ├── studio/          # 片商字典（studios 表，logo BLOB 入库）
     │   ├── index.ts / studios.ts / routes.ts / types.ts
+    ├── actress/         # 女优（actresses + actress_aliases + actress_tags 三表；头像=归档 raw 文件）
+    │   ├── index.ts / actresses.ts / routes.ts / types.ts
     └── system/          # 服务级
         └── index.ts / routes.ts   # /api/ping（聚合 media+ledger 统计）、/api/log
 ```
@@ -92,6 +94,7 @@ server/src/
 
 - **feature 自治**：表 DDL 跟着 feature 走（单库多表），数据操作不跨 feature；`features/system` 的 ping 是唯一允许的跨 feature 聚合点。
 - **feature 之间禁止互相 import**；新增功能模块 = 新增 `features/xxx/` 目录 + `app.ts` 注册一行。
+  - **放宽注记（2026-09-21）**：关联表归从属 feature，引用方经导出**纯函数**协作（先例：exists 组合 import ledger/raw；tag 删除级联清 actress_tags、country 禁删查 actress 引用、tags.actor_count 读 actress_tags 计数）。禁止跨 feature 直接写对方表。
 - **lib/ 只放无业务语义的基础设施**，不放任何表操作。
 - **类型单一来源**：API DTO 定义在 server 各 feature 的 `types.ts`，`server-web/src/lib/types.ts` 相对路径 re-export，字段漂移由编译器抓住。
 - 测试按 feature 就近放置；vitest `setupFiles` 统一设 `ROU_MEDIA_DB=:memory:`（每测试文件隔离实例）。
@@ -195,9 +198,9 @@ CREATE TABLE countries (
   id   INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL UNIQUE           -- trim 后非空、≤60 字符，重复返回 409
 );
--- 终局语义（actor 页落地时实施）：actors 表带 country_id 引用本表；视频关联演员后
--- 国家由演员推导；无演员视频人工指定国家。被演员引用的国家删除策略（禁删/置空）
--- 届时定；当前无引用方，删除自由。列表 ORDER BY id 正序（添加顺序），不分页。
+-- 终局语义（2026-09-21 女优落地）：actresses.country_id 引用本表；无演员视频人工指定国家。
+-- 删除保护（2026-09-21 落地）：被女优引用的国家禁删（409，提示先解除关联）。
+-- 列表 ORDER BY id 正序（添加顺序），不分页。
 
 -- 8. tags：标签字典（sort 拖拽排序；2026-09-21 首期仅 CRUD + 重排）
 CREATE TABLE tags (
@@ -206,10 +209,10 @@ CREATE TABLE tags (
   sort INTEGER NOT NULL               -- 紧凑连续 1..n：reorder 按新顺序全量重编号（事务）
 );
 -- 列表 ORDER BY sort ASC, id ASC；新增 sort = max+1 追加末尾。
--- GET 响应含 video_count / actor_count（本次恒 0 预留：关联表落地后由 actor_tags/
--- video_tags JOIN 计算）。
+-- GET 响应含 video_count / actor_count：actor_count = 挂此标签的女优数（2026-09-21 起真实计算，
+-- COUNT actress_tags）；video_count 仍预留恒 0（video_tags 落地后 JOIN）。
 -- 终局语义：演员可挂标签，视频可直挂标签；视频最终标签 = 直挂 ∪ 演员标签。
--- 被引用后的删除保护随关联表落地时定；当前无引用方，删除自由。
+-- 删除保护（2026-09-21 落地）：标签删除级联清 actress_tags 行，女优保留。
 
 -- 9. studios：片商字典（logo BLOB 入库；2026-09-21 首期仅 CRUD + logo 管理）
 CREATE TABLE studios (
@@ -223,6 +226,38 @@ CREATE TABLE studios (
 -- 在个人项目里纯属自找边界。列表接口不回 BLOB（条目含 has_logo），logo 经专用端点取。
 -- 终局语义：视频直接挂片商（studio_id）；被引用后的删除保护随关联落地时定，当前自由删。
 -- GET 条目含 video_count / actor_count（预留恒 0；actor_count = 片商视频关联演员的去重数）。
+
+-- 10. actresses：女优（演员体系核心；2026-09-21 落地）
+CREATE TABLE actresses (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  name           TEXT NOT NULL UNIQUE,   -- 主名（trim 非空 ≤60，409；真同名加后缀区分）
+  country_id     INTEGER NOT NULL,       -- → countries.id（必选：目录结构依赖国家）
+  rating         INTEGER,                -- 0-100 百分制，NULL=未评分
+  disk           TEXT NOT NULL,          -- 创建时选定的盘符（'d:'；创建时建目录，此后不可改）
+  avatar_file_id INTEGER                 -- → raw_files.id（头像=归档的 raw 图片；悬空容忍，前端占位）
+);
+CREATE INDEX idx_actress_country ON actresses (country_id);
+
+-- 11. actress_aliases：女优别名（无唯一性——同名艺名跨女优复用是事实；
+-- 将来视频侧名字匹配遇重复别名需消解策略，落地时定）
+CREATE TABLE actress_aliases (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  actress_id INTEGER NOT NULL,
+  name       TEXT NOT NULL
+);
+CREATE INDEX idx_alias_actress ON actress_aliases (actress_id);
+CREATE INDEX idx_alias_name    ON actress_aliases (name);
+
+-- 12. actress_tags：女优-标签多对多（标签删除时级联清本表行，女优保留）
+CREATE TABLE actress_tags (
+  actress_id INTEGER NOT NULL,
+  tag_id     INTEGER NOT NULL,
+  PRIMARY KEY (actress_id, tag_id)
+);
+-- 创建女优时 mkdir recursive：{disk}/Archives/{dirName(国家)}/{dirName(女优)}/图集（幂等；
+-- 目录段经 lib/paths dirName() 清洗 Windows 非法字符）。改名/换国家不联动磁盘目录（目录名=创建时快照）。
+-- 头像：仅「原始资料页标记」通道——图片卡片设为头像 → 物理移动+改名 head.{ext} 到图集目录 →
+-- raw 行跟随（archived=1，真·归档语义，归档页持续可见）；旧 head.* 保留不删。
 ```
 
 已定决策记录：
@@ -300,6 +335,12 @@ raw 已定决策记录：
 | `POST /api/studios/:id/logo` | 页面 | 设置/替换 logo：JSON `{b64}`（前端文件转 base64）或 `{url}`（服务端抓取，5s 超时，仅 http/https）；解码后魔数白名单 jpg/png/webp + ≤512KB，违规 400 报因 |
 | `GET /api/studios/:id/logo` | 页面 | logo 字节直出（Content-Type = logo_type，Cache-Control max-age=300；无 logo 404） |
 | `POST /api/studios/:id/logo/delete` | 页面 | 清除 logo（置 NULL；404 片商不存在） |
+| `GET /api/actresses?q=` | 页面 | 女优全量列表（id 正序）：条目 join 出 country_name、aliases[]、tags[]（id/name/sort）、video_count（预留恒 0）、avatar_file_id；q 匹配主名与别名 |
+| `GET /api/actresses/disks` | 页面 | 可用盘符：探测 A:–Z: 根目录存在者（创建表单磁盘单选） |
+| `POST /api/actresses` | 页面 | 创建 `{name, countryId, rating?, tagIds, aliases, disk}`：name 同字典校验 409；countryId 必须存在；rating 0-100 或 null；disk `^[a-z]:$`；**mkdir recursive `{disk}/Archives/{国家}/{女优}/图集`**（幂等，目录段 dirName() 清洗） |
+| `PUT /api/actresses/:id` | 页面 | 全量编辑（name/countryId/rating/tagIds/aliases，事务全量替换；disk 不可改；404）；**不联动磁盘目录** |
+| `POST /api/actresses/:id/delete` | 页面 | 删除 + 级联清 aliases/actress_tags（404）；头像文件保留（归档页可见） |
+| `POST /api/actresses/:id/avatar` | 页面 | 设为头像 `{fileId}`：raw 行必须 type='image'；物理移动（同盘 rename / 跨盘 copy+unlink）+ 改名 `head.{ext}` 至 `{disk}/Archives/{国家}/{女优}/图集/`；raw 行跟随新路径 archived=1 + raw_archive 登记 + raw_events 记 rename/move（真·归档）；更新 avatar_file_id；旧 head.* 保留 |
 | `POST /api/shutdown` | 扩展面板 | 优雅退出：响应 200 后延迟 200ms `process.exit(0)`（等响应刷盘）；面板「重启」按钮的下半程——先 shutdown 确认离线，再经 native messaging 拉起，避免双实例撞端口 |
 | `GET /api/raw/volumes` | 页面 | 原始资料盘符列表：探测 `A:`–`Z:` 根下 `RawFiles/` 目录，**只返回存在的盘**，附 statfs 总容量/剩余空间；网络盘等无盘符形态不支持 |
 | `POST /api/raw/scan` | 页面 | 启动原始资料扫描 `{volumes:['d:'], types:['video','image']}`：202 即返（异步任务）；已有任务 409；请求时二次校验 RawFiles 存在性（拔盘跳过记 warning） |
@@ -330,7 +371,7 @@ raw 已定决策记录：
 - **范围**：所选盘符根下的 `RawFiles/` 目录递归遍历（用户自管目录，无系统目录排除清单）；跳过符号链接/junction（防循环）；无权限子目录静默跳过。
 - **任务模型**：全局单任务（POST 时已有任务 → 409）；202 即返，进度经 SSE 推送（见 §5）；协作式取消——取消收尾不做消失判定；与 media 扫描不互斥（扫描树不相交）。
 - **单文件流程**：stat → 按扩展名分派类型（未勾选的类型直接跳过）→ 查库中行：`path+size+mtime` 三键未变 → 只刷 `last_seen`（missing/pending_missing 归 0）；否则读头 64KB（`.ts` 在同一缓冲区做魔数嗅探，不过则整文件跳过）→ 读中/尾 64KB → 抽样 SHA-256 → upsert（hash/size/mtime/last_seen 更新，missing/pending_missing 归 0）。
-- **消失判定（作用域化）**：扫描正常完成后，对本次**实际扫过且遍历成功**的每个 (盘符, 类型) 组合：`last_seen < 本次 token 且 missing=0` 的行置 `pending_missing=1`。已标 missing=1 的不重报；未扫的类型/盘符的行不受影响（勾选类型变化不产生假消失）。
+- **消失判定（作用域化）**：扫描正常完成后，对本次**实际扫过且遍历成功**的每个 (扫描根, 类型) 组合：行路径在扫描根内（前缀匹配）且 `last_seen < 本次 token 且 missing=0` 的行置 `pending_missing=1`。已标 missing=1 的不重报；未扫的类型/盘符的行不受影响（勾选类型变化不产生假消失）。**根外豁免（2026-09-21）**：路径不在扫描根内的行（头像移入 Archives、手动移出 RawFiles 的策展文件）不判——扫描对它们本就无从「看见」；范围内归档行照判（配对/待决策维持原语义）。
 - **移动/改名自动判定（配对合并）**：消失判定**之前**执行——本次会话累计的消失行 × 新建行按 hash 分组配对，hash 满足「恰好 1 消失 + 1 新建，且全库无第三条 missing=0 同 hash 行」时：旧行保留 id/name/first_seen，UPDATE path/volume/last_seen 并置 `archived=1`，删除本次误建的新行；`raw_archive` upsert（无行则建，改名更新 name，updated_at=token）；`raw_events` 按路径差异记 `rename`（同目录不同名）/`move`（不同目录），两者同发记两条。配对行 last_seen 已=token，自然不进 pending。取消收尾不配对（与不判消失同理）。
 - **待决策**：`GET /api/raw/missing` 拉清单，`POST /api/raw/missing/resolve` 批量 delete（删行）或 mark（missing=1）；不决策下次扫描继续上报。
 - **服务启动不自动扫**；页面记住上次勾选（meta.raw_last_selection）。
