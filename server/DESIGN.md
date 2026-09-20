@@ -218,7 +218,8 @@ raw 已定决策记录：
 
 ### 匹配与维护语义
 
-- **判定匹配（账本优先 → files）**：`/api/exists` 携带完整相对路径 `rel`（`剧名/xx.mp4`）与可选 `vid`（video_id）。**第一层查 downloads 账本**：`status ∈ complete/skipped`（均为「已在本地」证据；failed/canceled/downloading 不算），`vid` 精确命中优先，回退 `LOWER(filename)=rel` 相等；命中即 `exists=true`，matches 首位带账本 filename（相对路径）。**第二层查 files**：路径后缀（`/{rel}`）优先，stem 相等回退。匹配结果返回完整 path 列表，面板 toast 展示「已存在：D:\xxx.mp4」，误报（同名不同视频）一眼可辨。
+- **判定边界（2026-09-20 定）**：是否下载 = **该视频文件是否在本地物理存在**，与「是否从本站下载」无关——为扩展未来支持多站点下载做准备（各站点同视频名字大同小异，stem 归一化匹配覆盖同名；跨站不同名不做模糊匹配，误报代价高于漏报）。
+- **判定匹配（账本优先 → files → raw_files）**：`/api/exists` 携带完整相对路径 `rel`（`剧名/xx.mp4`）与可选 `vid`（video_id）。**第一层查 downloads 账本**：`status ∈ complete/skipped`（均为「已在本地」证据；failed/canceled/downloading 不算），`vid` 精确命中优先（site 限定 rou.video——video_id 各站命名空间独立），回退 `LOWER(filename)=rel` 相等（**不限 site**，对齐判定边界）；命中即 `exists=true`，matches 首位带账本 filename（相对路径）。**第二层查 files**：路径后缀（`/{rel}`）优先，stem 相等回退。**第三层查 raw_files**：`type='video'` 且现存（`missing=0 AND pending_missing=0`，与查重口径一致），stem 与最初名（`name`）或最新名（`raw_archive.name`，改名场景）相等。匹配结果返回完整 path 列表，面板 toast 展示「已存在：D:\xxx.mp4」，误报（同名不同视频）一眼可辨。
 - **封面关联（管理页卡片）**：`/api/videos` 对视频条目补 `cover_id`——优先 `type='cover' AND stem = 视频stem`（单片），回退 `stem = 视频所在目录名`（剧集封面 stem=剧名）；同页 stem 集合一次 `IN` 查询，未命中为 null（前端渲染占位图）。
 - **files upsert（扫描）**：按 path 唯一。文件在 → 更新 `size/mtime/last_seen`，**不触碰 `video_id/source`**（保护登记数据）；文件消失 → 删行（判定自然回到未下载，正是期望行为）。全量重扫幂等。
 - **downloads upsert（登记）**：按 `(site, video_id)`。开始 → `downloading`（attempts+1）；终态 → `complete/failed/canceled/skipped`。
@@ -231,7 +232,7 @@ raw 已定决策记录：
 |------|------|------|
 | `GET /api/ping` | 扩展面板 | 心跳：`{ok, uptime, videos, covers, downloads:{status:count}, ffmpeg:{available, path}}`；面板打开期间 30s 轮询——在线（绿）点击 = 新标签页打开管理页，离线（红）点击 = native messaging 启动服务 |
 | `GET /api/log` | 管理页 | 服务日志尾部 200 行（native 启动时重定向到 server/server.log） |
-| `GET /api/exists?rel=剧名/xx.mp4&vid=<videoId>` | 扩展 | 账本优先（`status∈complete/skipped`，vid 精确 → filename 相等回退，命中 matches 首位带账本 filename）→ files 回退（路径后缀优先、stem 回退）；返回 `{exists, matches:[{path,type,size}]}`；仅 `type='video'` 计为已下载 |
+| `GET /api/exists?rel=剧名/xx.mp4&vid=<videoId>` | 扩展 | 账本优先（`status∈complete/skipped`，vid 精确 → filename 相等回退不限 site，命中 matches 首位带账本 filename）→ files 回退（路径后缀优先、stem 回退）→ raw_files 回退（现存视频行，stem 匹配最初名/最新名）；返回 `{exists, matches:[{path,type,size}]}`；仅 `type='video'` 计为已下载 |
 | `POST /api/downloads` | 扩展 | 账本 upsert（一行一视频）：开始（downloading）/最终失败（failed+error）/取消/跳过/完成（complete，带 size/duration） |
 | `POST /api/files` | 扩展 | 落盘成功后登记物理文件（`{absPath, size}`，封面与视频统一经此入库，`source='recorded'`）；与账本分离、无竞态 |
 | `POST /api/scan` | 页面/手动 | 触发扫描（幂等） |

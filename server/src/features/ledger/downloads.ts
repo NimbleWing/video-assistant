@@ -116,6 +116,8 @@ const OWNED_STATUSES = "status IN ('complete','skipped')";
 
 /**
  * 账本已下载命中（/api/exists 第一层）：video_id 精确优先，filename 相等回退。
+ * vid 分支限定 site（video_id 各站命名空间独立）；filename 回退不限 site——
+ * 判定边界是「本地是否已有此视频」，与来源站点无关（多站点同名视频）。
  * 账本是一行一视频的小表，LOWER(filename) 全扫无压力，不另建索引。
  * @param vid video_id（可空串 = 仅按 filename 匹配）
  * @param rel 完整相对路径（与扩展侧 downloadFilename 同源，大小写不敏感）
@@ -130,7 +132,7 @@ export function findDownloadedHit(vid: string, rel: string): DownloadRow | null 
   const normalized = normPath(rel);
   if (!normalized) return null;
   const byName = db.prepare(
-    `SELECT * FROM downloads WHERE site = 'rou.video' AND ${OWNED_STATUSES} AND LOWER(filename) = ?`,
+    `SELECT * FROM downloads WHERE ${OWNED_STATUSES} AND LOWER(filename) = ?`,
   ).get(normalized) as SqlRow | undefined;
   return byName ? toDownloadRow(byName) : null;
 }

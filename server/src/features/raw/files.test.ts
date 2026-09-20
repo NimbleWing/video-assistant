@@ -14,6 +14,7 @@ import {
   listRawFiles,
   markPendingMissing,
   rawTypeOfExt,
+  rawVideoMatches,
   rawVolumeStats,
   resolveMissing,
   touchRawSeen,
@@ -190,5 +191,35 @@ describe('deleteRawPhysical', () => {
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('rawVideoMatches（判定链 raw 层）', () => {
+  it('stem 归一化命中最初名；改名后最新名也命中；大小写不敏感', () => {
+    upsertRawScanned(row({ path: 'd:/rawfiles/剧名/第1集.mp4', name: '第1集', hash: 'ex-r1', seen: 1200 }));
+    upsertRawScanned(row({ path: 'e:/rawfiles/renamed.mp4', name: 'Renamed', hash: 'ex-r2', seen: 1200 }));
+    const hit = rawVideoMatches('剧名/第1集.MP4');
+    expect(hit).toEqual([{ path: 'd:/rawfiles/剧名/第1集.mp4', size: 100 }]);
+    // 最初名匹配（name 保留原始大小写，比较归一化）
+    expect(rawVideoMatches('x/Renamed.mp4')).toHaveLength(1);
+    // 给改名行登记最新名后仍可命中（mergeMove 之外直接登记 raw_archive 的场景）
+    const id = getRawByPath('e:/rawfiles/renamed.mp4')?.id as number;
+    db.prepare('INSERT INTO raw_archive (file_id, name, created_at, updated_at) VALUES (?, ?, ?, ?)').run(id, '全新名', 1200, 1200);
+    expect(rawVideoMatches('y/全新名.mp4')).toHaveLength(1);
+    expect(rawVideoMatches('y/Renamed.mp4')).toHaveLength(1); // 最初名不因改名失效
+  });
+
+  it('missing/pending_missing/image 不参与判定', () => {
+    upsertRawScanned(row({ path: 'd:/rawfiles/gone1.mp4', name: 'gone1', hash: 'ex-r3', seen: 1200 }));
+    db.exec("UPDATE raw_files SET missing = 1 WHERE path = 'd:/rawfiles/gone1.mp4'");
+    upsertRawScanned(row({ path: 'd:/rawfiles/gone2.mp4', name: 'gone2', hash: 'ex-r4', seen: 1200 }));
+    db.exec("UPDATE raw_files SET pending_missing = 1 WHERE path = 'd:/rawfiles/gone2.mp4'");
+    upsertRawScanned(row({ path: 'd:/rawfiles/pic.jpg', name: 'pic', ext: 'jpg', type: 'image', hash: 'ex-r5', seen: 1200 }));
+    expect(rawVideoMatches('a/gone1.mp4')).toEqual([]);
+    expect(rawVideoMatches('a/gone2.mp4')).toEqual([]);
+    expect(rawVideoMatches('a/pic.jpg')).toEqual([]);
+    // 清理本 describe 造的行（定向路径前缀；连带清 raw_archive 防悬空）
+    db.exec("DELETE FROM raw_archive WHERE file_id IN (SELECT id FROM raw_files WHERE path LIKE '%/rawfiles/第1集%' OR path LIKE '%/rawfiles/renamed%' OR path LIKE '%/rawfiles/gone%' OR path LIKE '%/rawfiles/pic%')");
+    db.exec("DELETE FROM raw_files WHERE path LIKE '%/rawfiles/第1集%' OR path LIKE '%/rawfiles/renamed%' OR path LIKE '%/rawfiles/gone%' OR path LIKE '%/rawfiles/pic%'");
   });
 });

@@ -1,6 +1,7 @@
 // raw_files 表：原始资料库（各盘 RawFiles/ 盘点 + 抽样 hash）。DDL + 全部数据操作，仅此文件触碰本表。
 import { promises as fs } from 'node:fs';
 import { db, numOf, strOf, type SqlRow } from '../../lib/db.ts';
+import { normPath, stemOf } from '../../lib/paths.ts';
 import type { SQLInputValue } from 'node:sqlite';
 import type { ArchivedItem, RawDupGroup, RawEventItem, RawFileRow, RawType, RawVolumeStat } from './types.ts';
 
@@ -92,6 +93,26 @@ export function upsertRawScanned(r: RawScannedRow): void {
       hash = excluded.hash, size = excluded.size, mtime = excluded.mtime,
       last_seen = excluded.last_seen, missing = 0, pending_missing = 0
   `).run(r.path, r.hash, r.name, r.ext, r.type, r.size, r.mtime, r.volume, r.seen, r.seen);
+}
+
+/**
+ * 判定链 raw 层（/api/exists 第三层）：stem 相等的现存视频行。
+ * 匹配最初名（name，改名不更新）或最新名（raw_archive.name）——两者指向盘上同一物理文件；
+ * missing/pending_missing 行排除（文件可能已不在盘上，与查重「仅现存行」口径一致）。
+ * 判定边界 = 本地物理存在，与来源站点无关（多站点同名视频靠 stem 归一化覆盖）。
+ * @param rel 完整相对路径（取 basename 的 stem，归一化小写）
+ */
+export function rawVideoMatches(rel: string): { path: string; size: number }[] {
+  const normalized = normPath(rel);
+  const stem = stemOf(normalized.split('/').pop() ?? normalized);
+  if (!stem) return [];
+  const rows = db.prepare(`
+    SELECT f.path, f.size FROM raw_files f
+    LEFT JOIN raw_archive a ON a.file_id = f.id
+    WHERE f.type = 'video' AND f.missing = 0 AND f.pending_missing = 0
+      AND (LOWER(f.name) = ? OR LOWER(a.name) = ?)
+  `).all(stem, stem) as SqlRow[];
+  return rows.map((row) => ({ path: strOf(row.path), size: numOf(row.size) }));
 }
 
 /**

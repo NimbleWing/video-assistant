@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Server } from 'node:http';
 import { createApp } from './app.ts';
+import { upsertRawScanned } from './features/raw/files.ts';
 import type { PingResponse } from './features/system/types.ts';
 
 let server: Server;
@@ -32,6 +33,17 @@ describe('app 集成', () => {
     const r = await fetch(`${base}/api/exists?rel=${encodeURIComponent('剧名/xx.mp4')}`);
     const j = (await r.json()) as { ok: boolean; exists: boolean };
     expect(j.exists).toBe(false);
+  });
+
+  it('GET /api/exists raw_files 层命中（本地物理存在即已下载，与来源无关）', async () => {
+    upsertRawScanned({
+      path: 'd:/rawfiles/剧名/第9集.mp4', hash: 'ex-raw-h1', name: '第9集', ext: 'mp4',
+      type: 'video', size: 4567, mtime: 1000, volume: 'd:', seen: 1300,
+    });
+    const r = await fetch(`${base}/api/exists?rel=${encodeURIComponent('剧名/第9集.mp4')}`);
+    const j = (await r.json()) as { exists: boolean; matches: { path: string; type: string; size: number }[] };
+    expect(j.exists).toBe(true);
+    expect(j.matches).toContainEqual({ path: 'd:/rawfiles/剧名/第9集.mp4', type: 'video', size: 4567 });
   });
 
   it('GET /api/exists 账本优先判定：complete/skipped 命中、failed 不算、vid 精确与 filename 回退', async () => {
