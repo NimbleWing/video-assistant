@@ -82,6 +82,8 @@ server/src/
     │   ├── index.ts / countries.ts / routes.ts / types.ts
     ├── tag/             # 标签字典（tags 表，sort 全量重编号拖拽排序）
     │   ├── index.ts / tags.ts / routes.ts / types.ts
+    ├── studio/          # 片商字典（studios 表，logo BLOB 入库）
+    │   ├── index.ts / studios.ts / routes.ts / types.ts
     └── system/          # 服务级
         └── index.ts / routes.ts   # /api/ping（聚合 media+ledger 统计）、/api/log
 ```
@@ -208,6 +210,19 @@ CREATE TABLE tags (
 -- video_tags JOIN 计算）。
 -- 终局语义：演员可挂标签，视频可直挂标签；视频最终标签 = 直挂 ∪ 演员标签。
 -- 被引用后的删除保护随关联表落地时定；当前无引用方，删除自由。
+
+-- 9. studios：片商字典（logo BLOB 入库；2026-09-21 首期仅 CRUD + logo 管理）
+CREATE TABLE studios (
+  id        INTEGER PRIMARY KEY AUTOINCREMENT,
+  name      TEXT NOT NULL UNIQUE,     -- trim 后非空、≤60 字符，重复 409
+  logo      BLOB,                     -- 原始字节（无图像处理能力，存原图；魔数白名单 jpg/png/webp、≤512KB）
+  logo_type TEXT                      -- MIME（image/jpeg 等）；logo 为 NULL 时本列同置 NULL
+);
+-- **BLOB 存储决策**：片商 ≤ 几百个 × 单图 ≤512KB，总占用几十 MB 内，SQLite 无压力；
+-- 随行增删零孤儿文件、备份 = 复制 media.db；磁盘文件方案（目录约定/孤儿清理/删除联动）
+-- 在个人项目里纯属自找边界。列表接口不回 BLOB（条目含 has_logo），logo 经专用端点取。
+-- 终局语义：视频直接挂片商（studio_id）；被引用后的删除保护随关联落地时定，当前自由删。
+-- GET 条目含 video_count / actor_count（预留恒 0；actor_count = 片商视频关联演员的去重数）。
 ```
 
 已定决策记录：
@@ -278,6 +293,13 @@ raw 已定决策记录：
 | `PUT /api/tags/:id` | 页面 | 改名 `{name}`（同校验；404 不存在） |
 | `POST /api/tags/:id/delete` | 页面 | 删除（404 不存在；无引用方，当前自由删） |
 | `POST /api/tags/reorder` | 页面 | 拖拽排序落库 `{ids:[...]}`：按给定顺序全量重编号 `sort=1..n`（事务；不存在的 id 忽略）；响应返回新列表 |
+| `GET /api/studios` | 页面 | 片商全量列表（`ORDER BY id` 正序，不分页）；条目含 `has_logo`/`video_count`/`actor_count`（计数预留恒 0），**不回 logo 字节** |
+| `POST /api/studios` | 页面 | 新增 `{name}`：trim 非空、≤60，重复 409 |
+| `PUT /api/studios/:id` | 页面 | 改名 `{name}`（同校验；404 不存在） |
+| `POST /api/studios/:id/delete` | 页面 | 删除（404 不存在；logo 随行删除；当前无引用方自由删） |
+| `POST /api/studios/:id/logo` | 页面 | 设置/替换 logo：JSON `{b64}`（前端文件转 base64）或 `{url}`（服务端抓取，5s 超时，仅 http/https）；解码后魔数白名单 jpg/png/webp + ≤512KB，违规 400 报因 |
+| `GET /api/studios/:id/logo` | 页面 | logo 字节直出（Content-Type = logo_type，Cache-Control max-age=300；无 logo 404） |
+| `POST /api/studios/:id/logo/delete` | 页面 | 清除 logo（置 NULL；404 片商不存在） |
 | `POST /api/shutdown` | 扩展面板 | 优雅退出：响应 200 后延迟 200ms `process.exit(0)`（等响应刷盘）；面板「重启」按钮的下半程——先 shutdown 确认离线，再经 native messaging 拉起，避免双实例撞端口 |
 | `GET /api/raw/volumes` | 页面 | 原始资料盘符列表：探测 `A:`–`Z:` 根下 `RawFiles/` 目录，**只返回存在的盘**，附 statfs 总容量/剩余空间；网络盘等无盘符形态不支持 |
 | `POST /api/raw/scan` | 页面 | 启动原始资料扫描 `{volumes:['d:'], types:['video','image']}`：202 即返（异步任务）；已有任务 409；请求时二次校验 RawFiles 存在性（拔盘跳过记 warning） |

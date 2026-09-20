@@ -48,3 +48,4 @@ export type {
 export type { PingResponse, LogResponse } from '../../../server/src/features/system/types';
 export type { CountryRow, CountriesResponse, CountryMutationResponse } from '../../../server/src/features/country/types';
 export type { TagRow, TagsResponse, TagMutationResponse } from '../../../server/src/features/tag/types';
+export type { StudioRow, StudiosResponse, StudioMutationResponse } from '../../../server/src/features/studio/types';

@@ -20,6 +20,8 @@ import type {
   RawVolumesResponse,
   SaveConfigResponse,
   ScanResponse,
+  StudiosResponse,
+  StudioMutationResponse,
   TagsResponse,
   TagMutationResponse,
   VideosResponse,
@@ -228,6 +230,47 @@ export function reorderTags(ids: number[]): Promise<TagsResponse> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ids }),
   });
+}
+
+// ---------------------------------------------------------------------------
+// 片商字典（logo BLOB 入库，经专用端点存取）
+// ---------------------------------------------------------------------------
+
+export function fetchStudios(): Promise<StudiosResponse> {
+  return api('/api/studios');
+}
+
+export function createStudio(name: string): Promise<StudioMutationResponse> {
+  return api('/api/studios', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function renameStudio(id: number, name: string): Promise<StudioMutationResponse> {
+  return api(`/api/studios/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function deleteStudio(id: number): Promise<{ ok: boolean }> {
+  return api(`/api/studios/${id}/delete`, { method: 'POST' });
+}
+
+/** 设置/替换 logo：{b64}（文件）或 {url}（服务端抓取）。 */
+export function setStudioLogo(id: number, payload: { b64?: string; url?: string }): Promise<StudioMutationResponse> {
+  return api(`/api/studios/${id}/logo`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function clearStudioLogo(id: number): Promise<{ ok: boolean }> {
+  return api(`/api/studios/${id}/logo/delete`, { method: 'POST' });
 }
 
 export interface RawEventsQuery {

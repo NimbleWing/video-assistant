@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Server } from 'node:http';
+import http from 'node:http';
 import { createApp } from './app.ts';
 import { upsertRawScanned } from './features/raw/files.ts';
 import { setExitHandlerForTest } from './features/system/routes.ts';
@@ -253,6 +254,130 @@ describe('app 集成：标签字典 CRUD + 拖拽排序', () => {
     const id = (await (await created.json() as Promise<{ item: { id: number } }>)).item.id;
     expect((await fetch(`${base}/api/tags/999999/delete`, { method: 'POST' })).status).toBe(404);
     await fetch(`${base}/api/tags/${id}/delete`, { method: 'POST' }); // 清理
+  });
+});
+
+describe('app 集成：片商字典 CRUD + logo 管理', () => {
+  interface StudioItem { id: number; name: string; has_logo: boolean; video_count: number; actor_count: number }
+  const post = (body: Record<string, unknown>) => fetch(`${base}/api/studios`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const list = async (): Promise<StudioItem[]> =>
+    (await ((await fetch(`${base}/api/studios`)).json() as Promise<{ items: StudioItem[] }>)).items;
+
+  // 最小合法 png（1×1 透明，8 字节魔数足够过白名单；内容不解析）
+  const PNG_MAGIC = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
+  const b64 = (bytes: Uint8Array) => Buffer.from(bytes).toString('base64');
+
+  it('CRUD 同款字典口径；列表不回 logo 字节', async () => {
+    await post({ name: '  片商A  ' });
+    await post({ name: '片商B' });
+    let items = await list();
+    expect(items.map((i) => i.name)).toEqual(['片商A', '片商B']); // trim + id 正序
+    expect(items.every((i) => i.has_logo === false && i.video_count === 0 && i.actor_count === 0)).toBe(true);
+    expect('logo' in (items[0] as unknown as Record<string, unknown>)).toBe(false); // 列表不含 logo 键
+    expect((await post({ name: '片商A' })).status).toBe(409); // 重名
+    expect((await fetch(`${base}/api/studios/${items[0]!.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: '片商A改' }),
+    })).status).toBe(200);
+    expect((await fetch(`${base}/api/studios/999999/delete`, { method: 'POST' })).status).toBe(404);
+    await fetch(`${base}/api/studios/${items[1]!.id}/delete`, { method: 'POST' });
+    items = await list();
+    expect(items.map((i) => i.name)).toEqual(['片商A改']);
+    for (const it of items) await fetch(`${base}/api/studios/${it.id}/delete`, { method: 'POST' }); // 清理
+  });
+
+  it('logo：b64 设置 → 字节直出（Content-Type/缓存头）→ 清除 → 随片商删除', async () => {
+    const created = await (await post({ name: '带图片商' })).json() as { item: { id: number } };
+    const id = created.item.id;
+    // b64 设置
+    const set = await fetch(`${base}/api/studios/${id}/logo`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ b64: b64(PNG_MAGIC) }),
+    });
+    expect(set.status).toBe(200);
+    expect(((await set.json()) as { item: { has_logo: boolean } }).item.has_logo).toBe(true);
+    // 字节直出
+    const logo = await fetch(`${base}/api/studios/${id}/logo`);
+    expect(logo.status).toBe(200);
+    expect(logo.headers.get('content-type')).toBe('image/png');
+    expect(logo.headers.get('cache-control')).toContain('max-age=300');
+    expect(new Uint8Array(await logo.arrayBuffer())).toEqual(PNG_MAGIC);
+    // 列表 has_logo = true
+    expect((await list()).find((i) => i.id === id)?.has_logo).toBe(true);
+    // 清除 → 直出 404、has_logo = false
+    expect((await fetch(`${base}/api/studios/${id}/logo/delete`, { method: 'POST' })).status).toBe(200);
+    expect((await fetch(`${base}/api/studios/${id}/logo`)).status).toBe(404);
+    expect((await list()).find((i) => i.id === id)?.has_logo).toBe(false);
+    // 清除不存在的片商 → 404；片商不存在设置 logo → 404
+    expect((await fetch(`${base}/api/studios/999999/logo/delete`, { method: 'POST' })).status).toBe(404);
+    expect((await fetch(`${base}/api/studios/999999/logo`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ b64: b64(PNG_MAGIC) }),
+    })).status).toBe(404);
+    await fetch(`${base}/api/studios/${id}/delete`, { method: 'POST' }); // 清理
+  });
+
+  it('logo 校验：非图片字节 / 超限 / 空载荷 400', async () => {
+    const created = await (await post({ name: '校验片商' })).json() as { item: { id: number } };
+    const id = created.item.id;
+    const call = (body: Record<string, unknown>) => fetch(`${base}/api/studios/${id}/logo`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    expect((await call({ b64: b64(new TextEncoder().encode('not an image')) })).status).toBe(400);
+    expect((await call({ b64: b64(new Uint8Array(513 * 1024).fill(0x89)) })).status).toBe(400); // 超限
+    expect((await call({})).status).toBe(400);
+    await fetch(`${base}/api/studios/${id}/delete`, { method: 'POST' }); // 清理
+  });
+
+  it('logo：URL 抓取（本地测试 HTTP 服务；含 404 与非图片 400 路径）', async () => {
+    // 起一个本地服务供给抓取：/ok.png 回魔数字节，/big.png 回超限，/404 回 404
+    const src = http.createServer((rq, rs) => {
+      if (rq.url === '/ok.png') {
+        rs.writeHead(200, { 'Content-Type': 'image/png' });
+        rs.end(Buffer.from(PNG_MAGIC));
+      } else if (rq.url === '/big.png') {
+        rs.writeHead(200, { 'Content-Type': 'image/png' });
+        rs.end(Buffer.from(new Uint8Array(513 * 1024).fill(0x89)));
+      } else if (rq.url === '/text') {
+        rs.writeHead(200, { 'Content-Type': 'text/plain' });
+        rs.end('hello');
+      } else {
+        rs.writeHead(404);
+        rs.end();
+      }
+    });
+    await new Promise<void>((r) => src.listen(0, '127.0.0.1', r));
+    const addr = src.address();
+    const sBase = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`;
+    try {
+      const created = await (await post({ name: 'URL片商' })).json() as { item: { id: number } };
+      const id = created.item.id;
+      const call = (url: string) => fetch(`${base}/api/studios/${id}/logo`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      });
+      const ok = await call(`${sBase}/ok.png`);
+      expect(ok.status).toBe(200);
+      const logo = await fetch(`${base}/api/studios/${id}/logo`);
+      expect(new Uint8Array(await logo.arrayBuffer())).toEqual(PNG_MAGIC);
+      expect((await call(`${sBase}/404`)).status).toBe(400); // 抓取 HTTP 错误 → 400
+      expect((await call(`${sBase}/big.png`)).status).toBe(400); // 超限
+      expect((await call(`${sBase}/text`)).status).toBe(400); // 魔数不符
+      expect((await call('ftp://x/y.png')).status).toBe(400); // 非 http(s)
+      await fetch(`${base}/api/studios/${id}/delete`, { method: 'POST' }); // 清理
+    } finally {
+      await new Promise<void>((r) => src.close(() => r()));
+    }
   });
 });
 
