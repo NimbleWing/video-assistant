@@ -20,6 +20,8 @@ import type {
   RawVolumesResponse,
   SaveConfigResponse,
   ScanResponse,
+  TagsResponse,
+  TagMutationResponse,
   VideosResponse,
 } from './types';
 
@@ -189,6 +191,43 @@ export function fetchRawDuplicates(query: { page: number; size: number }): Promi
 /** 删除磁盘文件 + raw_files 行（查重清理，不可恢复）。 */
 export function deleteRawFile(id: number): Promise<RawFileDeleteResponse> {
   return api(`/api/raw/file/${id}/delete`, { method: 'POST' });
+}
+
+// ---------------------------------------------------------------------------
+// 标签字典（sort 拖拽排序）
+// ---------------------------------------------------------------------------
+
+export function fetchTags(): Promise<TagsResponse> {
+  return api('/api/tags');
+}
+
+export function createTag(name: string): Promise<TagMutationResponse> {
+  return api('/api/tags', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function renameTag(id: number, name: string): Promise<TagMutationResponse> {
+  return api(`/api/tags/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function deleteTag(id: number): Promise<{ ok: boolean }> {
+  return api(`/api/tags/${id}/delete`, { method: 'POST' });
+}
+
+/** 拖拽排序落库：按新顺序全量重编号；响应即新列表（乐观更新后对齐权威顺序）。 */
+export function reorderTags(ids: number[]): Promise<TagsResponse> {
+  return api('/api/tags/reorder', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids }),
+  });
 }
 
 export interface RawEventsQuery {

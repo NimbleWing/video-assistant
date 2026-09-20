@@ -192,6 +192,70 @@ describe('app 集成：国家字典 CRUD', () => {
   });
 });
 
+describe('app 集成：标签字典 CRUD + 拖拽排序', () => {
+  interface TagItem { id: number; name: string; sort: number; video_count: number; actor_count: number }
+  const post = (body: Record<string, unknown>) => fetch(`${base}/api/tags`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const list = async (): Promise<TagItem[]> =>
+    (await ((await fetch(`${base}/api/tags`)).json() as Promise<{ items: TagItem[] }>)).items;
+  const reorder = (ids: number[]) => fetch(`${base}/api/tags/reorder`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids }),
+  });
+
+  it('新增追加末尾（sort=max+1）；列表按 sort 升序；改名；删除', async () => {
+    await post({ name: '高清' });
+    await post({ name: '  经典  ' });
+    let items = await list();
+    expect(items.map((i) => [i.name, i.sort])).toEqual([['高清', 1], ['经典', 2]]); // trim + 追加末尾
+    expect(items.every((i) => i.video_count === 0 && i.actor_count === 0)).toBe(true); // 预留计数
+    const renamed = await (await fetch(`${base}/api/tags/${items[0]!.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: '4K' }),
+    })).json() as { item: { name: string; sort: number } };
+    expect(renamed.item.name).toBe('4K');
+    expect(renamed.item.sort).toBe(1); // 改名不动排序
+    expect((await fetch(`${base}/api/tags/${items[1]!.id}/delete`, { method: 'POST' })).status).toBe(200);
+    items = await list();
+    expect(items.map((i) => i.name)).toEqual(['4K']);
+    // 清理
+    for (const it of items) await fetch(`${base}/api/tags/${it.id}/delete`, { method: 'POST' });
+  });
+
+  it('reorder 全量重编号（紧凑 1..n）；忽略不存在的 id；未携带的行续编末尾', async () => {
+    for (const n of ['甲', '乙', '丙']) await post({ name: n });
+    const items = await list();
+    const [a, b, c] = items; // 甲(1) 乙(2) 丙(3)
+    // 拖「丙」到「甲」前 → 丙,甲,乙 = 1,2,3
+    const r1 = await (await reorder([c!.id, a!.id, b!.id])).json() as { items: TagItem[] };
+    expect(r1.items.map((i) => i.id)).toEqual([c!.id, a!.id, b!.id]);
+    expect(r1.items.map((i) => i.sort)).toEqual([1, 2, 3]); // 紧凑重编号
+    // 混入不存在的 id：忽略；未携带的行（乙、丙）按原相对顺序续编到末尾
+    const r2 = await (await reorder([a!.id, 999999])).json() as { items: TagItem[] };
+    expect(r2.items.map((i) => i.id)).toEqual([a!.id, c!.id, b!.id]);
+    expect(r2.items.map((i) => i.sort)).toEqual([1, 2, 3]);
+    // 非法请求体 400
+    expect((await reorder([])).status).toBe(400);
+    expect((await reorder(['x' as unknown as number])).status).toBe(400);
+    // 清理
+    for (const it of await list()) await fetch(`${base}/api/tags/${it.id}/delete`, { method: 'POST' });
+  });
+
+  it('重名 409 / 空名 400 / 不存在 404', async () => {
+    expect((await post({ name: '' })).status).toBe(400);
+    const created = await post({ name: '唯一' });
+    expect((await post({ name: '唯一' })).status).toBe(409);
+    const id = (await (await created.json() as Promise<{ item: { id: number } }>)).item.id;
+    expect((await fetch(`${base}/api/tags/999999/delete`, { method: 'POST' })).status).toBe(404);
+    await fetch(`${base}/api/tags/${id}/delete`, { method: 'POST' }); // 清理
+  });
+});
+
 describe('app 集成：raw feature', () => {
   it('GET /api/raw/volumes 返回盘符数组与上次勾选', async () => {
     const r = await fetch(`${base}/api/raw/volumes`);

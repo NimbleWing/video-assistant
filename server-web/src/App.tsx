@@ -8,9 +8,10 @@ import { Raw } from '@/features/Raw';
 import { Archive } from '@/features/Archive';
 import { Ledger } from '@/features/Ledger';
 import { Country } from '@/features/Country';
+import { Tag } from '@/features/Tag';
 import { Settings } from '@/features/Settings';
 
-type Tab = 'videos' | 'raw' | 'archive' | 'ledger' | 'country' | 'settings';
+type Tab = 'videos' | 'raw' | 'archive' | 'ledger' | 'country' | 'tag' | 'settings';
 
 const icon = (path: ReactNode) => (
   <svg
@@ -83,6 +84,15 @@ const TABS = [
     ),
   },
   {
+    key: 'tag',
+    label: '标签',
+    icon: icon(
+      <>
+        <path d="M9.5 4.5 7.8 19.5M16.2 4.5 14.5 19.5M4.8 9.2h14.4M4 15h14.4" />
+      </>,
+    ),
+  },
+  {
     key: 'settings',
     label: '设置',
     icon: icon(
@@ -125,6 +135,7 @@ export default function App() {
         {tab === 'archive' && <Archive onStat={setStat} onPlay={setPlaying} />}
         {tab === 'ledger' && <Ledger />}
         {tab === 'country' && <Country />}
+        {tab === 'tag' && <Tag />}
         {tab === 'settings' && <Settings />}
       </Layout>
       <PlayerDialog item={playing} onClose={() => setPlaying(null)} />

@@ -47,3 +47,4 @@ export type {
 } from '../../../server/src/features/ledger/types';
 export type { PingResponse, LogResponse } from '../../../server/src/features/system/types';
 export type { CountryRow, CountriesResponse, CountryMutationResponse } from '../../../server/src/features/country/types';
+export type { TagRow, TagsResponse, TagMutationResponse } from '../../../server/src/features/tag/types';

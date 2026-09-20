@@ -80,6 +80,8 @@ server/src/
     │   ├── index.ts / downloads.ts / routes.ts / types.ts
     ├── country/         # 国家字典（countries 表，演员体系基石）
     │   ├── index.ts / countries.ts / routes.ts / types.ts
+    ├── tag/             # 标签字典（tags 表，sort 全量重编号拖拽排序）
+    │   ├── index.ts / tags.ts / routes.ts / types.ts
     └── system/          # 服务级
         └── index.ts / routes.ts   # /api/ping（聚合 media+ledger 统计）、/api/log
 ```
@@ -194,6 +196,18 @@ CREATE TABLE countries (
 -- 终局语义（actor 页落地时实施）：actors 表带 country_id 引用本表；视频关联演员后
 -- 国家由演员推导；无演员视频人工指定国家。被演员引用的国家删除策略（禁删/置空）
 -- 届时定；当前无引用方，删除自由。列表 ORDER BY id 正序（添加顺序），不分页。
+
+-- 8. tags：标签字典（sort 拖拽排序；2026-09-21 首期仅 CRUD + 重排）
+CREATE TABLE tags (
+  id   INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,          -- trim 后非空、≤60 字符，重复 409
+  sort INTEGER NOT NULL               -- 紧凑连续 1..n：reorder 按新顺序全量重编号（事务）
+);
+-- 列表 ORDER BY sort ASC, id ASC；新增 sort = max+1 追加末尾。
+-- GET 响应含 video_count / actor_count（本次恒 0 预留：关联表落地后由 actor_tags/
+-- video_tags JOIN 计算）。
+-- 终局语义：演员可挂标签，视频可直挂标签；视频最终标签 = 直挂 ∪ 演员标签。
+-- 被引用后的删除保护随关联表落地时定；当前无引用方，删除自由。
 ```
 
 已定决策记录：
@@ -259,6 +273,11 @@ raw 已定决策记录：
 | `POST /api/countries` | 页面 | 新增 `{name}`：trim 非空、≤60，重复 409 |
 | `PUT /api/countries/:id` | 页面 | 改名 `{name}`（同校验；404 不存在） |
 | `POST /api/countries/:id/delete` | 页面 | 删除（404 不存在；无引用方，当前自由删） |
+| `GET /api/tags` | 页面 | 标签字典全量列表（`ORDER BY sort ASC, id ASC`）；条目含 `video_count`/`actor_count`（预留恒 0） |
+| `POST /api/tags` | 页面 | 新增 `{name}`：trim 非空、≤60，重复 409；`sort = max+1` 追加末尾 |
+| `PUT /api/tags/:id` | 页面 | 改名 `{name}`（同校验；404 不存在） |
+| `POST /api/tags/:id/delete` | 页面 | 删除（404 不存在；无引用方，当前自由删） |
+| `POST /api/tags/reorder` | 页面 | 拖拽排序落库 `{ids:[...]}`：按给定顺序全量重编号 `sort=1..n`（事务；不存在的 id 忽略）；响应返回新列表 |
 | `POST /api/shutdown` | 扩展面板 | 优雅退出：响应 200 后延迟 200ms `process.exit(0)`（等响应刷盘）；面板「重启」按钮的下半程——先 shutdown 确认离线，再经 native messaging 拉起，避免双实例撞端口 |
 | `GET /api/raw/volumes` | 页面 | 原始资料盘符列表：探测 `A:`–`Z:` 根下 `RawFiles/` 目录，**只返回存在的盘**，附 statfs 总容量/剩余空间；网络盘等无盘符形态不支持 |
 | `POST /api/raw/scan` | 页面 | 启动原始资料扫描 `{volumes:['d:'], types:['video','image']}`：202 即返（异步任务）；已有任务 409；请求时二次校验 RawFiles 存在性（拔盘跳过记 warning） |

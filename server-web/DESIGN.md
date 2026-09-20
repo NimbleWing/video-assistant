@@ -4,7 +4,7 @@
 
 ## 定位
 
-本地媒体库服务（`127.0.0.1:17321`）的管理页前端，独立 npm 包。技术栈：React 19 + TypeScript（strict）+ Tailwind CSS v4 + Vite 7 + Vitest（happy-dom + Testing Library）。功能与旧版手写 `server/public/index.html` 完全对齐并持续演进：视频库/原始资料/归档资料/下载账本/国家/设置六标签 + Range 流播放弹窗。
+本地媒体库服务（`127.0.0.1:17321`）的管理页前端，独立 npm 包。技术栈：React 19 + TypeScript（strict）+ Tailwind CSS v4 + Vite 7 + Vitest（happy-dom + Testing Library）。功能与旧版手写 `server/public/index.html` 完全对齐并持续演进：视频库/原始资料/归档资料/下载账本/国家/标签/设置七标签 + Range 流播放弹窗。
 
 ## 结构
 
@@ -12,7 +12,7 @@
 
 | 文件 | 职责 |
 |------|------|
-| `src/App.tsx` | 组合 Layout 与六页面（视频库/原始资料/归档资料/下载账本/国家/设置）、头部统计、播放弹窗状态（视频 tab 卸载重挂即刷新，替代旧版 scan 后手动 loadVideos）；tab 配置（key/label/icon）定义于此 |
+| `src/App.tsx` | 组合 Layout 与七页面（视频库/原始资料/归档资料/下载账本/国家/标签/设置）、头部统计、播放弹窗状态（视频 tab 卸载重挂即刷新，替代旧版 scan 后手动 loadVideos）；tab 配置（key/label/icon）定义于此 |
 | `src/components/Layout/index.tsx` | 页面骨架抽象：顶栏（标题 + 补充信息 + 移动端汉堡）+ 左侧侧边栏导航（icon + 文字，可选）+ 内容区；泛型 `K extends string` 支撑标签 key 收窄 |
 | `src/components/Pager/index.tsx` | 共享分页条：上一页/下一页 + 页码（可选跳页输入框：回车/失焦提交、钳位 1..pages）+ 右侧可选「每页 N 条」选择器 |
 | `src/components/PlayerDialog/index.tsx` | 共享播放弹窗（自 Videos 泛化）：原生 `<dialog>` + `closedby="any"`，双源 `{direct, hls, preferDirect}`——默认 hls.js 主路径 + 降级链（见下）；`preferDirect` 时直连优先、`<video>` error 事件回退 hls；关闭/换源时停流清理，复制路径；由 App 持有状态全局挂载（tab 切换不卸载） |
@@ -30,6 +30,8 @@
 | `src/features/Ledger/Ledger.tsx` | 下载账本页面：状态 chips（全部 + failed/complete/downloading/canceled/skipped 计数，默认 failed）、分页 |
 | `src/features/Country/index.ts` | 桶导出：`Country` |
 | `src/features/Country/Country.tsx` | **国家页面**（字典 CRUD，演员体系基石）：全量列表（id 正序、不分页）+ 顶部添加行（输入框回车/按钮，重名 409 → toast）+ 行内改名（编辑态输入框，Enter 提交 / Esc 取消）+ 删除（ConfirmDialog 二次确认）；将来被演员引用后的删除保护随演员页落地 |
+| `src/features/Tag/index.ts` | 桶导出：`Tag` |
+| `src/features/Tag/Tag.tsx` | **标签页面**（字典 CRUD + 拖拽排序）：卡片式管理——卡片含拖拽把手 `⠿`（mousedown 激活 draggable，防误触）、名字（**点击即进入改名编辑**）、`视频 N · 演员 N`（预留恒 0，关联表落地后真实计算）；改名/删除为 **hover 右上角浮现的小图标**（✎/🗑，TrashButton 同款弱化风格，平时零视觉占位，删除走 ConfirmDialog）；**网格（默认）/行视图**切换（`localStorage` 记忆，同侧边栏收合惯例；行视图保留表格操作列文字按钮）；HTML5 原生 DnD 双视图可用：把手拖动、插入位反馈（网格缘指示条/行高亮）、松手乐观重排 + 立即 `reorder`（失败 toast + 重拉回滚）；顶部添加行、行内改名 Enter/Esc |
 | `src/features/Settings/index.ts` | 桶导出：`Settings` |
 | `src/features/Settings/Settings.tsx` | 设置页面：扫描目录保存、ffmpeg 路径配置与状态显示（POST /api/config）、立即扫描、日志尾部查看 |
 | `src/lib/api.ts` | 类型化 API 客户端（fetch 包装：`ok:false` / HTTP 错误统一抛 `Error`，带服务端 error 信息；raw 系列 + SSE 由组件直连 EventSource） |
