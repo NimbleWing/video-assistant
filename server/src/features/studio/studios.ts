@@ -1,5 +1,6 @@
 // studios 表：片商字典（logo BLOB 入库）。DDL + 全部数据操作，仅此文件触碰本表。
 import { db, numOf, strOf, type SqlRow } from '../../lib/db.ts';
+import { studioActorCounts, studioVideoCounts } from '../video/videos.ts';
 import type { StudioRow } from './types.ts';
 
 db.exec(`
@@ -11,23 +12,25 @@ db.exec(`
   );
 `);
 
-function toRow(r: SqlRow): StudioRow {
-  // video_count / actor_count 预留：视频→片商关联落地后由 JOIN 计算
-  // （actor_count = 片商视频关联演员的去重数）
+function toRow(r: SqlRow, videoCounts: Map<number, number>, actorCounts: Map<number, number>): StudioRow {
+  // video_count = 片商作品数；actor_count = 片商作品关联演员的去重数（2026-09-21 归档流落地起真实计算）
+  const id = numOf(r.id);
   return {
-    id: numOf(r.id),
+    id,
     name: strOf(r.name),
     has_logo: r.has_logo === 1,
-    video_count: 0,
-    actor_count: 0,
+    video_count: videoCounts.get(id) ?? 0,
+    actor_count: actorCounts.get(id) ?? 0,
   };
 }
 
 /** 全量列表（id 正序 = 添加顺序；不回 logo 字节，条目含 has_logo）。 */
 export function listStudios(): StudioRow[] {
+  const videoCounts = studioVideoCounts();
+  const actorCounts = studioActorCounts();
   return (db.prepare(
     'SELECT id, name, (logo IS NOT NULL) AS has_logo FROM studios ORDER BY id ASC',
-  ).all() as SqlRow[]).map(toRow);
+  ).all() as SqlRow[]).map((r) => toRow(r, videoCounts, actorCounts));
 }
 
 /** 新增：返回新行（无 logo）。name 已由路由层校验。 */
@@ -41,7 +44,7 @@ export function renameStudio(id: number, name: string): StudioRow | null {
   const r = db.prepare('UPDATE studios SET name = ? WHERE id = ?').run(name, id);
   if (!numOf(r.changes)) return null;
   const row = db.prepare('SELECT id, name, (logo IS NOT NULL) AS has_logo FROM studios WHERE id = ?').get(id) as SqlRow | undefined;
-  return row ? toRow(row) : null;
+  return row ? toRow(row, studioVideoCounts(), studioActorCounts()) : null;
 }
 
 /** 删除：目标不存在返回 false（logo 随行删除）。被引用后的删除保护随关联落地。 */
@@ -64,7 +67,7 @@ export function studioExists(id: number): boolean {
 export function setStudioLogo(id: number, logo: Uint8Array, logoType: string): StudioRow {
   db.prepare('UPDATE studios SET logo = ?, logo_type = ? WHERE id = ?').run(logo, logoType, id);
   const row = db.prepare('SELECT id, name, (logo IS NOT NULL) AS has_logo FROM studios WHERE id = ?').get(id) as SqlRow | undefined;
-  return row ? toRow(row) : { id, name: '', has_logo: true, video_count: 0, actor_count: 0 };
+  return row ? toRow(row, studioVideoCounts(), studioActorCounts()) : { id, name: '', has_logo: true, video_count: 0, actor_count: 0 };
 }
 
 /** 清除 logo（置 NULL；先经 studioExists 判存在）。 */

@@ -38,6 +38,8 @@
 | `src/features/Actress/Actress.tsx` | **女优页面**（演员体系核心，仅网格视图）：卡片 = 头像区（`avatar_file_id` → `/api/raw/file/:id/content`，无头像名字首字占位）+ 名字（点击开编辑弹窗）+ 国家小字 + 评分（`87` / 「未评分」）+ 标签 chips 前 2 + `+N`（title 全量）+ 别名灰字预览 + `视频 N`（预留恒 0）+ hover `✎ 编辑 / 🗑 删除`（ConfirmDialog）；顶部搜索（防抖 300ms，q 匹配主名+别名）+ 添加按钮 |
 | `src/features/Actress/ActressDialog.tsx` | 创建/编辑共用表单弹窗（原生 `<dialog>`）：名字、国家下拉（fetchCountries，空字典提示先建国家）、评分 slider（0-100 + 「未评分」清除）、标签多选 chips（按 sort 序）、磁盘单选（`/api/actresses/disks`）、别名动态列表（+ 添加 / ✕ 删除）；创建提交后服务端 mkdir `Archives/国家/女优/图集`；编辑时磁盘不可改 |
 | `src/features/Actress/AvatarPicker.tsx` | 设为头像弹窗（原生 `<dialog>`）：搜索 + 女优列表选择 → `POST /api/actresses/:id/avatar {fileId}`（原始资料页图片卡片发起） |
+| `src/features/Video/index.ts` | 桶导出：`ArchiveDialog` |
+| `src/features/Video/ArchiveDialog.tsx` | **视频归档弹窗**（原始资料页视频卡片发起，单片流程；剧集切换仅占位禁用确认）：左播放区（原生格式直连 `/api/raw/file/:id/content`，ts/avi 等走 hls.js）+ 右表单——标题* /副标题/番号、演员多选（搜索+chips，**第一位演员决定归档目录**，变化即重置国家与标签）、国家单选（自动填充可改）、标签多选（自动填并集可改）、片商单选、封面区（**同名图片自动匹配**：同 stem 同目录优先→全库 path 升序；可清空、可搜索替换）→ `POST /api/videos/archive`；成功 toast + 刷新原始资料页 |
 | `src/features/Settings/index.ts` | 桶导出：`Settings` |
 | `src/features/Settings/Settings.tsx` | 设置页面：扫描目录保存、ffmpeg 路径配置与状态显示（POST /api/config）、立即扫描、日志尾部查看 |
 | `src/lib/api.ts` | 类型化 API 客户端（fetch 包装：`ok:false` / HTTP 错误统一抛 `Error`，带服务端 error 信息；raw 系列 + SSE 由组件直连 EventSource） |

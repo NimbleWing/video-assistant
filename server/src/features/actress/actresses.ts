@@ -1,6 +1,7 @@
 // actresses / actress_aliases / actress_tags 三表：女优（演员体系核心）。
 // DDL + 全部数据操作，仅此文件触碰本三表。头像 = 归档的 raw 图片（avatar_file_id → raw_files.id）。
 import { db, numOf, strOf, type SqlRow } from '../../lib/db.ts';
+import { actressVideoCounts } from '../video/videos.ts';
 import type { ActressRow } from './types.ts';
 
 db.exec(`
@@ -77,6 +78,7 @@ export function listActresses(q = ''): ActressRow[] {
   for (const r of db.prepare('SELECT id, name FROM countries').all() as SqlRow[]) {
     countryNames.set(numOf(r.id), strOf(r.name));
   }
+  const videoCounts = actressVideoCounts(); // 作品数（2026-09-21 归档流落地起真实计算）
 
   const needle = q.trim().toLowerCase();
   let items: ActressRow[] = rows.map((b) => ({
@@ -84,7 +86,7 @@ export function listActresses(q = ''): ActressRow[] {
     country_name: countryNames.get(b.country_id) ?? '',
     aliases: aliasMap.get(b.id) ?? [],
     tags: tagMap.get(b.id) ?? [],
-    video_count: 0,
+    video_count: videoCounts.get(b.id) ?? 0,
   }));
   if (needle) {
     items = items.filter((it) => it.name.toLowerCase().includes(needle) || it.aliases.some((a) => a.toLowerCase().includes(needle)));

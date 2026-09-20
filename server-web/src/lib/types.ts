@@ -57,3 +57,4 @@ export type {
   ActressDisksResponse,
   ActressUpsertRequest,
 } from '../../../server/src/features/actress/types';
+export type { VideoRow, VideoKind, VideosResponse as WorksResponse, VideoMutationResponse, VideoArchiveRequest } from '../../../server/src/features/video/types';

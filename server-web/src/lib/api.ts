@@ -28,7 +28,10 @@ import type {
   StudioMutationResponse,
   TagsResponse,
   TagMutationResponse,
+  VideoArchiveRequest,
+  VideoMutationResponse,
   VideosResponse,
+  WorksResponse,
 } from './types';
 
 async function api<T>(path: string, opts?: RequestInit): Promise<T> {
@@ -319,6 +322,28 @@ export function setActressAvatar(id: number, fileId: number): Promise<ActressMut
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ fileId }),
   });
+}
+
+// ---------------------------------------------------------------------------
+// 作品（原始资料页归档流）
+// ---------------------------------------------------------------------------
+
+/** 视频归档（单片）：文件移动改名 + videos 及四张关系表落库。 */
+export function archiveVideo(payload: VideoArchiveRequest): Promise<VideoMutationResponse> {
+  return api('/api/videos/archive', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+/** 作品分页列表（title/subtitle/code 搜索；将来作品页地基）。 */
+export function fetchWorks(query: { page?: number; size?: number; q?: string }): Promise<WorksResponse> {
+  const p = new URLSearchParams();
+  if (query.page) p.set('page', String(query.page));
+  if (query.size) p.set('size', String(query.size));
+  if (query.q) p.set('q', query.q);
+  return api(`/api/works?${p.toString()}`);
 }
 
 export interface RawEventsQuery {

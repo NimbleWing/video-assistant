@@ -574,6 +574,161 @@ describe('app 集成：女优（创建建目录 / CRUD / 头像归档流）', ()
   });
 });
 
+describe('app 集成：视频归档（单片流程 + 作品落库）', () => {
+  const T = {
+    country: '归档测试国',
+    actress: '归档测试女优',
+    actress2: '归档测试女优2',
+    tag: '归档测试标签',
+    studio: '归档测试片商',
+    tree: 'd:/archives/归档测试国/归档测试女优',
+    tree2: 'd:/archives/归档测试国/归档测试女优2',
+  };
+
+  /** 建基础数据（国家 + 两位女优同盘 + 标签 + 片商），返回各 id。 */
+  async function setup() {
+    const post = (url: string, body: unknown) => fetch(`${base}${url}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const country = await (await post('/api/countries', { name: T.country })).json() as { item: { id: number } };
+    const a1 = await (await post('/api/actresses', { name: T.actress, countryId: country.item.id, disk: 'd:', tagIds: [], aliases: [] })).json() as { item: ActressItem };
+    const a2 = await (await post('/api/actresses', { name: T.actress2, countryId: country.item.id, disk: 'd:', tagIds: [], aliases: [] })).json() as { item: ActressItem };
+    const tag = await (await post('/api/tags', { name: T.tag })).json() as { item: { id: number } };
+    const studio = await (await post('/api/studios', { name: T.studio })).json() as { item: { id: number } };
+    return { countryId: country.item.id, a1: a1.item.id, a2: a2.item.id, tagId: tag.item.id, studioId: studio.item.id };
+  }
+
+  async function cleanup(ids: ReturnType<typeof setup> extends Promise<infer R> ? R : never, extra: string[]) {
+    for (const f of extra) await fs.rm(f, { recursive: true, force: true }).catch(() => {});
+    await fs.rm(T.tree, { recursive: true, force: true }).catch(() => {});
+    await fs.rm(T.tree2, { recursive: true, force: true }).catch(() => {});
+    await fs.rmdir(`d:/archives/${T.country}`).catch(() => {});
+    db.exec('DELETE FROM actress_videos');
+    db.exec('DELETE FROM tag_videos');
+    db.exec('DELETE FROM studio_videos');
+    db.exec('DELETE FROM country_videos');
+    db.exec('DELETE FROM videos');
+    await fetch(`${base}/api/actresses/${ids.a1}/delete`, { method: 'POST' });
+    await fetch(`${base}/api/actresses/${ids.a2}/delete`, { method: 'POST' });
+    await fetch(`${base}/api/countries/${ids.countryId}/delete`, { method: 'POST' });
+    await fetch(`${base}/api/tags/${ids.tagId}/delete`, { method: 'POST' });
+    await fetch(`${base}/api/studios/${ids.studioId}/delete`, { method: 'POST' });
+  }
+
+  /** 造一个 raw 文件 + 行。 */
+  async function makeRaw(name: string, ext: string, type: 'video' | 'image', hash: string): Promise<{ id: number; path: string; dir: string }> {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'rou-varch-'));
+    const p = path.join(dir, name);
+    await fs.writeFile(p, Buffer.from(PNG_MAGIC)); // 内容不解析，任意字节
+    upsertRawScanned({ path: normPath(p), hash, name: name.replace(/\.[a-z0-9]+$/i, ''), ext, type, size: 12, mtime: 1000, volume: 'c:', seen: 3000 });
+    const row = getRawByPath(normPath(p))!;
+    return { id: row.id, path: p, dir };
+  }
+
+  it('归档：双文件移动改名（番号 标题 副标题）+ 关系表 + 计数真实化 + 列表', async () => {
+    const ids = await setup();
+    const vid = await makeRaw('clip.mp4', 'mp4', 'video', 'varch-v1');
+    const cover = await makeRaw('clip.jpg', 'jpg', 'image', 'varch-c1');
+    try {
+      const r = await fetch(`${base}/api/videos/archive`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fileId: vid.id, coverFileId: cover.id,
+          title: '标题', subtitle: '副题', code: 'ABC-123',
+          actressIds: [ids.a1, ids.a2], countryId: ids.countryId, tagIds: [ids.tagId], studioId: ids.studioId, kind: 'single',
+        }),
+      });
+      expect(r.status).toBe(200);
+      const j = await r.json() as { item: { id: number; title: string; code: string } };
+      expect(j.item.title).toBe('标题');
+
+      // 落盘：第一个演员目录树（第二位演员目录无文件）、命名「番号 标题 副题」
+      const stem = 'ABC-123 标题 副题';
+      expect((await fs.readFile(`${T.tree}/${stem}.mp4`)).length).toBeGreaterThan(0);
+      expect((await fs.readFile(`${T.tree}/${stem}.jpg`)).length).toBeGreaterThan(0);
+      await expect(fs.stat(`${T.tree2}/${stem}.mp4`)).rejects.toThrow();
+      await expect(fs.stat(vid.path)).rejects.toThrow(); // 原位置已移走
+
+      // raw 行跟随 + 归档
+      expect(getRawByPath(normPath(`${T.tree}/${stem}.mp4`))?.archived).toBe(true);
+      expect(getRawByPath(normPath(`${T.tree}/${stem}.jpg`))?.archived).toBe(true);
+
+      // 作品列表 + 关系
+      const list = await (await fetch(`${base}/api/works`)).json() as { total: number; items: ActressItem2[] };
+      expect(list.total).toBe(1);
+      const v = list.items[0]!;
+      expect(v.code).toBe('ABC-123');
+      expect(v.actresses.map((a) => a.name)).toEqual([T.actress, T.actress2]);
+      expect(v.studios.map((s) => s.name)).toEqual([T.studio]);
+      expect(v.countries.map((c) => c.name)).toEqual([T.country]);
+      expect(v.tags.map((t) => t.name)).toEqual([T.tag]);
+
+      // 计数真实化：女优 video_count / 标签 video_count / 片商两计数
+      const acts = await (await fetch(`${base}/api/actresses`)).json() as { items: ActressItem[] };
+      expect(acts.items.find((a) => a.id === ids.a1)?.video_count).toBe(1);
+      const tags = await (await fetch(`${base}/api/tags`)).json() as { items: { id: number; video_count: number }[] };
+      expect(tags.items.find((t) => t.id === ids.tagId)?.video_count).toBe(1);
+      const sts = await (await fetch(`${base}/api/studios`)).json() as { items: { id: number; video_count: number; actor_count: number }[] };
+      const st = sts.items.find((s) => s.id === ids.studioId)!;
+      expect(st.video_count).toBe(1);
+      expect(st.actor_count).toBe(2); // 两位演员去重
+    } finally {
+      await cleanup(ids, [vid.dir, cover.dir]);
+      db.exec(`DELETE FROM raw_files WHERE hash IN ('varch-v1', 'varch-c1')`);
+    }
+  });
+
+  it('无封面归档（无番号命名）；冲突 409；校验 400', async () => {
+    const ids = await setup();
+    const vid = await makeRaw('solo.mp4', 'mp4', 'video', 'varch-v2');
+    const call = (body: unknown) => fetch(`${base}/api/videos/archive`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    try {
+      // 无封面无番号：命名「标题 副题」
+      const r = await call({ fileId: vid.id, title: '独奏', subtitle: '', actressIds: [ids.a1], countryId: ids.countryId, tagIds: [], kind: 'single' });
+      expect(r.status).toBe(200);
+      expect((await fs.readFile(`${T.tree}/独奏.mp4`)).length).toBeGreaterThan(0);
+
+      // 再造一个文件归档同名 → 409
+      const vid2 = await makeRaw('again.mp4', 'mp4', 'video', 'varch-v3');
+      const r2 = await call({ fileId: vid2.id, title: '独奏', actressIds: [ids.a1], countryId: ids.countryId, tagIds: [], kind: 'single' });
+      expect(r2.status).toBe(409);
+      expect(getRawByPath(normPath(vid2.path))).toBeTruthy(); // 冲突未动文件
+      await fs.rm(vid2.dir, { recursive: true, force: true });
+      db.exec(`DELETE FROM raw_files WHERE hash = 'varch-v3'`);
+
+      // 校验：无标题 400 / 无演员 400 / 图片归档 400 / kind=series 400
+      expect((await call({ fileId: vid.id, title: '', actressIds: [ids.a1], countryId: ids.countryId, tagIds: [], kind: 'single' })).status).toBe(400);
+      expect((await call({ fileId: vid.id, title: 'x', actressIds: [], countryId: ids.countryId, tagIds: [], kind: 'single' })).status).toBe(400);
+      const img = await makeRaw('pic.jpg', 'jpg', 'image', 'varch-i1');
+      expect((await call({ fileId: img.id, title: 'x', actressIds: [ids.a1], countryId: ids.countryId, tagIds: [], kind: 'single' })).status).toBe(400);
+      expect((await call({ fileId: vid.id, title: 'x', actressIds: [ids.a1], countryId: ids.countryId, tagIds: [], kind: 'series' })).status).toBe(400);
+      await fs.rm(img.dir, { recursive: true, force: true });
+      db.exec(`DELETE FROM raw_files WHERE hash = 'varch-i1'`);
+    } finally {
+      await cleanup(ids, [vid.dir]);
+      db.exec(`DELETE FROM raw_files WHERE hash IN ('varch-v2')`);
+    }
+  });
+});
+
+/** 作品条目（本文件局部形状，断言用）。 */
+interface ActressItem2 {
+  id: number;
+  title: string;
+  code: string | null;
+  actresses: { id: number; name: string }[];
+  tags: { id: number; name: string }[];
+  studios: { id: number; name: string }[];
+  countries: { id: number; name: string }[];
+}
+
 describe('app 集成：raw feature', () => {
   it('GET /api/raw/volumes 返回盘符数组与上次勾选', async () => {
     const r = await fetch(`${base}/api/raw/volumes`);

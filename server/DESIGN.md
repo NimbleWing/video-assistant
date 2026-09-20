@@ -86,6 +86,8 @@ server/src/
     │   ├── index.ts / studios.ts / routes.ts / types.ts
     ├── actress/         # 女优（actresses + actress_aliases + actress_tags 三表；头像=归档 raw 文件）
     │   ├── index.ts / actresses.ts / routes.ts / types.ts
+    ├── video/           # 作品（videos + 四张多对多关系表；原始资料页归档流）
+    │   ├── index.ts / videos.ts / routes.ts / types.ts
     └── system/          # 服务级
         └── index.ts / routes.ts   # /api/ping（聚合 media+ledger 统计）、/api/log
 ```
@@ -209,9 +211,9 @@ CREATE TABLE tags (
   sort INTEGER NOT NULL               -- 紧凑连续 1..n：reorder 按新顺序全量重编号（事务）
 );
 -- 列表 ORDER BY sort ASC, id ASC；新增 sort = max+1 追加末尾。
--- GET 响应含 video_count / actor_count：actor_count = 挂此标签的女优数（2026-09-21 起真实计算，
--- COUNT actress_tags）；video_count 仍预留恒 0（video_tags 落地后 JOIN）。
--- 终局语义：演员可挂标签，视频可直挂标签；视频最终标签 = 直挂 ∪ 演员标签。
+-- GET 响应含 video_count / actor_count：actor_count = 挂此标签的女优数（COUNT actress_tags）；
+-- video_count = 挂此标签的作品数（COUNT tag_videos，2026-09-21 归档流落地起真实计算）。
+-- 终局语义：演员可挂标签，视频可直挂标签；视频最终标签 = 直挂(tag_videos) ∪ 演员标签。
 -- 删除保护（2026-09-21 落地）：标签删除级联清 actress_tags 行，女优保留。
 
 -- 9. studios：片商字典（logo BLOB 入库；2026-09-21 首期仅 CRUD + logo 管理）
@@ -224,8 +226,10 @@ CREATE TABLE studios (
 -- **BLOB 存储决策**：片商 ≤ 几百个 × 单图 ≤512KB，总占用几十 MB 内，SQLite 无压力；
 -- 随行增删零孤儿文件、备份 = 复制 media.db；磁盘文件方案（目录约定/孤儿清理/删除联动）
 -- 在个人项目里纯属自找边界。列表接口不回 BLOB（条目含 has_logo），logo 经专用端点取。
--- 终局语义：视频直接挂片商（studio_id）；被引用后的删除保护随关联落地时定，当前自由删。
--- GET 条目含 video_count / actor_count（预留恒 0；actor_count = 片商视频关联演员的去重数）。
+-- 终局语义：视频直接挂片商（studio_videos 多对多；2026-09-21 归档流落地，表单单选写入单行）；
+-- 删除保护随关联落地时定（当前仍自由删）。
+-- GET 条目含 video_count / actor_count（2026-09-21 归档流落地起真实计算：
+-- video_count = COUNT studio_videos；actor_count = 片商作品关联演员的去重数）。
 
 -- 10. actresses：女优（演员体系核心；2026-09-21 落地）
 CREATE TABLE actresses (
@@ -258,6 +262,29 @@ CREATE TABLE actress_tags (
 -- 目录段经 lib/paths dirName() 清洗 Windows 非法字符）。改名/换国家不联动磁盘目录（目录名=创建时快照）。
 -- 头像：仅「原始资料页标记」通道——图片卡片设为头像 → 物理移动+改名 head.{ext} 到图集目录 →
 -- raw 行跟随（archived=1，真·归档语义，归档页持续可见）；旧 head.* 保留不删。
+
+-- 13. videos：作品（原始资料页归档流落库；2026-09-21 首期仅单片）
+CREATE TABLE videos (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind           TEXT NOT NULL CHECK (kind IN ('single','series')),  -- 本次只写 'single'；剧集待后续迭代
+  title          TEXT NOT NULL,        -- 标题（必填）
+  subtitle       TEXT,                 -- 副标题（可选）
+  code           TEXT,                 -- 番号（可选；不进文件名以外的展示）
+  video_file_id  INTEGER NOT NULL,     -- → raw_files.id（归档后的视频行；悬空容忍）
+  cover_file_id  INTEGER,              -- → raw_files.id（归档后的封面行；可空）
+  created_at     INTEGER NOT NULL      -- 归档时间（作品列表排序）
+);
+
+-- 14-17. 四张多对多关系表（国家/片商表单单选、表多对多预留）
+CREATE TABLE actress_videos (video_id INTEGER NOT NULL, actress_id INTEGER NOT NULL, PRIMARY KEY (video_id, actress_id));
+CREATE TABLE tag_videos     (video_id INTEGER NOT NULL, tag_id     INTEGER NOT NULL, PRIMARY KEY (video_id, tag_id));
+CREATE TABLE studio_videos  (video_id INTEGER NOT NULL, studio_id  INTEGER NOT NULL, PRIMARY KEY (video_id, studio_id));
+CREATE TABLE country_videos (video_id INTEGER NOT NULL, country_id INTEGER NOT NULL, PRIMARY KEY (video_id, country_id));
+-- 归档落盘：目标 = 第一个演员的目录树 {她的盘}/Archives/{她的国家}/{她}/（表单国家仅元数据，
+-- 不影响落点）；文件名 stem = 清洗段空格连接：有番号「{番号} {标题} {副标题}」/ 无番号
+-- 「{标题} {副标题}」（空段跳过，dirName 同款清洗）；视频与封面同 stem 各自扩展名；
+-- 目标已存在同名 → 409（防误覆盖）；番号不进目录只落 code 列。
+-- 视频最终标签 = tag_videos ∪ 演员标签（actress_tags）——展示层推导，表不冗余。
 ```
 
 已定决策记录：
@@ -341,6 +368,8 @@ raw 已定决策记录：
 | `PUT /api/actresses/:id` | 页面 | 全量编辑（name/countryId/rating/tagIds/aliases，事务全量替换；disk 不可改；404）；**不联动磁盘目录** |
 | `POST /api/actresses/:id/delete` | 页面 | 删除 + 级联清 aliases/actress_tags（404）；头像文件保留（归档页可见） |
 | `POST /api/actresses/:id/avatar` | 页面 | 设为头像 `{fileId}`：raw 行必须 type='image'；物理移动（同盘 rename / 跨盘 copy+unlink）+ 改名 `head.{ext}` 至 `{disk}/Archives/{国家}/{女优}/图集/`；raw 行跟随新路径 archived=1 + raw_archive 登记 + raw_events 记 rename/move（真·归档）；更新 avatar_file_id；旧 head.* 保留 |
+| `POST /api/videos/archive` | 页面 | 视频归档（单片）：`{fileId, coverFileId?, title, subtitle?, code?, actressIds(≥1), countryId, tagIds, studioId?, kind:'single'}`——落盘至第一个演员目录树、命名 `{番号 标题 副标题}.{ext}`（空段跳过）、冲突 409、`archiveRawFileTo` 双文件移动 + videos 及四张关系表事务写入 |
+| `GET /api/works?page=&size=&q=` | 页面 | 作品分页列表（title/subtitle/code LIKE，`ORDER BY created_at DESC`）；条目 join 演员名/标签/片商/国家（将来作品页地基，本次最小实现）。注意：路径用 /api/works——GET /api/videos 已被 media feature（物理文件视频库）占用 |
 | `POST /api/shutdown` | 扩展面板 | 优雅退出：响应 200 后延迟 200ms `process.exit(0)`（等响应刷盘）；面板「重启」按钮的下半程——先 shutdown 确认离线，再经 native messaging 拉起，避免双实例撞端口 |
 | `GET /api/raw/volumes` | 页面 | 原始资料盘符列表：探测 `A:`–`Z:` 根下 `RawFiles/` 目录，**只返回存在的盘**，附 statfs 总容量/剩余空间；网络盘等无盘符形态不支持 |
 | `POST /api/raw/scan` | 页面 | 启动原始资料扫描 `{volumes:['d:'], types:['video','image']}`：202 即返（异步任务）；已有任务 409；请求时二次校验 RawFiles 存在性（拔盘跳过记 warning） |

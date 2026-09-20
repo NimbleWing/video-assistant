@@ -1,6 +1,7 @@
 // tags 表：标签字典（sort 拖拽排序）。DDL + 全部数据操作，仅此文件触碰本表。
 import { db, numOf, strOf, type SqlRow } from '../../lib/db.ts';
 import { tagUsageCounts } from '../actress/actresses.ts';
+import { tagVideoCounts } from '../video/videos.ts';
 import type { TagRow } from './types.ts';
 
 db.exec(`
@@ -11,15 +12,17 @@ db.exec(`
   );
 `);
 
-function toRow(r: SqlRow, usage: Map<number, number>): TagRow {
-  // video_count 预留：video_tags 落地后 JOIN 计算；actor_count = 挂此标签的女优数（真实）
-  return { id: numOf(r.id), name: strOf(r.name), sort: numOf(r.sort), video_count: 0, actor_count: usage.get(numOf(r.id)) ?? 0 };
+function toRow(r: SqlRow, usage: Map<number, number>, videoCounts: Map<number, number>): TagRow {
+  // actor_count = 挂此标签的女优数；video_count = 挂此标签的作品数（2026-09-21 归档流落地起真实计算）
+  const id = numOf(r.id);
+  return { id, name: strOf(r.name), sort: numOf(r.sort), video_count: videoCounts.get(id) ?? 0, actor_count: usage.get(id) ?? 0 };
 }
 
 /** 全量列表（sort 升序、id 兜底稳定；字典表不分页不搜索）。 */
 export function listTags(): TagRow[] {
   const usage = tagUsageCounts();
-  return (db.prepare('SELECT id, name, sort FROM tags ORDER BY sort ASC, id ASC').all() as SqlRow[]).map((r) => toRow(r, usage));
+  const videoCounts = tagVideoCounts();
+  return (db.prepare('SELECT id, name, sort FROM tags ORDER BY sort ASC, id ASC').all() as SqlRow[]).map((r) => toRow(r, usage, videoCounts));
 }
 
 /** 新增：追加末尾（sort = max+1）。name 已由路由层校验。 */
@@ -34,8 +37,9 @@ export function renameTag(id: number, name: string): TagRow | null {
   const r = db.prepare('UPDATE tags SET name = ? WHERE id = ?').run(name, id);
   if (!numOf(r.changes)) return null;
   const usage = tagUsageCounts();
+  const videoCounts = tagVideoCounts();
   const row = db.prepare('SELECT id, name, sort FROM tags WHERE id = ?').get(id) as SqlRow | undefined;
-  return row ? toRow(row, usage) : null;
+  return row ? toRow(row, usage, videoCounts) : null;
 }
 
 /** 删除：目标不存在返回 false（路由层转 404）。被引用后的删除保护随关联表落地。 */

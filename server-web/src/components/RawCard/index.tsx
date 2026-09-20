@@ -10,6 +10,8 @@ interface Props {
   onDelete?: (it: RawFileRow) => void;
   /** 提供「设为头像」入口（原始资料页图片卡片用）：归档移动到女优图集；不传或非图片不渲染。 */
   onAvatar?: (it: RawFileRow) => void;
+  /** 提供「归档」入口（原始资料页视频卡片用）：弹归档表单；不传或非视频不渲染。 */
+  onArchive?: (it: RawFileRow) => void;
 }
 
 /** 浏览器可原生解码的视频格式（直连省转码；mkv 靠 Chromium 内置 matroska demuxer，失败回退 HLS）。 */
@@ -79,7 +81,7 @@ function VideoArt({ it, onPlay }: Props) {
 }
 
 /** 原始资料卡片（Raw/Archive 两页共享）：图片=真缩略图；视频=图标卡；archived 副行最初名；missing 灰化。 */
-export function RawCard({ it, onPlay, onHistory, onDelete, onAvatar }: Props) {
+export function RawCard({ it, onPlay, onHistory, onDelete, onAvatar, onArchive }: Props) {
   const gone = it.missing || it.pending_missing;
   const currentName = currentNameOf(it.path);
   return (
@@ -132,6 +134,23 @@ export function RawCard({ it, onPlay, onHistory, onDelete, onAvatar }: Props) {
               <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                 <circle cx="12" cy="8.2" r="3.4" />
                 <path d="M5.5 19.5c.9-3.3 3.5-5 6.5-5s5.6 1.7 6.5 5" />
+              </svg>
+            </button>
+          ) : null}
+          {onArchive && it.type === 'video' ? (
+            <button
+              type="button"
+              className="flex size-6 shrink-0 items-center justify-center rounded-md bg-raised text-dim transition-colors hover:bg-brand-soft hover:text-brand-hover disabled:cursor-default disabled:opacity-40"
+              aria-label={`归档 ${currentNameOf(it.path)}`}
+              title="归档（移动到女优目录并登记作品）"
+              onClick={() => onArchive(it)}
+            >
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M4 5.5h11.5v6H4z" />
+                <path d="M15.5 8h2.8l2.7 3v3.5h-5.5" />
+                <circle cx="7.5" cy="17.5" r="1.8" />
+                <circle cx="17" cy="17.5" r="1.8" />
+                <path d="M9.3 17.5h5.9" />
               </svg>
             </button>
           ) : null}

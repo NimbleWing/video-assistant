@@ -13,8 +13,9 @@ import type { PlaySource } from '@/components/PlayerDialog';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { RawCard, TrashButton } from '@/components/RawCard';
 import { AvatarPicker } from '@/features/Actress';
+import { ArchiveDialog } from '@/features/Video';
 import { Pager } from '@/components/Pager';
-import type { RawDuplicatesResponse, RawDupGroup, RawFileRow, RawFilesResponse, RawScanStatus, RawType, RawVolumesResponse } from '@/lib/types';
+import type { ActressRow, CountryRow, RawDuplicatesResponse, RawDupGroup, RawFileRow, RawFilesResponse, RawScanStatus, RawType, RawVolumesResponse, StudioRow, TagRow } from '@/lib/types';
 import { fmtDate, fmtSize } from '@/utils/format';
 import { NATIVE_VIDEO_EXTS } from '@/components/RawCard';
 
@@ -172,6 +173,13 @@ export function Raw({ onStat, onPlay }: Props) {
   // 设为头像流：图片卡片 → 选择女优 → 归档移动 + 引用更新
   const [avatarFile, setAvatarFile] = useState<RawFileRow | null>(null);
   const [avatarMsg, setAvatarMsg] = useState('');
+  // 视频归档流：视频卡片 → 归档表单 → 移动改名 + 作品落库
+  const [archiveFile, setArchiveFile] = useState<RawFileRow | null>(null);
+  const [archiveMsg, setArchiveMsg] = useState('');
+  const [dictActresses, setDictActresses] = useState<ActressRow[]>([]);
+  const [dictCountries, setDictCountries] = useState<CountryRow[]>([]);
+  const [dictTags, setDictTags] = useState<TagRow[]>([]);
+  const [dictStudios, setDictStudios] = useState<StudioRow[]>([]);
   /** 删除失败汇总（页面级横幅，查重面板与文件卡片共用）。 */
   const [delErr, setDelErr] = useState('');
   // 文件浏览
@@ -609,6 +617,16 @@ export function Raw({ onStat, onPlay }: Props) {
                 onPlay={play}
                 onDelete={(f) => setPendingDelete([f])}
                 onAvatar={(f) => setAvatarFile(f)}
+                onArchive={(f) => {
+                  setArchiveFile(f);
+                  // 字典数据懒加载一次（弹窗表单用；未加载过才拉）
+                  if (!dictActresses.length && !dictCountries.length && !dictTags.length && !dictStudios.length) {
+                    fetch('/api/actresses').then((r) => r.json()).then((j) => setDictActresses(j.items ?? [])).catch(() => {});
+                    fetch('/api/countries').then((r) => r.json()).then((j) => setDictCountries(j.items ?? [])).catch(() => {});
+                    fetch('/api/tags').then((r) => r.json()).then((j) => setDictTags(j.items ?? [])).catch(() => {});
+                    fetch('/api/studios').then((r) => r.json()).then((j) => setDictStudios(j.items ?? [])).catch(() => {});
+                  }
+                }}
               />
             ))}
           </div>
@@ -654,7 +672,11 @@ export function Raw({ onStat, onPlay }: Props) {
       ) : null}
 
       {/* 设为头像：选择女优 → 归档移动到女优图集目录 */}
-      {avatarMsg ? <div className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-lg bg-ok-soft px-4 py-2 text-xs text-ok">{avatarMsg}</div> : null}
+      {avatarMsg || archiveMsg ? (
+        <div className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-lg bg-ok-soft px-4 py-2 text-xs text-ok">
+          {avatarMsg || archiveMsg}
+        </div>
+      ) : null}
       {avatarFile ? (
         <AvatarPicker
           file={avatarFile}
@@ -664,6 +686,24 @@ export function Raw({ onStat, onPlay }: Props) {
             setAvatarMsg(msg);
             setTimeout(() => setAvatarMsg(''), 3000);
             setRefreshKey((k) => k + 1); // 文件已移出 RawFiles → 刷新列表
+          }}
+        />
+      ) : null}
+
+      {/* 视频归档：左播放右表单 → 移动改名 + 作品落库 */}
+      {archiveFile ? (
+        <ArchiveDialog
+          file={archiveFile}
+          actresses={dictActresses}
+          countries={dictCountries}
+          tags={dictTags}
+          studios={dictStudios}
+          onClose={() => setArchiveFile(null)}
+          onDone={(msg) => {
+            setArchiveFile(null);
+            setArchiveMsg(msg);
+            setTimeout(() => setArchiveMsg(''), 4000);
+            setRefreshKey((k) => k + 1); // 视频已移出 RawFiles → 刷新列表
           }}
         />
       ) : null}
