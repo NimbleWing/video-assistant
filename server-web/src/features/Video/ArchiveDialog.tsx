@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { archiveVideo, fetchRawFiles } from '@/lib/api';
 import type { ActressRow, CountryRow, RawFileRow, StudioRow, TagRow } from '@/lib/types';
 import { VideoPlayer } from '@/components/VideoPlayer';
+import { RatingInput } from '@/components/RatingInput';
 import { NATIVE_VIDEO_EXTS } from '@/utils/media';
 
 interface Props {
@@ -36,6 +37,7 @@ export function ArchiveDialog({ file, actresses, countries, tags, studios, onClo
   const [title, setTitle] = useState(file.name);
   const [subtitle, setSubtitle] = useState('');
   const [code, setCode] = useState('');
+  const [rating, setRating] = useState<number | null>(null);
   const [selected, setSelected] = useState<ActressRow[]>([]);
   const [countryId, setCountryId] = useState(0);
   const [tagIds, setTagIds] = useState<Set<number>>(new Set());
@@ -131,6 +133,7 @@ export function ArchiveDialog({ file, actresses, countries, tags, studios, onClo
         title: t,
         subtitle: subtitle.trim() || undefined,
         code: code.trim() || undefined,
+        rating,
         actressIds: selected.map((a) => a.id),
         countryId,
         tagIds: [...tagIds],
@@ -202,6 +205,12 @@ export function ArchiveDialog({ file, actresses, countries, tags, studios, onClo
                   <span className="text-xs text-dim">番号（可选）</span>
                   <input className="mt-1 w-full" value={code} maxLength={60} onChange={(e) => setCode(e.target.value)} />
                 </label>
+                <div className="col-span-2">
+                  <span className="text-xs text-dim">评分（可选）</span>
+                  <div className="mt-1">
+                    <RatingInput value={rating} onChange={setRating} />
+                  </div>
+                </div>
               </div>
 
               <div className="mt-2 text-xs text-dim">演员（必选，第一位决定归档目录）</div>

@@ -9,11 +9,13 @@ export interface VideoRow {
   title: string;
   subtitle: string | null;
   code: string | null;
+  /** 评分（0-100，可空；与女优评分同约定）。 */
+  rating: number | null;
   video_file_id: number;
   cover_file_id: number | null;
   created_at: number;
   /** 归档视频行（缝合 raw_files：播放源判定 + 封面外的元数据）。正常恒有值（归档链路保证行不可删），null 仅防御库被手工改动等极端情况，前端归入「丢失」态。 */
-  video_file: { id: number; path: string; ext: string; size: number; duration: number | null } | null;
+  video_file: { id: number; path: string; ext: string; size: number; duration: number | null; width: number | null; height: number | null } | null;
   actresses: { id: number; name: string }[];
   tags: { id: number; name: string; sort: number }[];
   studios: { id: number; name: string }[];
@@ -38,6 +40,7 @@ export interface VideoArchiveRequest {
   title: string;
   subtitle?: string;
   code?: string;
+  rating?: number | null;
   actressIds: number[];
   countryId: number;
   tagIds: number[];

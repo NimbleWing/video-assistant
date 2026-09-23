@@ -84,31 +84,55 @@ export async function ffmpegInfo(): Promise<FfmpegInfo> {
   return { available: false, path: '', source: null };
 }
 
+/** 视频技术元数据（ffmpeg -i 一次探测全取；探测不到为 null）。 */
+export interface ProbeMeta {
+  duration: number | null;
+  width: number | null;
+  height: number | null;
+}
+
+const NO_META: ProbeMeta = { duration: null, width: null, height: null };
+
+/** 解析 ffmpeg -i stderr：Duration 行 + 首个 Video 流行的 WxH（分辨率只取流描述内的首个 NNNNxNNNN）。 */
+export function parseProbeOutput(out: string): ProbeMeta {
+  const d = out.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/);
+  const v = out.match(/Video:[^\n]*?(\d{2,5})x(\d{2,5})[,\s]/);
+  return {
+    duration: d ? Number(d[1]) * 3600 + Number(d[2]) * 60 + Number(d[3]) : null,
+    width: v ? Number(v[1]) : null,
+    height: v ? Number(v[2]) : null,
+  };
+}
+
 /**
- * ffmpeg -i 解析时长（stderr `Duration: HH:MM:SS.cc`）——时长缺失时的兜底（如 .ts 透传文件）。
- * 无输出参数时 ffmpeg 以退出码 1 结束，属预期。
+ * ffmpeg -i 探测视频元数据（时长/分辨率，stderr 解析）——扫描入库与归档回填共用。
+ * 无输出参数时 ffmpeg 以退出码 1 结束，属预期；任何失败（进程错误/超时）静默回退全 null。
  */
-export function ffmpegProbeDuration(ffmpegPath: string, file: string): Promise<number | null> {
+export function ffmpegProbeMeta(ffmpegPath: string, file: string): Promise<ProbeMeta> {
   return new Promise((resolve) => {
     const proc = spawn(ffmpegPath, ['-hide_banner', '-i', file], { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
     let out = '';
     const timer = setTimeout(() => {
       proc.kill();
-      resolve(null);
+      resolve(NO_META);
     }, 10_000);
     proc.stderr.on('data', (c: Buffer) => {
       out = (out + c.toString('utf8')).slice(-65536);
     });
     proc.on('error', () => {
       clearTimeout(timer);
-      resolve(null);
+      resolve(NO_META);
     });
     proc.on('exit', () => {
       clearTimeout(timer);
-      const m = out.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/);
-      resolve(m ? Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]) : null);
+      resolve(parseProbeOutput(out));
     });
   });
+}
+
+/** 只取时长（HLS 建会话兜底：如 .ts 透传文件）。 */
+export async function ffmpegProbeDuration(ffmpegPath: string, file: string): Promise<number | null> {
+  return (await ffmpegProbeMeta(ffmpegPath, file)).duration;
 }
 
 // ---------------------------------------------------------------------------

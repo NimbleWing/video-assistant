@@ -73,6 +73,8 @@ function row(partial: Partial<RawFileRow> = {}): RawFileRow {
     pending_missing: false,
     archived: false,
     duration: null,
+    width: null,
+    height: null,
     first_seen: 1,
     last_seen: 2,
     ...partial,
@@ -158,16 +160,17 @@ describe('Raw 扫描面板', () => {
     const es = FakeEventSource.instances.at(-1) as FakeEventSource;
     expect(es.url).toBe('/api/raw/scan/events');
     act(() => {
-      es.emit('progress', { running: true, currentVolume: 'd:', scanned: 5, videos: 3, images: 2, startedAt: 1 });
+      es.emit('progress', { running: true, currentVolume: 'd:', scanned: 5, videos: 3, images: 2, probed: 2, startedAt: 1 });
     });
     expect(screen.getByText(/正在扫描/).textContent).toContain('d:');
     expect(screen.getByText(/已处理/).textContent).toContain('5');
+    expect(screen.getByText(/已处理/).textContent).toContain('已探测元数据 2');
     fireEvent.click(screen.getByText('取消扫描'));
     await waitFor(() => expect(mockedCancel).toHaveBeenCalled());
     act(() => {
       es.emit('done', {
         running: false,
-        lastResult: { ms: 1500, newCount: 3, updatedCount: 1, movedCount: 0, missingCount: 0, warnings: [], canceled: false },
+        lastResult: { ms: 1500, newCount: 3, updatedCount: 1, movedCount: 0, missingCount: 0, probedCount: 0, warnings: [], canceled: false },
       });
     });
     expect(screen.getByText(/上次扫描：新增 3 · 更新 1/)).toBeTruthy();
@@ -183,7 +186,7 @@ describe('Raw 扫描面板', () => {
     act(() => {
       es.emit('done', {
         running: false,
-        lastResult: { ms: 10, newCount: 1, updatedCount: 0, movedCount: 0, missingCount: 1, warnings: [], canceled: false },
+        lastResult: { ms: 10, newCount: 1, updatedCount: 0, movedCount: 0, missingCount: 1, probedCount: 0, warnings: [], canceled: false },
       });
     });
     // done 后拉取待决策清单（refreshMissing）→ 横幅出现
@@ -309,7 +312,7 @@ describe('Raw 文件浏览', () => {
     act(() => {
       es.emit('done', {
         running: false,
-        lastResult: { ms: 1500, newCount: 1, updatedCount: 2, movedCount: 3, missingCount: 0, warnings: [], canceled: false },
+        lastResult: { ms: 1500, newCount: 1, updatedCount: 2, movedCount: 3, missingCount: 0, probedCount: 0, warnings: [], canceled: false },
       });
     });
     expect(screen.getByText(/合并移动 3/)).toBeTruthy();
@@ -382,7 +385,7 @@ describe('Raw 查重面板', () => {
     expect(mockedDup).toHaveBeenCalledTimes(1);
     const es = FakeEventSource.instances.at(-1) as FakeEventSource;
     act(() => {
-      es.emit('done', { running: false, lastResult: { ms: 10, newCount: 0, updatedCount: 0, movedCount: 0, missingCount: 0, warnings: [], canceled: false } });
+      es.emit('done', { running: false, lastResult: { ms: 10, newCount: 0, updatedCount: 0, movedCount: 0, missingCount: 0, probedCount: 0, warnings: [], canceled: false } });
     });
     await waitFor(() => expect(mockedDup).toHaveBeenCalledTimes(2));
   });

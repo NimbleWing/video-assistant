@@ -148,7 +148,9 @@ CREATE TABLE raw_files (
   missing         INTEGER NOT NULL DEFAULT 0, -- 用户已确认的消失标记（不重报，查重排除）
   pending_missing INTEGER NOT NULL DEFAULT 0, -- 扫描发现消失、待用户决策
   archived        INTEGER NOT NULL DEFAULT 0,  -- 1=发生过移动/改名（单行跟随：id 不变，path/volume 随文件更新）
-  duration        INTEGER,                    -- 视频时长（秒；归档流程 ffmpeg 探测回填，缺失为 NULL。时长是文件属性故归 raw_files）
+  duration        INTEGER,                    -- 视频时长（秒；技术元数据归 raw_files。扫描新建/变更时 ffmpeg 探测回填 + 扫描收尾存量补录，归档流程兜底，缺失为 NULL）
+  width           INTEGER,                    -- 视频宽（px；与 duration 同一次 ffmpeg -i 探测，2026-09-23 视频卡片复刻引入）
+  height          INTEGER,                    -- 视频高（px；同上）
   first_seen      INTEGER NOT NULL,
   last_seen       INTEGER NOT NULL
 );
@@ -248,6 +250,7 @@ CREATE TABLE videos (
   title          TEXT NOT NULL,        -- 标题（必填）
   subtitle       TEXT,                 -- 副标题（可选）
   code           TEXT,                 -- 番号（可选；落文件名 + 视频库卡片展示）
+  rating         INTEGER,              -- 评分 0-100，NULL=未评分（与女优评分同约定；归档表单录入 + 视频库卡片评分环修改，2026-09-23）
   video_file_id  INTEGER NOT NULL,     -- → raw_files.id（归档后的视频行；悬空容忍）
   cover_file_id  INTEGER,              -- → raw_files.id（归档后的封面行；可空）
   created_at     INTEGER NOT NULL      -- 归档时间（作品列表排序）
@@ -335,13 +338,14 @@ raw 已定决策记录：
 | `PUT /api/actresses/:id` | 页面 | 全量编辑（name/countryId/rating/tagIds/aliases，事务全量替换；disk 不可改；404）；**不联动磁盘目录** |
 | `POST /api/actresses/:id/delete` | 页面 | 删除 + 级联清 aliases/actress_tags（404）；头像文件保留（归档页可见） |
 | `POST /api/actresses/:id/avatar` | 页面 | 设为头像 `{fileId}`：raw 行必须 type='image'；物理移动（同盘 rename / 跨盘 copy+unlink）+ 改名 `head.{ext}` 至 `{disk}/Archives/{国家}/{女优}/图集/`；raw 行跟随新路径 archived=1 + raw_archive 登记 + raw_events 记 rename/move（真·归档）；更新 avatar_file_id；旧 head.* 保留 |
-| `POST /api/videos/archive` | 页面 | 视频归档（单片）：`{fileId, coverFileId?, title, subtitle?, code?, actressIds(≥1), countryId, tagIds, studioId?, kind:'single'}`——落盘至第一个演员目录树、命名 `{番号 标题 副标题}.{ext}`（空段跳过）、冲突 409、`archiveRawFileTo` 双文件移动 + videos 及四张关系表事务写入；收尾尽力回填 `raw_files.duration`（ffmpeg 可用时 `ffmpeg -i` 探测，缺失/失败静默跳过，不阻断归档） |
-| `GET /api/works?page=&size=&q=&kind=&actressId=&tagId=&studioId=` | 页面 | 作品分页列表（title/subtitle/code LIKE，`ORDER BY created_at DESC`）；kind 区分单片/剧集（视频库页传 single，将来剧集库页传 series）；actressId/tagId/studioId 为 EXISTS 子查询筛选；条目 join 演员名/标签/片商/国家 + `video_file`（path/ext/size/duration，缝合 raw_files；正常恒有值，null 仅防御库被手工改动）。注意：路径用 /api/works——避免与 video feature 语义混淆（历史注记：GET /api/videos 曾被已退役的 media feature 占用） |
+| `POST /api/videos/archive` | 页面 | 视频归档（单片）：`{fileId, coverFileId?, title, subtitle?, code?, rating?, actressIds(≥1), countryId, tagIds, studioId?, kind:'single'}`——落盘至第一个演员目录树、命名 `{番号 标题 副标题}.{ext}`（空段跳过）、冲突 409、`archiveRawFileTo` 双文件移动 + videos 及四张关系表事务写入；收尾尽力回填 `raw_files.duration/width/height`（ffmpeg 可用时 `ffmpeg -i` 一次探测，缺失/失败静默跳过，不阻断归档）；rating 0-100 或 null |
+| `PUT /api/videos/:id/rating` | 页面 | 卡片评分环修改：`{rating: 0-100 \| null}`（null=清除）；404/取值域 400；响应 `{ok, item}` |
+| `GET /api/works?page=&size=&q=&kind=&actressId=&tagId=&studioId=` | 页面 | 作品分页列表（title/subtitle/code LIKE，`ORDER BY created_at DESC`）；kind 区分单片/剧集（视频库页传 single，将来剧集库页传 series）；actressId/tagId/studioId 为 EXISTS 子查询筛选；条目含 rating + join 演员名/标签/片商/国家 + `video_file`（path/ext/size/duration/width/height，缝合 raw_files；正常恒有值，null 仅防御库被手工改动）。注意：路径用 /api/works——避免与 video feature 语义混淆（历史注记：GET /api/videos 曾被已退役的 media feature 占用） |
 | `POST /api/shutdown` | 扩展面板 | 优雅退出：响应 200 后延迟 200ms `process.exit(0)`（等响应刷盘）；面板「重启」按钮的下半程——先 shutdown 确认离线，再经 native messaging 拉起，避免双实例撞端口 |
 | `GET /api/raw/volumes` | 页面 | 原始资料盘符列表：探测 `A:`–`Z:` 根下 `RawFiles/` 目录，**只返回存在的盘**，附 statfs 总容量/剩余空间；网络盘等无盘符形态不支持 |
 | `POST /api/raw/scan` | 页面 | 启动原始资料扫描 `{volumes:['d:'], types:['video','image']}`：202 即返（异步任务）；已有任务 409；请求时二次校验 RawFiles 存在性（拔盘跳过记 warning） |
 | `POST /api/raw/scan/cancel` | 页面 | 协作式取消（文件/目录间查标志位；取消**不做**消失判定，已入库数据保留） |
-| `GET /api/raw/scan/status` | 页面 | 任务快照 `{running, currentVolume, scanned, videos, images, lastResult}`（无 SSE 环境兜底；结果保留到下次启动） |
+| `GET /api/raw/scan/status` | 页面 | 任务快照 `{running, currentVolume, scanned, videos, images, probed, lastResult}`（无 SSE 环境兜底；结果保留到下次启动；lastResult 含 probedCount 探测数） |
 | `GET /api/raw/scan/events` | 页面 | **SSE**：连接即推 `snapshot` → 运行中 ~500ms 推 `progress` → 结束推 `done`（含 missingCount 摘要）；15s 心跳注释行保活 |
 | `GET /api/raw/files?page=&size=&q=&type=&volume=&missing=&archived=` | 页面 | 分页 + 名称搜索 + 类型/盘符筛选，`ORDER BY last_seen DESC, id DESC`；missing 取值 hide(默认)/only/all；**archived 取值 hide(默认，仅未归档——归档行在归档页有专属视图)/only(仅已归档)/all** |
 | `GET /api/raw/missing` | 页面 | 待决策消失清单（pending_missing=1，全量返回） |
@@ -363,7 +367,8 @@ raw 已定决策记录：
 
 - **范围**：所选盘符根下的 `RawFiles/` 目录递归遍历（用户自管目录，无系统目录排除清单）；跳过符号链接/junction（防循环）；无权限子目录静默跳过。
 - **任务模型**：全局单任务（POST 时已有任务 → 409）；202 即返，进度经 SSE 推送（见 §5）；协作式取消——取消收尾不做消失判定。
-- **单文件流程**：stat → 按扩展名分派类型（未勾选的类型直接跳过）→ 查库中行：`path+size+mtime` 三键未变 → 只刷 `last_seen`（missing/pending_missing 归 0）；否则读头 64KB（`.ts` 在同一缓冲区做魔数嗅探，不过则整文件跳过）→ 读中/尾 64KB → 抽样 SHA-256 → upsert（hash/size/mtime/last_seen 更新，missing/pending_missing 归 0）。
+- **单文件流程**：stat → 按扩展名分派类型（未勾选的类型直接跳过）→ 查库中行：`path+size+mtime` 三键未变 → 只刷 `last_seen`（missing/pending_missing 归 0）；否则读头 64KB（`.ts` 在同一缓冲区做魔数嗅探，不过则整文件跳过）→ 读中/尾 64KB → 抽样 SHA-256 → upsert（hash/size/mtime/last_seen 更新，missing/pending_missing 归 0；**变更行顺带清空 duration/width/height**——内容变了旧元数据即失效）。
+- **视频元数据探测（2026-09-23）**：技术元数据（duration/width/height）是文件属性，归 raw 域在扫描链路记录——新建/变更的视频行 upsert 后顺带 `ffmpeg -i` 一次探测三项（`lib/hls-core` 的 `ffmpegProbeMeta`，stderr 解析 Duration + 首个 Video 流 WxH）；ffmpeg 不可用/探测失败静默留 NULL（归档流程兜底）。**存量补录**：扫描正常收尾时对本次作用域内 `duration IS NULL` 的现存视频统一探测一轮（三键未变走跳过分支的存量行由此补齐，失败留 NULL 下轮重试）。探测数计入任务状态 `probed` 与结果 `probedCount`；取消在文件间生效。配对合并时新行已探测的元数据经 COALESCE 转移给续命旧行。
 - **消失判定（作用域化）**：扫描正常完成后，对本次**实际扫过且遍历成功**的每个 (扫描根, 类型) 组合：行路径在扫描根内（前缀匹配）且 `last_seen < 本次 token 且 missing=0` 的行置 `pending_missing=1`。已标 missing=1 的不重报；未扫的类型/盘符的行不受影响（勾选类型变化不产生假消失）。**根外豁免（2026-09-21）**：路径不在扫描根内的行（头像移入 Archives、手动移出 RawFiles 的策展文件）不判——扫描对它们本就无从「看见」；范围内归档行照判（配对/待决策维持原语义）。
 - **移动/改名自动判定（配对合并）**：消失判定**之前**执行——本次会话累计的消失行 × 新建行按 hash 分组配对，hash 满足「恰好 1 消失 + 1 新建，且全库无第三条 missing=0 同 hash 行」时：旧行保留 id/name/first_seen，UPDATE path/volume/last_seen 并置 `archived=1`，删除本次误建的新行；`raw_archive` upsert（无行则建，改名更新 name，updated_at=token）；`raw_events` 按路径差异记 `rename`（同目录不同名）/`move`（不同目录），两者同发记两条。配对行 last_seen 已=token，自然不进 pending。取消收尾不配对（与不判消失同理）。
 - **待决策**：`GET /api/raw/missing` 拉清单，`POST /api/raw/missing/resolve` 批量 delete（删行）或 mark（missing=1）；不决策下次扫描继续上报。

@@ -33,7 +33,7 @@ const studios: StudioRow[] = [{ id: 21, name: '某片商', has_logo: false, vide
 const file: RawFileRow = {
   id: 99, path: 'c:/rawfiles/clip.mp4', hash: 'h', name: 'clip', ext: 'mp4', type: 'video',
   size: 100, mtime: 1, volume: 'c:', missing: false, pending_missing: false, archived: false,
-  duration: null, first_seen: 1, last_seen: 1,
+  duration: null, width: null, height: null, first_seen: 1, last_seen: 1,
 };
 
 function boot() {
@@ -90,6 +90,7 @@ describe('ArchiveDialog', () => {
     fireEvent.change(screen.getByLabelText(/标题（必填）/), { target: { value: '作品名' } });
     fireEvent.change(screen.getByLabelText(/番号（可选）/), { target: { value: 'ABC-1' } });
     fireEvent.change(screen.getByLabelText(/片商（可选）/, { selector: 'select' }), { target: { value: '21' } });
+    fireEvent.change(screen.getByLabelText('评分'), { target: { value: '90' } });
     mockedArchive.mockResolvedValue({ ok: true, item: {} as never });
     fireEvent.click(screen.getByText('确认归档'));
     await waitFor(() =>
@@ -99,6 +100,7 @@ describe('ArchiveDialog', () => {
         title: '作品名',
         subtitle: undefined,
         code: 'ABC-1',
+        rating: 90,
         actressIds: [1, 2],
         countryId: 1,
         tagIds: expect.arrayContaining([11, 12]),

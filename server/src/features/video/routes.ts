@@ -1,16 +1,25 @@
-// 作品 API 路由：POST /api/videos/archive（原始资料页归档流）+ GET /api/works（作品列表，视频库页地基）。
+// 作品 API 路由：POST /api/videos/archive（原始资料页归档流）+ GET /api/works（作品列表，视频库页地基）
+// + PUT /api/videos/:id/rating（卡片评分环修改）。
 // 归档流程：校验 → 目标目录（第一个演员的目录树）→ 命名 stem（番号 标题 副标题，空段跳过）
-// → 冲突 409 预检 → archiveRawFileTo 双文件移动 → 尽力回填时长（ffmpeg 可用才探测）
+// → 冲突 409 预检 → archiveRawFileTo 双文件移动 → 尽力回填时长/分辨率（ffmpeg 可用才探测）
 // → insertVideo 事务落库。
 import { promises as fs } from 'node:fs';
 import { asRecord, HttpError, json, readJson, type Route } from '../../lib/http.ts';
-import { ffmpegInfo, ffmpegProbeDuration } from '../../lib/hls-core.ts';
+import { ffmpegInfo, ffmpegProbeMeta } from '../../lib/hls-core.ts';
 import { dirName } from '../../lib/paths.ts';
 import { getActress } from '../actress/actresses.ts';
-import { archiveRawFileTo, getRawFile, setRawDuration } from '../raw/files.ts';
-import { insertVideo, listVideos } from './videos.ts';
+import { archiveRawFileTo, getRawFile, setRawVideoMeta } from '../raw/files.ts';
+import { getVideo, insertVideo, listVideos, setVideoRating } from './videos.ts';
 
 const TITLE_MAX = 120;
+
+/** 评分解析：null=未评分/清除；否则须 0-100 整数（与女优评分同约定）。 */
+function parseRating(raw: unknown): number | null {
+  if (raw == null) return null;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0 || n > 100) throw new HttpError(400, '评分须为 0-100 整数');
+  return n;
+}
 
 const listRoute: Route['handler'] = ({ res, url }) => {
   const r = listVideos({
@@ -84,11 +93,13 @@ const archiveRoute: Route['handler'] = async ({ req, res }) => {
   await archiveRawFileTo(fileId, `${dir}/${stem}.${videoRow.ext}`);
   if (coverRow) await archiveRawFileTo(coverFileId!, `${dir}/${stem}.${coverRow.ext}`);
 
-  // 时长回填（尽力而为：ffmpeg 缺失/探测失败静默跳过，不阻断归档；<1s）
+  // 时长/分辨率回填（尽力而为：ffmpeg 缺失/探测失败静默跳过，不阻断归档；<1s）
   const ff = await ffmpegInfo();
   if (ff.available) {
-    const dur = await ffmpegProbeDuration(ff.path, `${dir}/${stem}.${videoRow.ext}`);
-    if (dur != null && dur > 0) setRawDuration(fileId, Math.round(dur));
+    const m = await ffmpegProbeMeta(ff.path, `${dir}/${stem}.${videoRow.ext}`);
+    if (m.duration != null && m.duration > 0) {
+      setRawVideoMeta(fileId, { duration: Math.round(m.duration), width: m.width, height: m.height });
+    }
   }
 
   const item = insertVideo({
@@ -96,6 +107,7 @@ const archiveRoute: Route['handler'] = async ({ req, res }) => {
     title,
     subtitle: subtitle || null,
     code: code || null,
+    rating: parseRating(body?.rating),
     videoFileId: fileId,
     coverFileId,
     actressIds,
@@ -106,8 +118,19 @@ const archiveRoute: Route['handler'] = async ({ req, res }) => {
   json(res, 200, { ok: true, item });
 };
 
+/** 卡片评分环修改：{ rating: 0-100 | null }。 */
+const ratingRoute: Route['handler'] = async ({ req, res, params }) => {
+  const id = Number(params.id);
+  if (!Number.isInteger(id) || id <= 0) throw new HttpError(400, 'bad id');
+  if (!getVideo(id)) throw new HttpError(404, '作品不存在');
+  const body = asRecord(await readJson(req));
+  const item = setVideoRating(id, parseRating(body?.rating));
+  json(res, 200, { ok: true, item });
+};
+
 export const videoRoutes: Route[] = [
   // 历史注记：GET /api/videos 曾被已退役的 media feature 占用，作品域沿用 /api/works
   { method: 'GET', path: '/api/works', handler: listRoute },
   { method: 'POST', path: '/api/videos/archive', handler: archiveRoute },
+  { method: 'PUT', path: '/api/videos/:id/rating', handler: ratingRoute },
 ];

@@ -32,6 +32,8 @@ db.exec(`
     pending_missing INTEGER NOT NULL DEFAULT 0,
     archived        INTEGER NOT NULL DEFAULT 0,
     duration        INTEGER,
+    width           INTEGER,
+    height          INTEGER,
     first_seen      INTEGER NOT NULL,
     last_seen       INTEGER NOT NULL
   );
@@ -46,6 +48,17 @@ try {
 // duration 列（2026-09-23 视频库页：归档流程回填时长）
 try {
   db.exec('ALTER TABLE raw_files ADD duration INTEGER');
+} catch {
+  /* 列已存在 */
+}
+// width/height 列（2026-09-23 视频卡片复刻：扫描流程 ffmpeg 探测分辨率）
+try {
+  db.exec('ALTER TABLE raw_files ADD width INTEGER');
+} catch {
+  /* 列已存在 */
+}
+try {
+  db.exec('ALTER TABLE raw_files ADD height INTEGER');
 } catch {
   /* 列已存在 */
 }
@@ -91,15 +104,18 @@ export function touchRawSeen(path: string, seen: number): void {
   db.prepare('UPDATE raw_files SET last_seen = ?, missing = 0, pending_missing = 0 WHERE path = ?').run(seen, path);
 }
 
-/** 扫描 upsert：按 path 唯一，更新 hash/size/mtime/last_seen 并清除消失标记。 */
-export function upsertRawScanned(r: RawScannedRow): void {
-  db.prepare(`
+/** 扫描 upsert：按 path 唯一，更新 hash/size/mtime/last_seen 并清除消失标记。返回行 id（探测回填用）。 */
+export function upsertRawScanned(r: RawScannedRow): number {
+  const row = db.prepare(`
     INSERT INTO raw_files (path, hash, name, ext, type, size, mtime, volume, first_seen, last_seen)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(path) DO UPDATE SET
       hash = excluded.hash, size = excluded.size, mtime = excluded.mtime,
-      last_seen = excluded.last_seen, missing = 0, pending_missing = 0
-  `).run(r.path, r.hash, r.name, r.ext, r.type, r.size, r.mtime, r.volume, r.seen, r.seen);
+      last_seen = excluded.last_seen, missing = 0, pending_missing = 0,
+      duration = NULL, width = NULL, height = NULL
+    RETURNING id
+  `).get(r.path, r.hash, r.name, r.ext, r.type, r.size, r.mtime, r.volume, r.seen, r.seen) as SqlRow;
+  return numOf(row.id);
 }
 
 /**
@@ -174,6 +190,8 @@ function toRow(r: SqlRow): RawFileRow {
     pending_missing: numOf(r.pending_missing) === 1,
     archived: numOf(r.archived) === 1,
     duration: r.duration == null ? null : numOf(r.duration),
+    width: r.width == null ? null : numOf(r.width),
+    height: r.height == null ? null : numOf(r.height),
     first_seen: numOf(r.first_seen),
     last_seen: numOf(r.last_seen),
   };
@@ -182,7 +200,7 @@ function toRow(r: SqlRow): RawFileRow {
 /** 按 path 取完整行（配对时由扫描器调用）。 */
 export function getRawByPath(path: string): RawFileRow | null {
   const row = db.prepare(
-    'SELECT id, path, hash, name, ext, type, size, mtime, volume, missing, pending_missing, archived, first_seen, last_seen FROM raw_files WHERE path = ?',
+    'SELECT id, path, hash, name, ext, type, size, mtime, volume, missing, pending_missing, archived, duration, width, height, first_seen, last_seen FROM raw_files WHERE path = ?',
   ).get(path) as SqlRow | undefined;
   return row ? toRow(row) : null;
 }
@@ -216,7 +234,7 @@ export function listRawFiles(opt: ListRawOpt): { total: number; items: RawFileRo
   const wsql = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const total = numOf((db.prepare(`SELECT COUNT(*) AS n FROM raw_files ${wsql}`).get(...params) as SqlRow).n);
   const items = (db.prepare(
-    `SELECT id, path, hash, name, ext, type, size, mtime, volume, missing, pending_missing, archived, first_seen, last_seen
+    `SELECT id, path, hash, name, ext, type, size, mtime, volume, missing, pending_missing, archived, duration, width, height, first_seen, last_seen
      FROM raw_files ${wsql} ORDER BY last_seen DESC, id DESC LIMIT ? OFFSET ?`,
   ).all(...params, size, (page - 1) * size) as SqlRow[]).map(toRow);
   return { total, items };
@@ -225,7 +243,7 @@ export function listRawFiles(opt: ListRawOpt): { total: number; items: RawFileRo
 /** 待决策消失清单（全量返回，量级 = 上次消失数）。 */
 export function listPendingMissing(): RawFileRow[] {
   return (db.prepare(
-    'SELECT id, path, hash, name, ext, type, size, mtime, volume, missing, pending_missing, archived, first_seen, last_seen FROM raw_files WHERE pending_missing = 1 ORDER BY path',
+    'SELECT id, path, hash, name, ext, type, size, mtime, volume, missing, pending_missing, archived, duration, width, height, first_seen, last_seen FROM raw_files WHERE pending_missing = 1 ORDER BY path',
   ).all() as SqlRow[]).map(toRow);
 }
 
@@ -251,7 +269,7 @@ export function listRawDuplicates(opt: { page?: number; size?: number }): {
   if (hashes.length) {
     const byHash = new Map<string, RawFileRow[]>();
     for (const r of db.prepare(
-      `SELECT id, path, hash, name, ext, type, size, mtime, volume, missing, pending_missing, archived, first_seen, last_seen
+      `SELECT id, path, hash, name, ext, type, size, mtime, volume, missing, pending_missing, archived, duration, width, height, first_seen, last_seen
        FROM raw_files WHERE ${live}
        AND hash IN (${hashes.map(() => '?').join(',')}) ORDER BY path`,
     ).all(...hashes) as SqlRow[]) {
@@ -286,7 +304,7 @@ export function rawVolumeStats(): RawVolumeStat[] {
 /** 按 id 取行（内容端点 / HLS 适配层用）。 */
 export function getRawFile(id: number): RawFileRow | null {
   const row = db.prepare(
-    'SELECT id, path, hash, name, ext, type, size, mtime, volume, missing, pending_missing, archived, duration, first_seen, last_seen FROM raw_files WHERE id = ?',
+    'SELECT id, path, hash, name, ext, type, size, mtime, volume, missing, pending_missing, archived, duration, width, height, first_seen, last_seen FROM raw_files WHERE id = ?',
   ).get(id) as SqlRow | undefined;
   return row ? toRow(row) : null;
 }
@@ -297,7 +315,7 @@ export function getRawFilesByIds(ids: number[]): Map<number, RawFileRow> {
   if (!ids.length) return m;
   const ph = ids.join(',');
   for (const r of db.prepare(
-    `SELECT id, path, hash, name, ext, type, size, mtime, volume, missing, pending_missing, archived, duration, first_seen, last_seen
+    `SELECT id, path, hash, name, ext, type, size, mtime, volume, missing, pending_missing, archived, duration, width, height, first_seen, last_seen
      FROM raw_files WHERE id IN (${ph})`,
   ).all() as SqlRow[]) {
     m.set(numOf(r.id), toRow(r));
@@ -305,9 +323,23 @@ export function getRawFilesByIds(ids: number[]): Map<number, RawFileRow> {
   return m;
 }
 
-/** 回填视频时长（秒；归档流程 ffmpeg 探测后调用，探测失败不写）。 */
-export function setRawDuration(id: number, seconds: number): void {
-  db.prepare('UPDATE raw_files SET duration = ? WHERE id = ?').run(seconds, id);
+/** 回填视频技术元数据（时长秒/分辨率；扫描与归档流程 ffmpeg 探测后调用，探测失败不写）。 */
+export function setRawVideoMeta(id: number, m: { duration: number | null; width: number | null; height: number | null }): void {
+  db.prepare('UPDATE raw_files SET duration = ?, width = ?, height = ? WHERE id = ?').run(m.duration, m.width, m.height, id);
+}
+
+/**
+ * 存量补录候选：作用域内未探测过的现存视频行（duration IS NULL）。
+ * 探测失败不写库（保持 NULL，下次扫描重试——坏文件每次白跑一次 ffmpeg，换取语义简单）。
+ */
+export function listUnprobedVideos(scopes: { volume: string; root: string }[]): { id: number; path: string }[] {
+  if (!scopes.length) return [];
+  const conds = scopes.map(() => '(volume = ? AND substr(path, 1, ?) = ?)').join(' OR ');
+  return (db.prepare(
+    `SELECT id, path FROM raw_files WHERE type = 'video' AND duration IS NULL
+     AND missing = 0 AND pending_missing = 0 AND (${conds}) ORDER BY path`,
+  ).all(...scopes.flatMap((s) => [s.volume, s.root.length, s.root])) as SqlRow[])
+    .map((r) => ({ id: numOf(r.id), path: strOf(r.path) }));
 }
 
 /**
@@ -401,7 +433,7 @@ export function listScopeDisappeared(scopes: { volume: string; type: RawType }[]
   if (!scopes.length) return [];
   const conds = scopes.map(() => '(volume = ? AND type = ?)').join(' OR ');
   return (db.prepare(
-    `SELECT id, path, hash, name, ext, type, size, mtime, volume, missing, pending_missing, archived, first_seen, last_seen
+    `SELECT id, path, hash, name, ext, type, size, mtime, volume, missing, pending_missing, archived, duration, width, height, first_seen, last_seen
      FROM raw_files WHERE (${conds}) AND last_seen < ? AND missing = 0 AND pending_missing = 0`,
   ).all(...scopes.flatMap((s) => [s.volume, s.type]), token) as SqlRow[]).map(toRow);
 }
@@ -428,8 +460,8 @@ function baseOf(p: string): string {
 
 /**
  * 配对合并：旧行保留 id/name(最初名)/first_seen，UPDATE 为新位置并置 archived=1；
- * 删除本次误建的新行；raw_archive upsert（改名更新最新名）；按路径差异记 rename/move 事件（可两条）。
- * 事务保证「合并 + 归档 + 事件」原子生效。返回产生的事件种类。
+ * 删除本次误建的新行（新行若已探测元数据，经 COALESCE 转移给旧行）；raw_archive upsert（改名更新最新名）；
+ * 按路径差异记 rename/move 事件（可两条）。事务保证「合并 + 归档 + 事件」原子生效。返回产生的事件种类。
  */
 export function mergeMove(oldRow: RawFileRow, newRow: RawFileRow, token: number): ('rename' | 'move')[] {
   const kinds: ('rename' | 'move')[] = [];
@@ -446,8 +478,13 @@ export function mergeMove(oldRow: RawFileRow, newRow: RawFileRow, token: number)
     db.prepare('DELETE FROM raw_files WHERE id = ?').run(newRow.id);
     db.prepare(
       `UPDATE raw_files SET path = ?, volume = ?, size = ?, mtime = ?, hash = ?, last_seen = ?,
-       missing = 0, pending_missing = 0, archived = 1 WHERE id = ?`,
-    ).run(newRow.path, newRow.volume, newRow.size, newRow.mtime, newRow.hash, token, oldRow.id);
+       missing = 0, pending_missing = 0, archived = 1,
+       duration = COALESCE(?, duration), width = COALESCE(?, width), height = COALESCE(?, height)
+       WHERE id = ?`,
+    ).run(
+      newRow.path, newRow.volume, newRow.size, newRow.mtime, newRow.hash, token,
+      newRow.duration, newRow.width, newRow.height, oldRow.id,
+    );
     db.prepare(
       `INSERT INTO raw_archive (file_id, name, created_at, updated_at) VALUES (?, ?, ?, ?)
        ON CONFLICT(file_id) DO UPDATE SET name = excluded.name, updated_at = excluded.updated_at`,
@@ -556,8 +593,8 @@ export function listArchivedFiles(opt: ListArchivedOpt): { total: number; items:
   const wsql = `WHERE ${where.join(' AND ')}`;
   const total = numOf((db.prepare(`SELECT COUNT(*) AS n FROM raw_files f ${wsql}`).get(...params) as SqlRow).n);
   const items = (db.prepare(
-    `SELECT f.id, f.path, f.hash, f.name, f.ext, f.type, f.size, f.mtime, f.volume, f.missing,
-            f.pending_missing, f.archived, f.first_seen, f.last_seen,
+      `SELECT f.id, f.path, f.hash, f.name, f.ext, f.type, f.size, f.mtime, f.volume, f.missing,
+            f.pending_missing, f.archived, f.duration, f.width, f.height, f.first_seen, f.last_seen,
             COALESCE(a.name, f.name) AS latest_name,
             (SELECT COUNT(*) FROM raw_events e WHERE e.file_id = f.id) AS event_count
      FROM raw_files f LEFT JOIN raw_archive a ON a.file_id = f.id

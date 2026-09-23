@@ -429,6 +429,7 @@ export function Raw({ onStat, onPlay, onView }: Props) {
               <span className="text-[13px] text-dim">
                 正在扫描 <b className="font-mono uppercase text-ink">{status?.currentVolume}</b> · 已处理{' '}
                 {status?.scanned ?? 0}（视频 {status?.videos ?? 0} · 图片 {status?.images ?? 0}）
+                {(status?.probed ?? 0) > 0 ? ` · 已探测元数据 ${status?.probed}` : ''}
               </span>
               <button type="button" className="act" onClick={() => void cancelRawScan().catch(() => {})}>
                 取消扫描
@@ -452,7 +453,7 @@ export function Raw({ onStat, onPlay, onView }: Props) {
         ) : last ? (
           <div className="mt-3 text-xs text-dim" title={last.warnings.join('\n')}>
             上次扫描：新增 {last.newCount} · 更新 {last.updatedCount} · 合并移动 {last.movedCount} · 待决策消失{' '}
-            {last.missingCount} · 用时 {Math.max(1, Math.round(last.ms / 1000))}s
+            {last.missingCount} · 探测元数据 {last.probedCount} · 用时 {Math.max(1, Math.round(last.ms / 1000))}s
             {last.canceled ? ' · 已取消（未判定消失）' : ''}
             {last.warnings.length ? ` · 警告 ${last.warnings.length} 条` : ''}
           </div>

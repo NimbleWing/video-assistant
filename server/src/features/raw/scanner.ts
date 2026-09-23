@@ -2,6 +2,7 @@
 // 进度不经监听器分发——SSE 路由以 ~500ms 轮询 rawScanStatus() 快照推送（内存对象读取零成本，天然节流）。
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { ffmpegInfo, ffmpegProbeMeta, type FfmpegInfo } from '../../lib/hls-core.ts';
 import { getMeta, setMeta } from '../../lib/meta.ts';
 import { normPath } from '../../lib/paths.ts';
 import { HttpError } from '../../lib/http.ts';
@@ -10,8 +11,10 @@ import {
   findRawByPath,
   getRawByPath,
   listScopeDisappeared,
+  listUnprobedVideos,
   markPendingMissing,
   mergeMove,
+  setRawVideoMeta,
   touchRawSeen,
   upsertRawScanned,
   rawTypeOfExt,
@@ -28,6 +31,8 @@ interface ScanState {
   scanned: number;
   videos: number;
   images: number;
+  /** 已成功探测元数据的视频数（新建 + 存量补录）。 */
+  probed: number;
   cancelRequested: boolean;
   canceled: boolean;
 }
@@ -60,6 +65,7 @@ export function rawScanStatus(): RawScanStatus {
       scanned: state.scanned,
       videos: state.videos,
       images: state.images,
+      probed: state.probed,
       lastResult: null,
     };
   }
@@ -122,6 +128,7 @@ export function startRawScan(volumesRaw: unknown, typesRaw: unknown): void {
     scanned: 0,
     videos: 0,
     images: 0,
+    probed: 0,
     cancelRequested: false,
     canceled: false,
   };
@@ -157,18 +164,21 @@ export function scanRawRoots(scopes: ScanScope[], types: RawType[]): Promise<Raw
     scanned: 0,
     videos: 0,
     images: 0,
+    probed: 0,
     cancelRequested: false,
     canceled: false,
   };
   return executeScan(scopes, st);
 }
 
-/** 任务执行体：逐盘遍历入库 → 移动/改名配对合并 → 作用域化消失判定（取消两步都不做）。 */
+/** 任务执行体：逐盘遍历入库（新建/变更视频顺带 ffmpeg 探测元数据）→ 移动/改名配对合并 → 作用域化消失判定 → 存量元数据补录（取消三步都不做）。 */
 async function executeScan(scopes: ScanScope[], st: ScanState): Promise<RawScanResult> {
   const t0 = Date.now();
   const token = nextToken();
   const warnings: string[] = [];
   const completed: { volume: string; root: string; type: RawType }[] = [];
+  // 视频元数据探测：ffmpeg 可用才启用（扫图片任务不触发 PATH 探测）
+  const ff: FfmpegInfo = st.types.includes('video') ? await ffmpegInfo() : { available: false, path: '', source: null };
   let newCount = 0;
   let updatedCount = 0;
   const newPaths: string[] = [];
@@ -185,7 +195,7 @@ async function executeScan(scopes: ScanScope[], st: ScanState): Promise<RawScanR
       continue;
     }
     try {
-      const r = await walkRoot(sc.root, sc.volume, st, token, newPaths);
+      const r = await walkRoot(sc.root, sc.volume, st, token, newPaths, ff);
       newCount += r.newCount;
       updatedCount += r.updatedCount;
       const rootNorm = normPath(sc.root); // 判定作用域按归一化路径前缀
@@ -201,7 +211,24 @@ async function executeScan(scopes: ScanScope[], st: ScanState): Promise<RawScanR
     updatedCount += movedCount; // 旧行被续命更新
   }
   const missingCount = st.canceled ? 0 : markPendingMissing(completed, token);
-  return { ms: Date.now() - t0, newCount, updatedCount, movedCount, missingCount, warnings, canceled: st.canceled };
+  // 存量补录：本次作用域内未探测的现存视频（三键未变走跳过分支的存量行）统一探测一轮
+  if (!st.canceled && ff.available) {
+    const roots = new Map<string, { volume: string; root: string }>();
+    for (const c of completed) if (c.type === 'video') roots.set(`${c.volume}${c.root}`, c);
+    for (const row of listUnprobedVideos([...roots.values()])) {
+      if (st.cancelRequested) break;
+      await probeVideoMeta(ff, row.id, row.path, st);
+    }
+  }
+  return { ms: Date.now() - t0, newCount, updatedCount, movedCount, missingCount, probedCount: st.probed, warnings, canceled: st.canceled };
+}
+
+/** 探测单文件并回填（成功才写库、计数；失败静默留 NULL 待下轮重试）。 */
+async function probeVideoMeta(ff: FfmpegInfo, id: number, file: string, st: ScanState): Promise<void> {
+  const m = await ffmpegProbeMeta(ff.path, file);
+  if (m.duration == null || m.duration <= 0) return;
+  setRawVideoMeta(id, { duration: Math.round(m.duration), width: m.width, height: m.height });
+  st.probed += 1;
 }
 
 /**
@@ -238,13 +265,14 @@ function pairMoves(newPaths: string[], completed: { volume: string; type: RawTyp
   return moved;
 }
 
-/** 递归遍历单盘 RawFiles：逐文件「三键跳过 / 抽样 hash / .ts 嗅探」后入库（新建路径累计进 newPaths 供配对）。 */
+/** 递归遍历单盘 RawFiles：逐文件「三键跳过 / 抽样 hash / .ts 嗅探」后入库，新建/变更的视频顺带探测元数据（新建路径累计进 newPaths 供配对）。 */
 async function walkRoot(
   root: string,
   vol: string,
   st: ScanState,
   token: number,
   newPaths: string[],
+  ff: FfmpegInfo,
 ): Promise<{ newCount: number; updatedCount: number }> {
   let newCount = 0;
   let updatedCount = 0;
@@ -293,7 +321,7 @@ async function walkRoot(
       if (!sample) continue; // 读取失败：静默跳过
       if (ext === 'ts' && !isMpegTsHead(sample.head)) continue; // TypeScript 代码文件冒充视频
       const base = ent.name;
-      upsertRawScanned({
+      const id = upsertRawScanned({
         path: np,
         hash: sample.hash,
         name: base.slice(0, base.length - ext.length - 1), // 保留原始大小写（展示用）
@@ -304,6 +332,8 @@ async function walkRoot(
         volume: vol,
         seen: token,
       });
+      // 新建/变更的视频顺带探测时长/分辨率（ffmpeg 缺席静默跳过，归档流程兜底）
+      if (type === 'video' && ff.available) await probeVideoMeta(ff, id, np, st);
       if (prev) updatedCount += 1;
       else {
         newCount += 1;

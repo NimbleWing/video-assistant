@@ -1,7 +1,33 @@
-// HLS 纯函数单测：清单生成 / 段号解析 / ffmpeg 参数（会话状态机依赖真实进程，不在此覆盖）。
+// HLS 纯函数单测：清单生成 / 段号解析 / ffmpeg 参数 / 探测输出解析（会话状态机依赖真实进程，不在此覆盖）。
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
-import { buildFfmpegArgs, buildManifest, parseSegmentParam, segmentCount } from './hls-core.ts';
+import { buildFfmpegArgs, buildManifest, parseProbeOutput, parseSegmentParam, segmentCount } from './hls-core.ts';
+
+describe('parseProbeOutput', () => {
+  const STD = `Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'v.mp4':
+  Duration: 00:23:43.52, start: 0.000000, bitrate: 5230 kb/s
+  Stream #0:0[0x1](und): Video: h264 (High) (avc1 / 0x31637661), yuv420p(progressive), 1920x1080 [SAR 1:1 DAR 16:9], 23.98 fps, 23.98 tbr, 16k tbn (default)
+  Stream #0:1[0x2](und): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 128 kb/s (default)`;
+
+  it('时长 + 分辨率（首个 Video 流行的 WxH）', () => {
+    expect(parseProbeOutput(STD)).toEqual({ duration: 1423.52, width: 1920, height: 1080 });
+  });
+
+  it('只取 Video 流的分辨率（音频流 48000 Hz 等数字不干扰）', () => {
+    const m = parseProbeOutput(STD);
+    expect(m.width).not.toBe(48000);
+  });
+
+  it('缺 Duration / 缺 Video 流 → 对应字段 null', () => {
+    expect(parseProbeOutput('Stream #0:0: Video: hevc, yuv420p, 3840x2160, 25 fps')).toEqual({
+      duration: null,
+      width: 3840,
+      height: 2160,
+    });
+    expect(parseProbeOutput('Duration: 01:00:00.00, start: 0.0')).toEqual({ duration: 3600, width: null, height: null });
+    expect(parseProbeOutput('')).toEqual({ duration: null, width: null, height: null });
+  });
+});
 
 describe('segmentCount', () => {
   it('floor(duration/2)，至少 1 段', () => {

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { fetchActresses, fetchStudios, fetchTags, fetchWorks } from '@/lib/api';
+import { fetchActresses, fetchStudios, fetchTags, fetchWorks, setVideoRating } from '@/lib/api';
 import type { PlaySource } from '@/components/PlayerDialog';
+import type { ViewImage } from '@/components/ImageViewer';
 import { NATIVE_VIDEO_EXTS } from '@/utils/media';
 import { Pager } from '@/components/Pager';
 import type { ActressesResponse, StudiosResponse, TagsResponse, VideoRow, WorksResponse } from '@/lib/types';
@@ -12,10 +13,12 @@ const PAGE_SIZE_OPTIONS = [20, 50, 100];
 interface Props {
   onStat: (text: string) => void;
   onPlay: (src: PlaySource) => void;
+  /** 封面看大图（App 层 ImageViewer）。 */
+  onView: (items: ViewImage[], index: number) => void;
 }
 
-/** 视频库页：作品域 kind=single 卡片浏览（搜索 + 演员/标签/片商筛选 + 播放探活）。 */
-export function Video({ onStat, onPlay }: Props) {
+/** 视频库页：作品域 kind=single 卡片浏览（搜索 + 演员/标签/片商筛选 + 播放探活 + 评分修改）。 */
+export function Video({ onStat, onPlay, onView }: Props) {
   const [qInput, setQInput] = useState('');
   const [q, setQ] = useState('');
   const [actressId, setActressId] = useState(0);
@@ -105,6 +108,22 @@ export function Video({ onStat, onPlay }: Props) {
     }
   };
 
+  /** 封面看大图：仅当前条目（与 Raw 页同走 App 层 ImageViewer）。 */
+  const view = (it: VideoRow) => {
+    if (it.cover_file_id == null) return;
+    onView([{ src: `/api/raw/file/${it.cover_file_id}/content`, alt: it.title }], 0);
+  };
+
+  /** 评分修改：落库后以响应行就地替换（保持筛选/分页不重拉）。 */
+  const rate = async (it: VideoRow, rating: number | null) => {
+    try {
+      const r = await setVideoRating(it.id, rating);
+      setData((d) => (d ? { ...d, items: d.items.map((x) => (x.id === it.id ? r.item : x)) } : d));
+    } catch (e) {
+      setPlayError(`评分失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
   return (
     <section className="flex min-h-0 flex-1 flex-col">
       <div className="mb-4 flex shrink-0 flex-wrap items-center gap-2.5">
@@ -181,7 +200,7 @@ export function Video({ onStat, onPlay }: Props) {
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-4">
             {items.map((it) => (
-              <VideoCard key={it.id} it={it} onPlay={play} />
+              <VideoCard key={it.id} it={it} onPlay={play} onView={view} onRate={(v, r) => void rate(v, r)} />
             ))}
           </div>
         </div>

@@ -18,8 +18,11 @@ export interface RawFileRow {
   pending_missing: boolean;
   /** 已归档（发生过移动/改名）。 */
   archived: boolean;
-  /** 视频时长（秒；归档流程 ffmpeg 探测回填，未探测为 null）。 */
+  /** 视频时长（秒；扫描/归档流程 ffmpeg 探测回填，未探测为 null）。 */
   duration: number | null;
+  /** 视频宽/高（px；与 duration 同链路探测，未探测为 null）。 */
+  width: number | null;
+  height: number | null;
   first_seen: number;
   last_seen: number;
 }
@@ -62,6 +65,8 @@ export interface RawScanResult {
   movedCount: number;
   /** 全部待决策消失数（含历史未决策）。 */
   missingCount: number;
+  /** 本次成功探测元数据（时长/分辨率）的视频数（新建探测 + 存量补录）。 */
+  probedCount: number;
   warnings: string[];
   canceled: boolean;
 }
@@ -76,6 +81,8 @@ export interface RawScanStatus {
   scanned?: number;
   videos?: number;
   images?: number;
+  /** 已成功探测元数据的视频数（实时进度）。 */
+  probed?: number;
   lastResult?: RawScanResult | null;
 }
 

@@ -337,6 +337,15 @@ export function fetchWorks(query: WorksQuery): Promise<WorksResponse> {
   return api(`/api/works?${p.toString()}`);
 }
 
+/** 作品评分修改（0-100；null = 清除）。 */
+export function setVideoRating(id: number, rating: number | null): Promise<VideoMutationResponse> {
+  return api(`/api/videos/${id}/rating`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rating }),
+  });
+}
+
 export interface RawEventsQuery {
   page: number;
   size: number;

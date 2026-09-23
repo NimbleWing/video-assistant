@@ -152,7 +152,7 @@ export default function App() {
         {tab === 'archive' && (
           <Archive onStat={setStat} onPlay={setPlaying} onView={(items, index) => setViewing({ items, index })} />
         )}
-        {tab === 'video' && <Video onStat={setStat} onPlay={setPlaying} />}
+        {tab === 'video' && <Video onStat={setStat} onPlay={setPlaying} onView={(items, index) => setViewing({ items, index })} />}
         {tab === 'ledger' && <Ledger />}
         {tab === 'country' && <Country />}
         {tab === 'tag' && <Tag />}

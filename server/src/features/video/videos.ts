@@ -13,6 +13,7 @@ db.exec(`
     title          TEXT NOT NULL,
     subtitle       TEXT,
     code           TEXT,
+    rating         INTEGER,
     video_file_id  INTEGER NOT NULL,
     cover_file_id  INTEGER,
     created_at     INTEGER NOT NULL
@@ -22,6 +23,12 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS studio_videos  (video_id INTEGER NOT NULL, studio_id  INTEGER NOT NULL, PRIMARY KEY (video_id, studio_id));
   CREATE TABLE IF NOT EXISTS country_videos (video_id INTEGER NOT NULL, country_id INTEGER NOT NULL, PRIMARY KEY (video_id, country_id));
 `);
+// rating 列（2026-09-23 视频卡片复刻：作品评分 0-100，与女优评分同约定）
+try {
+  db.exec('ALTER TABLE videos ADD rating INTEGER');
+} catch {
+  /* 列已存在 */
+}
 
 /** 作品归档写入（文件移动已由路由层完成）：videos + 四张关系表，单事务。 */
 export function insertVideo(v: {
@@ -29,6 +36,7 @@ export function insertVideo(v: {
   title: string;
   subtitle: string | null;
   code: string | null;
+  rating: number | null;
   videoFileId: number;
   coverFileId: number | null;
   actressIds: number[];
@@ -41,8 +49,8 @@ export function insertVideo(v: {
   let id = 0;
   try {
     const r = db.prepare(
-      'INSERT INTO videos (kind, title, subtitle, code, video_file_id, cover_file_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    ).run(v.kind, v.title, v.subtitle, v.code, v.videoFileId, v.coverFileId, now);
+      'INSERT INTO videos (kind, title, subtitle, code, rating, video_file_id, cover_file_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(v.kind, v.title, v.subtitle, v.code, v.rating, v.videoFileId, v.coverFileId, now);
     id = numOf(r.lastInsertRowid);
     for (const a of v.actressIds) db.prepare('INSERT OR IGNORE INTO actress_videos (video_id, actress_id) VALUES (?, ?)').run(id, a);
     for (const t of v.tagIds) db.prepare('INSERT OR IGNORE INTO tag_videos (video_id, tag_id) VALUES (?, ?)').run(id, t);
@@ -64,7 +72,7 @@ interface VideoExtras {
 }
 
 function toVideoFile(f: RawFileRow | undefined): VideoRow['video_file'] {
-  return f ? { id: f.id, path: f.path, ext: f.ext, size: f.size, duration: f.duration } : null;
+  return f ? { id: f.id, path: f.path, ext: f.ext, size: f.size, duration: f.duration, width: f.width, height: f.height } : null;
 }
 
 function toRow(r: SqlRow, x: VideoExtras, files: Map<number, RawFileRow>): VideoRow {
@@ -75,6 +83,7 @@ function toRow(r: SqlRow, x: VideoExtras, files: Map<number, RawFileRow>): Video
     title: strOf(r.title),
     subtitle: r.subtitle == null ? null : strOf(r.subtitle),
     code: r.code == null ? null : strOf(r.code),
+    rating: r.rating == null ? null : numOf(r.rating),
     video_file_id: numOf(r.video_file_id),
     cover_file_id: r.cover_file_id == null ? null : numOf(r.cover_file_id),
     created_at: numOf(r.created_at),
@@ -183,6 +192,12 @@ export function listVideos(opt: ListVideosOpt): { total: number; items: VideoRow
 /** 按 id 取作品。 */
 export function getVideo(id: number): VideoRow | null {
   return listVideosByIds([id]).get(id) ?? null;
+}
+
+/** 更新评分（0-100 或 null 清除；路由层校验取值域）。目标不存在返回 null。 */
+export function setVideoRating(id: number, rating: number | null): VideoRow | null {
+  const r = db.prepare('UPDATE videos SET rating = ? WHERE id = ?').run(rating, id);
+  return Number(r.changes) > 0 ? getVideo(id) : null;
 }
 
 // ---------------- 计数导出（actress/tag/studio 列表真实化用） ----------------

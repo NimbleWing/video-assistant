@@ -6,8 +6,8 @@ import '../country/countries.ts';
 import '../tag/tags.ts';
 import '../studio/studios.ts';
 import '../actress/actresses.ts';
-import { setRawDuration, upsertRawScanned } from '../raw/files.ts';
-import { insertVideo, listVideos } from './videos.ts';
+import { setRawVideoMeta, upsertRawScanned } from '../raw/files.ts';
+import { insertVideo, listVideos, setVideoRating } from './videos.ts';
 
 afterAll(() => {
   // 定向清理本测试写入的表（内存库，仅本文件实例）
@@ -40,7 +40,7 @@ function seed() {
     size: 100, mtime: 1, volume: 'd:', seen: 1,
   });
   const fileId = idOf("SELECT id FROM raw_files WHERE path = 'd:/rawfiles/v.mp4'");
-  setRawDuration(fileId, 1423); // 23:43
+  setRawVideoMeta(fileId, { duration: 1423, width: 1920, height: 1080 }); // 23:43 / 1080p
   return {
     countryId,
     a1: idOf("SELECT id FROM actresses WHERE name = 'A子'"),
@@ -54,12 +54,13 @@ function seed() {
 const s = seed();
 
 describe('insertVideo 落库缝合', () => {
-  it('video_file 缝合 raw 行（id/path/ext/size/duration）+ 四维 join', () => {
+  it('video_file 缝合 raw 行（id/path/ext/size/duration/分辨率）+ 四维 join + 评分', () => {
     const item = insertVideo({
       kind: 'single',
       title: '标题甲',
       subtitle: '副标题乙',
       code: 'ABC-123',
+      rating: 87,
       videoFileId: s.fileId,
       coverFileId: null,
       actressIds: [s.a1, s.a2],
@@ -67,7 +68,8 @@ describe('insertVideo 落库缝合', () => {
       studioId: s.s1,
       countryId: s.countryId,
     });
-    expect(item.video_file).toEqual({ id: s.fileId, path: 'd:/rawfiles/v.mp4', ext: 'mp4', size: 100, duration: 1423 });
+    expect(item.video_file).toEqual({ id: s.fileId, path: 'd:/rawfiles/v.mp4', ext: 'mp4', size: 100, duration: 1423, width: 1920, height: 1080 });
+    expect(item.rating).toBe(87);
     expect(item.actresses.map((a) => a.name)).toEqual(['A子', 'B美']);
     expect(item.tags.map((t) => t.name)).toEqual(['标签1']);
     expect(item.studios.map((x) => x.name)).toEqual(['片商X']);
@@ -80,6 +82,7 @@ describe('insertVideo 落库缝合', () => {
       title: '悬空行',
       subtitle: null,
       code: null,
+      rating: null,
       videoFileId: 999999,
       coverFileId: null,
       actressIds: [s.a1],
@@ -88,7 +91,17 @@ describe('insertVideo 落库缝合', () => {
       countryId: s.countryId,
     });
     expect(item.video_file).toBeNull();
+    expect(item.rating).toBeNull();
     expect(listVideos({}).items.every((v) => v.id !== item.id || v.video_file === null)).toBe(true);
+  });
+});
+
+describe('setVideoRating 评分修改', () => {
+  it('设置/改分/清除；不存在返回 null', () => {
+    const item = listVideos({ q: '标题甲' }).items[0]!;
+    expect(setVideoRating(item.id, 66)?.rating).toBe(66);
+    expect(setVideoRating(item.id, null)?.rating).toBeNull();
+    expect(setVideoRating(999999, 80)).toBeNull();
   });
 });
 
@@ -99,6 +112,7 @@ describe('listVideos 筛选', () => {
       title: '剧集占位',
       subtitle: null,
       code: null,
+      rating: null,
       videoFileId: s.fileId,
       coverFileId: null,
       actressIds: [s.a1],
