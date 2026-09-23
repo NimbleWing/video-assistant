@@ -250,7 +250,7 @@ CREATE TABLE videos (
   title          TEXT NOT NULL,        -- 标题（必填）
   subtitle       TEXT,                 -- 副标题（可选）
   code           TEXT,                 -- 番号（可选；落文件名 + 视频库卡片展示）
-  rating         INTEGER,              -- 加分配额 0 至 100−基础分，NULL=未加分（加分制 2026-09-24：基础分 = 关联演员最高评分（未评分按 0），展示分 = min(100, 基础分 + 加分)；归档表单录入 + 视频库卡片评分环修改；旧绝对分经 PRAGMA user_version=1 迁移清零）
+  rating         INTEGER,              -- 加分配额 0 至 100−基础分，NULL=未加分（加分制 2026-09-24：基础分 = 关联演员最高评分（未评分按 0），展示分 = min(100, 基础分 + (加分 ?? 0))——卡片恒显、清除即回到基础分；归档表单录入 + 视频库卡片评分环修改；旧绝对分经 PRAGMA user_version=1 迁移清零）
   video_file_id  INTEGER NOT NULL,     -- → raw_files.id（归档后的视频行；悬空容忍）
   cover_file_id  INTEGER,              -- → raw_files.id（归档后的封面行；可空）
   created_at     INTEGER NOT NULL      -- 归档时间（作品列表排序）

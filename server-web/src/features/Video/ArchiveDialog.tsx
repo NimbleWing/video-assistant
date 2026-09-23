@@ -219,7 +219,7 @@ export function ArchiveDialog({ file, actresses, countries, tags, studios, onClo
                 <div className="col-span-2">
                   <span className="text-xs text-dim">加分（可选，基础分 {base}，上限 {100 - base}）</span>
                   <div className="mt-1">
-                    <RatingInput value={rating} onChange={setRating} max={100 - base} />
+                    <RatingInput value={rating} onChange={setRating} max={100 - base} nullText="未加分" />
                   </div>
                   <div className="mt-1 text-xs">
                     最终评分：

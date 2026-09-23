@@ -133,6 +133,12 @@ describe('Video 视频库页', () => {
     expect(await screen.findByText('66')).toBeTruthy();
   });
 
+  it('未加分时评分环恒显基础分（清除加分即回到基础分，无「未评分」态）', async () => {
+    mockedWorks.mockResolvedValue({ ok: true, total: 1, items: [work({ rating: null })] } satisfies WorksResponse);
+    boot();
+    expect(await screen.findByRole('button', { name: '评分 50，点击修改' })).toBeTruthy();
+  });
+
   it('播放探活成功 → 双源 onPlay（mp4 直连优先）', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true });
     vi.stubGlobal('fetch', fetchMock);

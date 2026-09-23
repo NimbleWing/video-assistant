@@ -101,6 +101,7 @@ export function VideoCard({ it, onPlay, onView, onRate }: Props) {
             score={score}
             value={it.rating}
             max={100 - it.base_rating}
+            nullText="未加分"
             name={it.title}
             onRate={(v) => onRate(it, v)}
           />

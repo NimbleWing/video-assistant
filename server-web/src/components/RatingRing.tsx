@@ -20,12 +20,15 @@ export function RatingRing({
   score,
   value,
   max = 100,
+  nullText = '未评分',
   name,
   onRate,
 }: {
   score: number | null;
   value: number | null;
   max?: number;
+  /** RatingInput 空值文案（作品加分制传「未加分」）。 */
+  nullText?: string;
   /** aria/title 文案用的对象名（标题/女优名）。 */
   name: string;
   onRate: (v: number | null) => void;
@@ -58,6 +61,7 @@ export function RatingRing({
           <RatingInput
             value={value}
             max={max}
+            nullText={nullText}
             onChange={(v) => {
               onRate(v);
               if (v == null) setEditing(false);
