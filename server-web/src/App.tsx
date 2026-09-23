@@ -3,6 +3,8 @@ import type { ReactNode } from 'react';
 import { Layout } from '@/components/Layout';
 import { PlayerDialog } from '@/components/PlayerDialog';
 import type { PlaySource } from '@/components/PlayerDialog';
+import { ImageViewer } from '@/components/ImageViewer';
+import type { ViewImage } from '@/components/ImageViewer';
 import { Raw } from '@/features/Raw';
 import { Archive } from '@/features/Archive';
 import { Ledger } from '@/features/Ledger';
@@ -130,6 +132,7 @@ export default function App() {
   const [tab, setTab] = useState<Tab>('raw');
   const [stat, setStat] = useState('加载中…');
   const [playing, setPlaying] = useState<PlaySource | null>(null);
+  const [viewing, setViewing] = useState<{ items: ViewImage[]; index: number } | null>(null);
 
   return (
     <>
@@ -145,8 +148,10 @@ export default function App() {
         activeTab={tab}
         onTabChange={setTab}
       >
-        {tab === 'raw' && <Raw onStat={setStat} onPlay={setPlaying} />}
-        {tab === 'archive' && <Archive onStat={setStat} onPlay={setPlaying} />}
+        {tab === 'raw' && <Raw onStat={setStat} onPlay={setPlaying} onView={(items, index) => setViewing({ items, index })} />}
+        {tab === 'archive' && (
+          <Archive onStat={setStat} onPlay={setPlaying} onView={(items, index) => setViewing({ items, index })} />
+        )}
         {tab === 'video' && <Video onStat={setStat} onPlay={setPlaying} />}
         {tab === 'ledger' && <Ledger />}
         {tab === 'country' && <Country />}
@@ -156,6 +161,7 @@ export default function App() {
         {tab === 'settings' && <Settings />}
       </Layout>
       <PlayerDialog item={playing} onClose={() => setPlaying(null)} />
+      <ImageViewer items={viewing?.items ?? null} index={viewing?.index ?? 0} onClose={() => setViewing(null)} />
     </>
   );
 }

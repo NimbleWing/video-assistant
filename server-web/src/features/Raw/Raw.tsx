@@ -11,13 +11,15 @@ import {
 } from '@/lib/api';
 import type { PlaySource } from '@/components/PlayerDialog';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
-import { RawCard, TrashButton } from '@/components/RawCard';
+import { TrashButton } from '@/components/TrashButton';
+import type { ViewImage } from '@/components/ImageViewer';
+import { RawCard } from './RawCard';
 import { AvatarPicker } from '@/features/Actress';
 import { ArchiveDialog } from '@/features/Video';
 import { Pager } from '@/components/Pager';
 import type { ActressRow, CountryRow, RawDuplicatesResponse, RawDupGroup, RawFileRow, RawFilesResponse, RawScanStatus, RawType, RawVolumesResponse, StudioRow, TagRow } from '@/lib/types';
 import { fmtDate, fmtSize } from '@/utils/format';
-import { NATIVE_VIDEO_EXTS } from '@/components/RawCard';
+import { NATIVE_VIDEO_EXTS } from '@/utils/media';
 
 const DEFAULT_PAGE_SIZE = 50;
 const PAGE_SIZE_OPTIONS = [20, 50, 100];
@@ -26,6 +28,8 @@ const DUP_PAGE_SIZE = 20;
 interface Props {
   onStat: (text: string) => void;
   onPlay: (src: PlaySource) => void;
+  /** 打开图片查看器：gallery=当前列表全部图片，index=定位下标。 */
+  onView: (items: ViewImage[], index: number) => void;
 }
 
 /** 磁盘选择卡：盘符 + 容量条 + 剩余空间，点击切换勾选。 */
@@ -149,7 +153,7 @@ function DupGroup({
   );
 }
 
-export function Raw({ onStat, onPlay }: Props) {
+export function Raw({ onStat, onPlay, onView }: Props) {
   // 扫描面板
   const [volumes, setVolumes] = useState<RawVolumesResponse['volumes']>([]);
   const [sel, setSel] = useState<Set<string>>(new Set());
@@ -376,6 +380,15 @@ export function Raw({ onStat, onPlay }: Props) {
   };
 
   const items = data?.items ?? [];
+
+  /** 查看图片：以当前页全部图片为 gallery（可左右切图），定位到被点条目。 */
+  const view = (it: RawFileRow) => {
+    const images = items.filter((x) => x.type === 'image');
+    onView(
+      images.map((x) => ({ src: `/api/raw/file/${x.id}/content`, alt: x.path })),
+      Math.max(0, images.indexOf(it)),
+    );
+  };
   const total = data?.total ?? 0;
   const pages = Math.max(1, Math.ceil(total / size));
   const last = status && !status.running ? status.lastResult : null;
@@ -615,6 +628,7 @@ export function Raw({ onStat, onPlay }: Props) {
                 key={it.id}
                 it={it}
                 onPlay={play}
+                onView={view}
                 onDelete={(f) => setPendingDelete([f])}
                 onAvatar={(f) => setAvatarFile(f)}
                 onArchive={(f) => {

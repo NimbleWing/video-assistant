@@ -46,8 +46,8 @@ function CoverFallback({ inaccessible }: { inaccessible: boolean }) {
   );
 }
 
-/** 视频库卡片：封面三态 + 番号/时长 badge + 标题/副标题/演员/标签/国家·片商。 */
-export function WorkCard({ it, onPlay }: Props) {
+/** 视频库卡片（Video 页独享）：封面三态 + 番号/时长 badge + 标题/副标题/演员/标签/国家·片商。 */
+export function VideoCard({ it, onPlay }: Props) {
   const [broken, setBroken] = useState(false);
   const dur = it.video_file?.duration ?? null;
   const noCover = it.cover_file_id == null;

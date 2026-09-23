@@ -9,7 +9,7 @@ import {
 } from '@/lib/api';
 import type { StudioRow } from '@/lib/types';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
-import { TrashButton } from '@/components/RawCard';
+import { TrashButton } from '@/components/TrashButton';
 
 /** 文件 → 纯 base64（无 data: 前缀）。导出供测试。 */
 export function fileToB64(file: File): Promise<string> {

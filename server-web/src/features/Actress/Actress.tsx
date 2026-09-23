@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { createActress, deleteActress, fetchActressDisks, fetchActresses, updateActress } from '@/lib/api';
 import type { ActressRow, ActressUpsertRequest, CountryRow, TagRow } from '@/lib/types';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
-import { TrashButton } from '@/components/RawCard';
+import { TrashButton } from '@/components/TrashButton';
 import { ActressDialog } from './ActressDialog';
 
 /**

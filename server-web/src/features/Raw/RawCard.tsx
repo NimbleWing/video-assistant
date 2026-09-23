@@ -1,38 +1,18 @@
 import { fmtDate, fmtSize } from '@/utils/format';
+import { TrashButton } from '@/components/TrashButton';
 import type { RawFileRow } from '@/lib/types';
 
 interface Props {
   it: RawFileRow;
   onPlay: (it: RawFileRow) => void;
-  /** 提供「变更记录」入口（归档页用）；原始资料页不传则不渲染。 */
-  onHistory?: (it: RawFileRow) => void;
-  /** 提供删除入口（原始资料页用）：删磁盘文件 + 库记录；不传则不渲染。 */
-  onDelete?: (it: RawFileRow) => void;
-  /** 提供「设为头像」入口（原始资料页图片卡片用）：归档移动到女优图集；不传或非图片不渲染。 */
-  onAvatar?: (it: RawFileRow) => void;
-  /** 提供「归档」入口（原始资料页视频卡片用）：弹归档表单；不传或非视频不渲染。 */
-  onArchive?: (it: RawFileRow) => void;
-}
-
-/** 浏览器可原生解码的视频格式（直连省转码；mkv 靠 Chromium 内置 matroska demuxer，失败回退 HLS）。 */
-export const NATIVE_VIDEO_EXTS = new Set(['mp4', 'webm', 'm4v', 'mov', 'mkv']);
-
-/** 删除图标按钮（卡片行/查重文件行共用）。 */
-export function TrashButton({ label, title, disabled, onClick }: { label: string; title: string; disabled?: boolean; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      className="flex size-6 shrink-0 items-center justify-center rounded-md bg-raised text-dim transition-colors hover:bg-err-soft hover:text-err disabled:cursor-default disabled:opacity-40"
-      aria-label={label}
-      title={title}
-      disabled={disabled}
-      onClick={onClick}
-    >
-      <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-        <path d="M4 7h16M9.5 7V5a1.5 1.5 0 0 1 1.5-1.5h2A1.5 1.5 0 0 1 14.5 5v2M6.5 7l.8 12a2 2 0 0 0 2 1.9h5.4a2 2 0 0 0 2-1.9l.8-12M10 11v6M14 11v6" />
-      </svg>
-    </button>
-  );
+  /** 图片卡片点击查看大图。 */
+  onView: (it: RawFileRow) => void;
+  /** 删除入口：删磁盘文件 + 库记录。 */
+  onDelete: (it: RawFileRow) => void;
+  /** 「设为头像」入口（图片卡片）：归档移动到女优图集。 */
+  onAvatar: (it: RawFileRow) => void;
+  /** 「归档」入口（视频卡片）：弹归档表单。 */
+  onArchive: (it: RawFileRow) => void;
 }
 
 /** 当前名（path 末段去扩展名；archived 行的 path 随文件更新，name 列停留在最初名）。 */
@@ -42,7 +22,7 @@ function currentNameOf(p: string): string {
 }
 
 /** 视频头图区：类型图标 + 扩展名大字（不抽帧，留后续增强）+ hover 播放遮罩。 */
-function VideoArt({ it, onPlay }: Props) {
+function VideoArt({ it, onPlay }: Pick<Props, 'it' | 'onPlay'>) {
   const label = currentNameOf(it.path);
   return (
     <button
@@ -80,8 +60,8 @@ function VideoArt({ it, onPlay }: Props) {
   );
 }
 
-/** 原始资料卡片（Raw/Archive 两页共享）：图片=真缩略图；视频=图标卡；archived 副行最初名；missing 灰化。 */
-export function RawCard({ it, onPlay, onHistory, onDelete, onAvatar, onArchive }: Props) {
+/** 原始资料卡片（Raw 页独享）：图片=真缩略图（点击查看大图）；视频=图标卡；删除/设头像/归档操作；missing 灰化。 */
+export function RawCard({ it, onPlay, onView, onDelete, onAvatar, onArchive }: Props) {
   const gone = it.missing || it.pending_missing;
   const currentName = currentNameOf(it.path);
   return (
@@ -91,14 +71,19 @@ export function RawCard({ it, onPlay, onHistory, onDelete, onAvatar, onArchive }
       }`}
     >
       {it.type === 'image' ? (
-        <span className="block aspect-video w-full overflow-hidden bg-raised">
+        <button
+          type="button"
+          className="block aspect-video w-full cursor-zoom-in overflow-hidden bg-raised"
+          aria-label={`查看 ${currentName}`}
+          onClick={() => onView(it)}
+        >
           <img
             src={`/api/raw/file/${it.id}/content`}
             alt={currentName}
             loading="lazy"
             className="aspect-video w-full object-cover"
           />
-        </span>
+        </button>
       ) : (
         <VideoArt it={it} onPlay={onPlay} />
       )}
@@ -123,7 +108,7 @@ export function RawCard({ it, onPlay, onHistory, onDelete, onAvatar, onArchive }
           <span>{fmtSize(it.size)}</span>
           <span className="font-mono uppercase">{it.volume}</span>
           <span className="ml-auto">{fmtDate(it.mtime)}</span>
-          {onAvatar && it.type === 'image' ? (
+          {it.type === 'image' ? (
             <button
               type="button"
               className="flex size-6 shrink-0 items-center justify-center rounded-md bg-raised text-dim transition-colors hover:bg-brand-soft hover:text-brand-hover disabled:cursor-default disabled:opacity-40"
@@ -137,7 +122,7 @@ export function RawCard({ it, onPlay, onHistory, onDelete, onAvatar, onArchive }
               </svg>
             </button>
           ) : null}
-          {onArchive && it.type === 'video' ? (
+          {it.type === 'video' ? (
             <button
               type="button"
               className="flex size-6 shrink-0 items-center justify-center rounded-md bg-raised text-dim transition-colors hover:bg-brand-soft hover:text-brand-hover disabled:cursor-default disabled:opacity-40"
@@ -154,28 +139,15 @@ export function RawCard({ it, onPlay, onHistory, onDelete, onAvatar, onArchive }
               </svg>
             </button>
           ) : null}
-          {onDelete ? (
-            <TrashButton
-              label={`删除文件 ${it.path}`}
-              title={`删除 ${it.path}（磁盘文件 + 库记录，不可恢复）`}
-              onClick={() => onDelete(it)}
-            />
-          ) : null}
+          <TrashButton
+            label={`删除文件 ${it.path}`}
+            title={`删除 ${it.path}（磁盘文件 + 库记录，不可恢复）`}
+            onClick={() => onDelete(it)}
+          />
         </div>
         {gone ? (
           <div className="mt-2">
             <span className="badge badge-failed">{it.missing ? '已消失' : '待决策'}</span>
-          </div>
-        ) : null}
-        {onHistory ? (
-          <div className="mt-2.5">
-            <button
-              type="button"
-              className="text-xs text-brand-hover transition-colors hover:text-brand"
-              onClick={() => onHistory(it)}
-            >
-              变更记录 →
-            </button>
           </div>
         ) : null}
       </div>

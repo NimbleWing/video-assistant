@@ -62,7 +62,7 @@ beforeEach(() => {
 describe('Archive 归档资料页', () => {
   it('渲染归档卡片（当前名 + 最初名副行 + 变更记录入口）与头部统计', async () => {
     const onStat = vi.fn();
-    render(<Archive onStat={onStat} onPlay={() => {}} />);
+    render(<Archive onStat={onStat} onPlay={() => {}} onView={() => {}} />);
     expect(await screen.findByText('renamed')).toBeTruthy();
     expect(screen.getByText('最初：origin')).toBeTruthy();
     expect(screen.getByText('变更记录 →')).toBeTruthy();
@@ -72,12 +72,12 @@ describe('Archive 归档资料页', () => {
 
   it('空态引导文案', async () => {
     mockedArchived.mockResolvedValue(resp({ total: 0, items: [], volumes: [] }));
-    render(<Archive onStat={() => {}} onPlay={() => {}} />);
+    render(<Archive onStat={() => {}} onPlay={() => {}} onView={() => {}} />);
     expect(await screen.findByText(/暂无归档文件/)).toBeTruthy();
   });
 
   it('点击「变更记录」→ 弹窗加载该文件事件时间线', async () => {
-    render(<Archive onStat={() => {}} onPlay={() => {}} />);
+    render(<Archive onStat={() => {}} onPlay={() => {}} onView={() => {}} />);
     fireEvent.click(await screen.findByText('变更记录 →'));
     await waitFor(() =>
       expect(mockedEvents).toHaveBeenCalledWith(expect.objectContaining({ fileId: 7 })),
@@ -89,7 +89,7 @@ describe('Archive 归档资料页', () => {
   });
 
   it('搜索防抖与类型/盘符筛选携带参数', async () => {
-    render(<Archive onStat={() => {}} onPlay={() => {}} />);
+    render(<Archive onStat={() => {}} onPlay={() => {}} onView={() => {}} />);
     await screen.findByText('renamed');
     fireEvent.change(screen.getByLabelText('搜索归档资料'), { target: { value: ' origin ' } });
     await waitFor(
@@ -102,9 +102,19 @@ describe('Archive 归档资料页', () => {
     await waitFor(() => expect(mockedArchived).toHaveBeenLastCalledWith(expect.objectContaining({ volume: 'd:' })));
   });
 
+  it('图片卡片点击「查看」→ onView 收到 gallery 与定位下标', async () => {
+    mockedArchived.mockResolvedValue(
+      resp({ items: [item(), item({ id: 8, type: 'image', ext: 'jpg', path: 'd:/archive/cover.jpg' })] }),
+    );
+    const onView = vi.fn();
+    render(<Archive onStat={() => {}} onPlay={() => {}} onView={onView} />);
+    fireEvent.click(await screen.findByRole('button', { name: '查看 cover' }));
+    expect(onView).toHaveBeenCalledWith([{ src: '/api/raw/file/8/content', alt: 'd:/archive/cover.jpg' }], 0);
+  });
+
   it('视频卡片点击播放携带双源（mp4 直连优先）', async () => {
     const onPlay = vi.fn();
-    render(<Archive onStat={() => {}} onPlay={onPlay} />);
+    render(<Archive onStat={() => {}} onPlay={onPlay} onView={() => {}} />);
     fireEvent.click(await screen.findByRole('button', { name: '播放 renamed' }));
     expect(onPlay).toHaveBeenCalledWith({
       path: 'd:/rawfiles/sub/renamed.mp4',

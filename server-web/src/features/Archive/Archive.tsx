@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
 import { fetchRawArchived } from '@/lib/api';
 import type { PlaySource } from '@/components/PlayerDialog';
-import { RawCard, NATIVE_VIDEO_EXTS } from '@/components/RawCard';
+import { ArchiveCard } from './ArchiveCard';
+import { NATIVE_VIDEO_EXTS } from '@/utils/media';
+import type { ViewImage } from '@/components/ImageViewer';
 import { Pager } from '@/components/Pager';
-import type { RawArchivedResponse, RawFileRow, RawType } from '@/lib/types';
+import type { ArchivedItem, RawArchivedResponse, RawFileRow, RawType } from '@/lib/types';
 import { EventsDialog } from './EventsDialog';
 
 const DEFAULT_PAGE_SIZE = 50;
@@ -12,10 +14,12 @@ const PAGE_SIZE_OPTIONS = [20, 50, 100];
 interface Props {
   onStat: (text: string) => void;
   onPlay: (src: PlaySource) => void;
+  /** 打开图片查看器：gallery=当前列表全部图片，index=定位下标。 */
+  onView: (items: ViewImage[], index: number) => void;
 }
 
 /** 归档资料页：archived=1 逻辑文件的卡片浏览（发生过移动/改名，单行跟随）。 */
-export function Archive({ onStat, onPlay }: Props) {
+export function Archive({ onStat, onPlay, onView }: Props) {
   const [qInput, setQInput] = useState('');
   const [q, setQ] = useState('');
   const [type, setType] = useState<'' | RawType>('');
@@ -70,6 +74,15 @@ export function Archive({ onStat, onPlay }: Props) {
     });
   };
 
+  /** 查看图片：以当前页全部图片为 gallery（可左右切图），定位到被点条目。 */
+  const view = (it: ArchivedItem) => {
+    const images = items.filter((x) => x.type === 'image');
+    onView(
+      images.map((x) => ({ src: `/api/raw/file/${x.id}/content`, alt: x.path })),
+      Math.max(0, images.indexOf(it)),
+    );
+  };
+
   return (
     <section className="flex min-h-0 flex-1 flex-col">
       <div className="mb-4 flex shrink-0 flex-wrap items-center gap-2.5">
@@ -120,7 +133,7 @@ export function Archive({ onStat, onPlay }: Props) {
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-4">
             {items.map((it) => (
-              <RawCard key={it.id} it={it} onPlay={play} onHistory={setHistory} />
+              <ArchiveCard key={it.id} it={it} onPlay={play} onView={view} onHistory={setHistory} />
             ))}
           </div>
         </div>

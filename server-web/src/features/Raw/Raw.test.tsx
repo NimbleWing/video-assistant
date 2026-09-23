@@ -111,8 +111,9 @@ afterEach(() => {
 function renderRaw(over: { volumes?: Partial<RawVolumesResponse> } = {}) {
   const onStat = vi.fn();
   const onPlay = vi.fn();
-  const r = render(<Raw onStat={onStat} onPlay={onPlay} />);
-  return { ...r, onStat, onPlay };
+  const onView = vi.fn();
+  const r = render(<Raw onStat={onStat} onPlay={onPlay} onView={onView} />);
+  return { ...r, onStat, onPlay, onView };
 }
 
 describe('Raw 扫描面板', () => {
@@ -223,6 +224,27 @@ describe('Raw 文件浏览', () => {
     expect(container.querySelector('img')?.getAttribute('src')).toBe('/api/raw/file/9/content');
     expect(container.querySelector('[aria-label^="播放"]')).toBeNull();
     expect(container.querySelector('.badge')?.textContent).toBe('图片');
+  });
+
+  it('图片卡点击「查看」→ onView 以当前页全部图片为 gallery 并定位被点条目', async () => {
+    mockedFiles.mockResolvedValue(
+      filesResp({
+        items: [
+          row(),
+          row({ id: 8, type: 'image', ext: 'jpg', name: 'p1', path: 'd:/rawfiles/p1.jpg' }),
+          row({ id: 9, type: 'image', ext: 'jpg', name: 'p2', path: 'd:/rawfiles/p2.jpg' }),
+        ],
+      }),
+    );
+    const { onView } = renderRaw();
+    fireEvent.click(await screen.findByRole('button', { name: '查看 p2' }));
+    expect(onView).toHaveBeenCalledWith(
+      [
+        { src: '/api/raw/file/8/content', alt: 'd:/rawfiles/p1.jpg' },
+        { src: '/api/raw/file/9/content', alt: 'd:/rawfiles/p2.jpg' },
+      ],
+      1,
+    );
   });
 
   it('非原生格式（avi）播放不 preferDirect；mkv 直连优先', async () => {

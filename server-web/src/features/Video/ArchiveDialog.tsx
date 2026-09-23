@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import Hls from 'hls.js';
 import { archiveVideo, fetchRawFiles } from '@/lib/api';
 import type { ActressRow, CountryRow, RawFileRow, StudioRow, TagRow } from '@/lib/types';
-import { NATIVE_VIDEO_EXTS } from '@/components/RawCard';
+import { VideoPlayer } from '@/components/VideoPlayer';
+import { NATIVE_VIDEO_EXTS } from '@/utils/media';
 
 interface Props {
   /** 待归档的视频 raw 行。 */
@@ -47,40 +47,11 @@ export function ArchiveDialog({ file, actresses, countries, tags, studios, onClo
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const dlgRef = useRef<HTMLDialogElement>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const hlsRef = useRef<Hls | null>(null);
 
   useEffect(() => {
     const d = dlgRef.current;
     if (d && !d.open) d.showModal();
   }, []);
-
-  // 左侧播放：原生格式直连 content 端点；其余走 hls.js（不可用则回退直连碰运气）
-  useEffect(() => {
-    const v = videoRef.current;
-    if (!v) return;
-    const native = NATIVE_VIDEO_EXTS.has(file.ext);
-    if (native) {
-      v.src = `/api/raw/file/${file.id}/content`;
-      return;
-    }
-    const src = `/api/raw/file/${file.id}/index.m3u8`;
-    if (Hls.isSupported()) {
-      const hls = new Hls();
-      hlsRef.current = hls;
-      hls.loadSource(src);
-      hls.attachMedia(v);
-    } else {
-      v.src = src;
-    }
-    return () => {
-      hlsRef.current?.destroy();
-      hlsRef.current = null;
-      v.pause();
-      v.removeAttribute('src');
-      v.load();
-    };
-  }, [file.id, file.ext]);
 
   // 封面自动匹配：同 stem 图片（同名判定），同目录优先、path 升序取第一
   useEffect(() => {
@@ -183,7 +154,16 @@ export function ArchiveDialog({ file, actresses, countries, tags, studios, onClo
       <form onSubmit={submit} className="flex w-[min(1060px,94vw)] gap-4">
         {/* 左：播放区 */}
         <div className="flex w-[44%] shrink-0 flex-col">
-          <video ref={videoRef} controls preload="metadata" className="aspect-video w-full rounded-lg bg-black" />
+          {/* 通用播放内核：原生格式直连优先（error 回退 hls 转码）；其余 hls.js 主路径 */}
+          <VideoPlayer
+            item={{
+              path: file.path,
+              direct: `/api/raw/file/${file.id}/content`,
+              hls: `/api/raw/file/${file.id}/index.m3u8`,
+              preferDirect: NATIVE_VIDEO_EXTS.has(file.ext),
+            }}
+            className="aspect-video w-full rounded-lg bg-black"
+          />
           <div className="mt-2 truncate font-mono text-xs text-dim" title={file.path}>
             {file.path}
           </div>

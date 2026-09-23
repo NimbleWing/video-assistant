@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import { fetchActresses, fetchStudios, fetchTags, fetchWorks } from '@/lib/api';
 import type { PlaySource } from '@/components/PlayerDialog';
-import { NATIVE_VIDEO_EXTS } from '@/components/RawCard';
+import { NATIVE_VIDEO_EXTS } from '@/utils/media';
 import { Pager } from '@/components/Pager';
 import type { ActressesResponse, StudiosResponse, TagsResponse, VideoRow, WorksResponse } from '@/lib/types';
-import { WorkCard } from './WorkCard';
+import { VideoCard } from './VideoCard';
 
 const DEFAULT_PAGE_SIZE = 50;
 const PAGE_SIZE_OPTIONS = [20, 50, 100];
@@ -181,7 +181,7 @@ export function Video({ onStat, onPlay }: Props) {
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-4">
             {items.map((it) => (
-              <WorkCard key={it.id} it={it} onPlay={play} />
+              <VideoCard key={it.id} it={it} onPlay={play} />
             ))}
           </div>
         </div>

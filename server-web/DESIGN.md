@@ -12,15 +12,19 @@
 
 | 文件 | 职责 |
 |------|------|
-| `src/App.tsx` | 组合 Layout 与九页面（原始资料/归档资料/视频库/下载账本/国家/标签/片商/女优/设置；**默认 tab = 原始资料**）、头部统计、播放弹窗状态（tab 卸载重挂即刷新）；tab 配置（key/label/icon）定义于此 |
+| `src/App.tsx` | 组合 Layout 与九页面（原始资料/归档资料/视频库/下载账本/国家/标签/片商/女优/设置；**默认 tab = 原始资料**）、头部统计、播放弹窗状态 + 图片查看器状态（tab 卸载重挂即刷新）；tab 配置（key/label/icon）定义于此 |
 | `src/components/Layout/index.tsx` | 页面骨架抽象：顶栏（标题 + 补充信息 + 移动端汉堡）+ 左侧侧边栏导航（icon + 文字，可选）+ 内容区；泛型 `K extends string` 支撑标签 key 收窄 |
 | `src/components/Pager/index.tsx` | 共享分页条：上一页/下一页 + 页码（可选跳页输入框：回车/失焦提交、钳位 1..pages）+ 右侧可选「每页 N 条」选择器 |
-| `src/components/PlayerDialog/index.tsx` | 共享播放弹窗：原生 `<dialog>` + `closedby="any"`，双源 `{direct, hls, preferDirect}`——默认 hls.js 主路径 + 降级链（见下）；`preferDirect` 时直连优先、`<video>` error 事件回退 hls；关闭/换源时停流清理，复制路径；由 App 持有状态全局挂载（tab 切换不卸载）；Raw/Archive 页消费 |
+| `src/components/VideoPlayer/index.tsx` | **通用视频播放内核**：`PlaySource` `{path, direct, hls?, preferDirect?}`——默认 hls.js 主路径 + 降级链（见下）；`preferDirect` 时直连优先、`<video>` error 事件回退 hls；换源/卸载停流清理。PlayerDialog 与 ArchiveDialog 左播放区共用 |
+| `src/components/PlayerDialog/index.tsx` | 共享播放弹窗：原生 `<dialog>` + `closedby="any"` 弹层壳 + VideoPlayer 内核，复制路径；`PlaySource` 自此 re-export；由 App 持有状态全局挂载（tab 切换不卸载）；Raw/Archive/Video 页消费 |
+| `src/components/ImageViewer/index.tsx` | **通用图片查看器**（PhotoSwipe 封装，不渲染自身 DOM）：滚轮缩放（`wheelToZoom`）/拖拽平移/双击两级缩放/左右切图/Esc·下滑关闭；服务端图片尺寸未知——拦截 `contentLoad` 懒测量 naturalWidth/Height，回填 data/content/slide 宽高 + `calculateSize()` 重建缩放参数后 `content.load(isLazy, true)` 放行；`onClose` 经 ref 取最新避免内联回调重启实例；由 App 持有 `viewing` 状态全局挂载，Raw/Archive 页经 `onView(items, index)` 消费（gallery=当前页全部图片） |
 | `src/components/ConfirmDialog/index.tsx` | 共享确认弹窗：原生 `<dialog>` + `closedby="any"`（Esc/遮罩点击即取消），挂载式受控（父组件条件渲染，onConfirm 后卸载即关闭）；`danger` 红系确认按钮（`.act-danger`）；Raw 页查重删除使用 |
-| `src/components/RawCard/index.tsx` | 原始资料卡片（Raw/Archive 两页共享）：标题=当前名（path basename）；archived=1 时副行「最初：xx」；可选 `onHistory` 时信息区渲染「变更记录」入口（归档页用）；可选 `onDelete` 时元信息行尾渲染删除图标按钮（原始资料页用：删磁盘文件 + 库记录）；导出共用 `TrashButton`；图片条目头图 = `/api/raw/file/:id/content`；视频条目 = 类型图标 + ext 大字占位；hover 播放遮罩仅视频；missing 灰化 + 角标 |
+| `src/components/TrashButton.tsx` | 删除图标按钮（卡片行/查重文件行等共用，Raw/Actress/Tag/Studio 消费） |
 | `src/features/Raw/index.ts` | 桶导出：`Raw` |
+| `src/features/Raw/RawCard.tsx` | 原始资料卡片（Raw 页独享）：标题=当前名（path basename）；archived=1 时副行「最初：xx」；图片条目头图 = `/api/raw/file/:id/content`（点击查看大图）+ 「设为头像」入口；视频条目 = 类型图标 + ext 大字占位 + hover 播放遮罩 + 「归档」入口；删除图标按钮（删磁盘文件 + 库记录）；missing 灰化 + 角标 |
 | `src/features/Raw/Raw.tsx` | **原始资料页面**（顶部扫描面板 + 下方卡片浏览）：磁盘卡片多选（`/api/raw/volumes`，容量条）+ 类型勾选（视频/图片，记忆自 meta）+ 开始扫描/进度条/取消（EventSource 订阅 `/api/raw/scan/events`：snapshot/progress/done）；待决策消失横幅（done 的 missingCount → 拉清单 + 批量删除/标记）；查重面板（工具栏「查重」按钮开合，`/api/raw/duplicates` 分组分页：组头类型徽标/份数/单份大小/冗余空间/hash 短码 + 文件行路径/盘符/日期、视频可播；**删除**：行级 🗑 与组级「删除多余副本」（保留组内第一个），`ConfirmDialog` 二次确认（列路径清单，超 10 条截断）后逐个 `POST /api/raw/file/:id/delete`，完成后刷新查重与文件列表；扫描 done 后随 refreshKey 自动刷新）；文件卡片分页浏览（搜索防抖 + 类型/盘符/missing/归档筛选——归档默认仅未归档，归档行在归档页有专属视图；卡片删除入口 → 同一 ConfirmDialog/删除链路，失败汇总页面级横幅；**图片卡片「设为头像」入口**（`RawCard onAvatar`）→ `AvatarPicker` 选女优 → `POST /api/actresses/:id/avatar`，成功 toast + 刷新） |
 | `src/features/Archive/index.ts` | 桶导出：`Archive`、`EventsDialog` |
+| `src/features/Archive/ArchiveCard.tsx` | 归档资料卡片（Archive 页独享，行类型 `ArchivedItem`）：标题=当前名 + 副行「最初：xx」；图片点击查看大图；视频 = 图标卡 + hover 播放遮罩；「变更记录 →」入口；无删除/设头像/归档操作；missing 灰化 + 角标 |
 | `src/features/Archive/Archive.tsx` | **归档资料页面**：archived=1 逻辑文件的卡片分页浏览（`/api/raw/archived`：搜索防抖 + 类型/盘符筛选 + 每页条数/跳页）；卡片「变更记录」入口弹出 `EventsDialog`（该文件全部事件，时间正序） |
 | `src/features/Archive/EventsDialog.tsx` | 单文件变更记录弹窗：当前名 + 最初名 + 事件时间线（kind 徽标 + result + 时间），`fetchRawEvents({ fileId })` |
 | `src/features/Ledger/index.ts` | 桶导出：`Ledger` |
@@ -37,13 +41,14 @@
 | `src/features/Actress/AvatarPicker.tsx` | 设为头像弹窗（原生 `<dialog>`）：搜索 + 女优列表选择 → `POST /api/actresses/:id/avatar {fileId}`（原始资料页图片卡片发起） |
 | `src/features/Video/index.ts` | 桶导出：`Video`、`ArchiveDialog` |
 | `src/features/Video/Video.tsx` | **视频库页面**（作品域 kind=single）：`/api/works?kind=single` 卡片分页浏览（搜索防抖 + 演员/标签/片商下拉筛选，字典全量拉取 + 每页条数/跳页）；**播放探活**——卡片点击先 HEAD `/api/raw/file/:id/content`，失败 → 页面级 err 横幅「文件无法访问或已丢失」（行状态过期：Archives 树不受扫描覆盖，手动删/移文件后库不知情），成功 → App 级 PlayerDialog（ext 原生格式 preferDirect，否则 hls） |
-| `src/features/Video/WorkCard.tsx` | 视频库卡片：头图**封面三态**——`cover_file_id=null` 中性「无封面」占位 / 图片正常 / onError err 色调「封面无法访问」占位（key 绑 id，useState 记 broken）；hover 播放遮罩（同 RawCard 视觉语言）；**番号 badge 左上 + 时长 badge 右下**（`raw_files.duration`，无值隐藏）；信息区 = 主标题（clamp 2）+ 副标题（dim）+ 演员（dim，· 连接）+ 标签 chips 前 3 + `+N` + 底行国家 · 片商 |
-| `src/features/Video/ArchiveDialog.tsx` | **视频归档弹窗**（原始资料页视频卡片发起，单片流程；剧集切换仅占位禁用确认）：左播放区（原生格式直连 `/api/raw/file/:id/content`，ts/avi 等走 hls.js）+ 右表单——标题* /副标题/番号、演员多选（搜索+chips，**第一位演员决定归档目录**，变化即重置国家与标签）、国家单选（自动填充可改）、标签多选（自动填并集可改）、片商单选、封面区（**同名图片自动匹配**：同 stem 同目录优先→全库 path 升序；可清空、可搜索替换）→ `POST /api/videos/archive`；成功 toast + 刷新原始资料页 |
+| `src/features/Video/VideoCard.tsx` | 视频库卡片（Video 页独享）：头图**封面三态**——`cover_file_id=null` 中性「无封面」占位 / 图片正常 / onError err 色调「封面无法访问」占位（key 绑 id，useState 记 broken）；hover 播放遮罩；**番号 badge 左上 + 时长 badge 右下**（`raw_files.duration`，无值隐藏）；信息区 = 主标题（clamp 2）+ 副标题（dim）+ 演员（dim，· 连接）+ 标签 chips 前 3 + `+N` + 底行国家 · 片商 |
+| `src/features/Video/ArchiveDialog.tsx` | **视频归档弹窗**（原始资料页视频卡片发起，单片流程；剧集切换仅占位禁用确认）：左播放区（VideoPlayer 内核：原生格式 preferDirect 直连 `/api/raw/file/:id/content`，ts/avi 等走 hls.js 主路径）+ 右表单——标题* /副标题/番号、演员多选（搜索+chips，**第一位演员决定归档目录**，变化即重置国家与标签）、国家单选（自动填充可改）、标签多选（自动填并集可改）、片商单选、封面区（**同名图片自动匹配**：同 stem 同目录优先→全库 path 升序；可清空、可搜索替换）→ `POST /api/videos/archive`；成功 toast + 刷新原始资料页 |
 | `src/features/Settings/index.ts` | 桶导出：`Settings` |
 | `src/features/Settings/Settings.tsx` | 设置页面：ffmpeg 路径配置与状态显示（POST /api/config）、日志尾部查看（扫描目录/立即扫描已随 files 表退役移除） |
 | `src/lib/api.ts` | 类型化 API 客户端（fetch 包装：`ok:false` / HTTP 错误统一抛 `Error`，带服务端 error 信息；raw 系列 + SSE 由组件直连 EventSource） |
 | `src/lib/types.ts` | 接口模型（字段名对齐 server 各 feature types.ts，相对路径 re-export） |
 | `src/utils/format.ts` | 纯函数：`fmtSize` / `fmtDur` / `fmtTime` / `fmtDate` |
+| `src/utils/media.ts` | `NATIVE_VIDEO_EXTS`（浏览器可原生解码的视频扩展名集合，各页播放/归档共用） |
 | `src/styles.css` | Tailwind `@theme` 主题色（沿用旧版暗色调色板）+ `@layer components`（act/badge/chip/table/dialog） |
 
 ## 视觉规范（对齐 rou.video 站点暗色主题）
@@ -74,7 +79,7 @@
 
 ## 播放链路（hls.js + 降级链）
 
-PlayerDialog 双源入参 `{path, direct, hls?, preferDirect?}`：Raw 页视频卡片——原生格式（mp4/webm/m4v/mov/mkv）传 `preferDirect`（直连 `/api/raw/file/:id/content`，省转码 CPU，`<video>` error 回退 hls），其余格式（ts/avi/wmv/flv/rm/rmvb/mpg）走 hls（`/api/raw/file/:id/index.m3u8`，服务端转码兜底；不支持的组合前端禁播提示）。
+VideoPlayer（PlayerDialog/ArchiveDialog 共用内核）双源入参 `{path, direct, hls?, preferDirect?}`：Raw 页视频卡片——原生格式（mp4/webm/m4v/mov/mkv）传 `preferDirect`（直连 `/api/raw/file/:id/content`，省转码 CPU，`<video>` error 回退 hls），其余格式（ts/avi/wmv/flv/rm/rmvb/mpg）走 hls（`/api/raw/file/:id/index.m3u8`，服务端转码兜底；不支持的组合前端禁播提示）。
 
 - **主路径**：`Hls.isSupported()` → `hls.js` 加载 m3u8（服务端 ffmpeg libx264 实时转码分段，设计见 `../server/DESIGN.md` §7）。remux 产出的 MP4 容器时基有缺陷（无 ctts/DTS，Chrome 直连播会抖动，copy 重整也救不了），转码重建时间轴后播放健康。
 - **降级链**（逐级回退，保证任何环境可播）：
@@ -96,7 +101,7 @@ PlayerDialog 双源入参 `{path, direct, hls?, preferDirect?}`：Raw 页视频�
 - 组件测试统一 `vi.mock('@/lib/api')`（别名经 vite resolve.alias 解析，与源码导入同一模块）；纯逻辑（format/api）直接测。
 - 已知坑：RTL `getByText` 默认只匹配元素的**直接文本节点**——混合内容（如 `<b>剧名</b> / 标题`）需 span 包裹或用 `selector` / `textContent` 断言。
 - 覆盖：格式化边界、API 错误路径与参数拼接、各 Section 交互（筛选/分页/防抖/chips/保存/日志）、PlayerDialog 的 hls 建链与降级（`vi.mock('hls.js')`）、ConfirmDialog 确认/取消回调、Raw 页（磁盘卡渲染/勾选与启动参数、EventSource mock 驱动进度与 done 后的消失横幅、卡片类型分派与筛选、查重面板分组/分页/删除确认与部分失败展示）。
-- 运行时依赖：react / react-dom / **hls.js**（播放链路唯一第三方运行时依赖）。
+- 运行时依赖：react / react-dom / **hls.js**（视频播放）/ **photoswipe**（图片查看器，手势与缩放交互不做自实现，测试桩掉模块级行为只验封装层）。
 
 ## 约定
 

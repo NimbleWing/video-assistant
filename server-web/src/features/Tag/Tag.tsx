@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type DragEvent, type FormEvent } from 'rea
 import { createTag, deleteTag, fetchTags, renameTag, reorderTags } from '@/lib/api';
 import type { TagRow } from '@/lib/types';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
-import { TrashButton } from '@/components/RawCard';
+import { TrashButton } from '@/components/TrashButton';
 
 type View = 'grid' | 'row';
 const VIEW_KEY = 'tag-view';
