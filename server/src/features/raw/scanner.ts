@@ -11,6 +11,7 @@ import {
   findRawByPath,
   getRawByPath,
   listScopeDisappeared,
+  listUnprobedArchivedVideos,
   listUnprobedVideos,
   markPendingMissing,
   mergeMove,
@@ -211,13 +212,20 @@ async function executeScan(scopes: ScanScope[], st: ScanState): Promise<RawScanR
     updatedCount += movedCount; // 旧行被续命更新
   }
   const missingCount = st.canceled ? 0 : markPendingMissing(completed, token);
-  // 存量补录：本次作用域内未探测的现存视频（三键未变走跳过分支的存量行）统一探测一轮
+  // 存量补录：本次作用域内未探测的现存视频（三键未变走跳过分支的存量行）统一探测一轮；
+  // 归档行（Archives 树等扫描根外）单列一轮——单行跟随语义下 path 即当前位置
   if (!st.canceled && ff.available) {
     const roots = new Map<string, { volume: string; root: string }>();
     for (const c of completed) if (c.type === 'video') roots.set(`${c.volume}${c.root}`, c);
     for (const row of listUnprobedVideos([...roots.values()])) {
       if (st.cancelRequested) break;
       await probeVideoMeta(ff, row.id, row.path, st);
+    }
+    if (!st.cancelRequested) {
+      for (const row of listUnprobedArchivedVideos()) {
+        if (st.cancelRequested) break;
+        await probeVideoMeta(ff, row.id, row.path, st);
+      }
     }
   }
   return { ms: Date.now() - t0, newCount, updatedCount, movedCount, missingCount, probedCount: st.probed, warnings, canceled: st.canceled };

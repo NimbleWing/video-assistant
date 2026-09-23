@@ -12,11 +12,14 @@ import {
   listPendingMissing,
   listRawDuplicates,
   listRawFiles,
+  listUnprobedArchivedVideos,
+  listUnprobedVideos,
   markPendingMissing,
   rawTypeOfExt,
   rawVideoMatches,
   rawVolumeStats,
   resolveMissing,
+  setRawVideoMeta,
   touchRawSeen,
   upsertRawScanned,
 } from './files.ts';
@@ -45,6 +48,27 @@ describe('rawTypeOfExt', () => {
     expect(rawTypeOfExt('jpeg')).toBe('image');
     expect(rawTypeOfExt('txt')).toBeNull();
     expect(rawTypeOfExt('gif')).toBeNull(); // 明确不收 gif
+  });
+});
+
+describe('补录候选查询（未探测视频）', () => {
+  it('作用域查询只收未归档行；归档行单列不限作用域；已探测/missing/图片排除', () => {
+    upsertRawScanned(row({ path: 'd:/rawfiles/probe-a.mp4', name: 'probe-a' })); // 未归档未探测（作用域内）
+    upsertRawScanned(row({ path: 'd:/archives/x/probe-b.mp4', name: 'probe-b' })); // 归档未探测（根外）
+    db.exec("UPDATE raw_files SET archived = 1 WHERE path = 'd:/archives/x/probe-b.mp4'");
+    upsertRawScanned(row({ path: 'd:/archives/x/probe-c.mp4', name: 'probe-c' })); // 归档已探测
+    db.exec("UPDATE raw_files SET archived = 1 WHERE path = 'd:/archives/x/probe-c.mp4'");
+    const cid = Number((db.prepare("SELECT id FROM raw_files WHERE path = 'd:/archives/x/probe-c.mp4'").get() as { id: number }).id);
+    setRawVideoMeta(cid, { duration: 60, width: 1920, height: 1080 });
+    upsertRawScanned(row({ path: 'd:/rawfiles/probe-d.mp4', name: 'probe-d' })); // missing 未探测
+    db.exec("UPDATE raw_files SET missing = 1 WHERE path = 'd:/rawfiles/probe-d.mp4'");
+    upsertRawScanned(row({ path: 'd:/rawfiles/probe-e.jpg', name: 'probe-e', ext: 'jpg', type: 'image' })); // 图片
+
+    const scoped = listUnprobedVideos([{ volume: 'd:', root: 'd:/rawfiles' }]).map((r) => r.path);
+    expect(scoped).toEqual(['d:/rawfiles/probe-a.mp4']); // 归档/missing/图片均排除
+    expect(listUnprobedArchivedVideos().map((r) => r.path)).toEqual(['d:/archives/x/probe-b.mp4']);
+
+    db.exec("DELETE FROM raw_files WHERE name LIKE 'probe-%'");
   });
 });
 

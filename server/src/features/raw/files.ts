@@ -329,17 +329,29 @@ export function setRawVideoMeta(id: number, m: { duration: number | null; width:
 }
 
 /**
- * 存量补录候选：作用域内未探测过的现存视频行（duration IS NULL）。
+ * 存量补录候选：作用域内未探测过的现存视频行（duration IS NULL 且未归档；
+ * 归档行由 listUnprobedArchivedVideos 单列——两者取互不重叠，避免坏文件同轮双探）。
  * 探测失败不写库（保持 NULL，下次扫描重试——坏文件每次白跑一次 ffmpeg，换取语义简单）。
  */
 export function listUnprobedVideos(scopes: { volume: string; root: string }[]): { id: number; path: string }[] {
   if (!scopes.length) return [];
   const conds = scopes.map(() => '(volume = ? AND substr(path, 1, ?) = ?)').join(' OR ');
   return (db.prepare(
-    `SELECT id, path FROM raw_files WHERE type = 'video' AND duration IS NULL
+    `SELECT id, path FROM raw_files WHERE type = 'video' AND archived = 0 AND duration IS NULL
      AND missing = 0 AND pending_missing = 0 AND (${conds}) ORDER BY path`,
   ).all(...scopes.flatMap((s) => [s.volume, s.root.length, s.root])) as SqlRow[])
     .map((r) => ({ id: numOf(r.id), path: strOf(r.path) }));
+}
+
+/**
+ * 存量补录候选（归档行）：已移出 RawFiles（Archives 树等扫描根外）的未探测现存视频行。
+ * 单行跟随语义下行里的 path 就是当前位置，直接探测；不限作用域（扫描对它们无从「看见」）。
+ */
+export function listUnprobedArchivedVideos(): { id: number; path: string }[] {
+  return (db.prepare(
+    `SELECT id, path FROM raw_files WHERE type = 'video' AND archived = 1 AND duration IS NULL
+     AND missing = 0 AND pending_missing = 0 ORDER BY path`,
+  ).all() as SqlRow[]).map((r) => ({ id: numOf(r.id), path: strOf(r.path) }));
 }
 
 /**
