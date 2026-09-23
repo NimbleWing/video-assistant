@@ -23,14 +23,12 @@ import type {
   RawType,
   RawVolumesResponse,
   SaveConfigResponse,
-  ScanResponse,
   StudiosResponse,
   StudioMutationResponse,
   TagsResponse,
   TagMutationResponse,
   VideoArchiveRequest,
   VideoMutationResponse,
-  VideosResponse,
   WorksResponse,
 } from './types';
 
@@ -40,25 +38,6 @@ async function api<T>(path: string, opts?: RequestInit): Promise<T> {
   const body = j as { ok?: boolean; error?: string };
   if (!r.ok || body.ok === false) throw new Error(body.error || r.statusText);
   return j as T;
-}
-
-export interface VideosQuery {
-  page: number;
-  size: number;
-  q?: string;
-  volume?: string;
-  type: 'video' | 'cover';
-}
-
-export function fetchVideos(query: VideosQuery): Promise<VideosResponse> {
-  const p = new URLSearchParams({
-    page: String(query.page),
-    size: String(query.size),
-    type: query.type,
-  });
-  if (query.q) p.set('q', query.q);
-  if (query.volume) p.set('volume', query.volume);
-  return api(`/api/videos?${p.toString()}`);
 }
 
 export interface DownloadsQuery {
@@ -84,16 +63,13 @@ export function fetchConfig(): Promise<ConfigResponse> {
   return api('/api/config');
 }
 
-export function saveConfig(scanDirs: string[], ffmpegPath?: string): Promise<SaveConfigResponse> {
+/** 保存 ffmpeg 路径（空串 = 清除配置走 PATH）。 */
+export function saveConfig(ffmpegPath: string): Promise<SaveConfigResponse> {
   return api('/api/config', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(ffmpegPath == null ? { scanDirs } : { scanDirs, ffmpegPath }),
+    body: JSON.stringify({ ffmpegPath }),
   });
-}
-
-export function triggerScan(): Promise<ScanResponse> {
-  return api('/api/scan', { method: 'POST' });
 }
 
 export function fetchLog(): Promise<LogResponse> {

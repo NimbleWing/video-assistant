@@ -72,7 +72,7 @@ export function streamFile(
   stream.pipe(res);
 }
 
-/** 路由请求上下文：params 为路径占位符（如 /stream/:id 的 id）。 */
+/** 路由请求上下文：params 为路径占位符（如 /api/raw/file/:id 的 id）。 */
 export interface RequestContext {
   req: IncomingMessage;
   res: ServerResponse;

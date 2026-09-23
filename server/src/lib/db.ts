@@ -11,6 +11,12 @@ const DB_PATH = process.env.ROU_MEDIA_DB ?? path.join(SERVER_ROOT, 'media.db');
 export const db = new DatabaseSync(DB_PATH);
 db.exec('PRAGMA journal_mode = WAL;');
 
+// 旧表迁移（2026-09-23，P8）：media feature 退役——DROP files 表 + 清 scan_dirs 配置。
+// 幂等：新库两操作均为 no-op（meta 表由 lib/meta.ts 稍后建，此处判存在再清）。
+db.exec('DROP TABLE IF EXISTS files');
+const metaExists = db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'meta'").get();
+if (numOf((metaExists as SqlRow).n) > 0) db.exec("DELETE FROM meta WHERE key = 'scan_dirs'");
+
 /** node:sqlite 行（值可能为 null/number/bigint/string/Uint8Array，取用时显式转换）。 */
 export type SqlRow = Record<string, unknown>;
 

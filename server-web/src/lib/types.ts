@@ -1,20 +1,15 @@
 // API 模型单一来源：re-export server 侧各 feature 的 types.ts（字段名对齐 server 列名）。
 // 服务端响应结构变更时此处由编译器抓住，避免两端字段漂移。
+// （media feature 已退役，其类型随 /api/videos、/api/scan、POST /api/files 一并移除。）
 export type {
-  FileType,
-  FileSource,
-  FileRow,
-  VideoItem,
-  VolumeStat,
-  VideosResponse,
+  PingResponse,
+  LogResponse,
   ExistsMatch,
   ExistsResponse,
-  ScanResult,
-  ScanResponse,
   ConfigResponse,
   SaveConfigResponse,
   FfmpegStatus,
-} from '../../../server/src/features/media/types';
+} from '../../../server/src/features/system/types';
 export type {
   RawType,
   RawFileRow,
@@ -45,7 +40,6 @@ export type {
   DownloadsResponse,
   DownloadUpsertRequest,
 } from '../../../server/src/features/ledger/types';
-export type { PingResponse, LogResponse } from '../../../server/src/features/system/types';
 export type { CountryRow, CountriesResponse, CountryMutationResponse } from '../../../server/src/features/country/types';
 export type { TagRow, TagsResponse, TagMutationResponse } from '../../../server/src/features/tag/types';
 export type { StudioRow, StudiosResponse, StudioMutationResponse } from '../../../server/src/features/studio/types';

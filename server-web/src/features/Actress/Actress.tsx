@@ -45,7 +45,7 @@ export function Actress() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 搜索防抖 300ms（对齐视频库惯例）
+  // 搜索防抖 300ms（对齐原始资料页惯例）
   useEffect(() => {
     const t = setTimeout(() => {
       setQ(qInput);

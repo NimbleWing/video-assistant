@@ -47,7 +47,7 @@ npm run check   # typecheck + vitest（运行时零依赖，npm install 仅开�
 
 # 管理页前端（server-web/ 内执行）
 npm run check   # typecheck + test + build（改动后必跑，产物直出 ../server/public 并随仓库提交）
-npm run dev     # Vite 开发服（热更，/api、/stream 代理到 127.0.0.1:17321）
+npm run dev     # Vite 开发服（热更，/api 代理到 127.0.0.1:17321）
 ```
 
 本地媒体库服务启动：双击 `server/start.bat`，或面板心跳指示灯一键操作（在线点击 = 新标签页打开管理页，离线点击 = native messaging 拉起服务），详见 `server/DESIGN.md` §3。服务未启动时扩展自动回退下载历史判定，仅影响判定精度。

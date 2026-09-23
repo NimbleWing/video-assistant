@@ -3,7 +3,6 @@
 import http from 'node:http';
 import { HttpError, json, type Route } from './lib/http.ts';
 import { serveStatic } from './lib/static.ts';
-import { mediaRoutes } from './features/media/index.ts';
 import { rawRoutes } from './features/raw/index.ts';
 import { ledgerRoutes } from './features/ledger/index.ts';
 import { countryRoutes } from './features/country/index.ts';
@@ -24,9 +23,9 @@ const ALLOWED_ORIGINS = [
   'http://127.0.0.1:5173',
 ];
 
-const ROUTES: Route[] = [...systemRoutes, ...mediaRoutes, ...rawRoutes, ...ledgerRoutes, ...countryRoutes, ...tagRoutes, ...studioRoutes, ...actressRoutes, ...videoRoutes];
+const ROUTES: Route[] = [...systemRoutes, ...rawRoutes, ...ledgerRoutes, ...countryRoutes, ...tagRoutes, ...studioRoutes, ...actressRoutes, ...videoRoutes];
 
-/** 路径匹配：段精确相等；':x' 段为参数占位（如 /stream/:id）。未匹配返回 null。 */
+/** 路径匹配：段精确相等；':x' 段为参数占位（如 /api/raw/file/:id）。未匹配返回 null。 */
 function matchPath(pattern: string, pathname: string): Record<string, string> | null {
   const ps = pattern.split('/');
   const xs = pathname.split('/');

@@ -1,5 +1,5 @@
-// 路径纯函数：归一化 / stem / 盘符 / 扩展名类型（无 IO，全项目唯一实现）。
-// 返回的 'video' | 'cover' 与 features/media/types.ts 的 FileType 结构一致。
+// 路径纯函数：归一化 / stem / 盘符 / 目录段清洗（无 IO，全项目唯一实现）。
+// （typeOfExt 已随 media feature 退役移除，2026-09-23；raw 侧扩展名清单内聚 features/raw。）
 
 /** 路径归一化：反斜杠→正斜杠、去前导斜杠、小写（Windows 大小写不敏感）。 */
 export function normPath(p: string): string {
@@ -15,14 +15,6 @@ export function stemOf(basename: string): string {
 export function volumeOf(p: string): string {
   const m = p.match(/^([A-Za-z]):/);
   return m ? `${m[1].toLowerCase()}:` : '?';
-}
-
-/** 由扩展名判定媒体类型；未知返回 null。 */
-export function typeOfExt(ext: string): 'video' | 'cover' | null {
-  const e = String(ext).replace(/^\./, '').toLowerCase();
-  if (e === 'mp4' || e === 'ts') return 'video';
-  if (e === 'jpg' || e === 'jpeg' || e === 'png' || e === 'webp') return 'cover';
-  return null;
 }
 
 /**

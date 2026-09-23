@@ -1,6 +1,6 @@
 // HLS 会话状态机 + ffmpeg 探测（共享基础设施，无业务语义）。
-// 会话键由调用方自定（media 用 m{files.id}、raw 用 raw-{raw_files.id}），入参 = 绝对路径 + 时长；
-// 各 feature 的 hls.ts 是薄适配层，只负责查表与时长来源（DB 缓存 / 现探），不触碰状态机内部。
+// 会话键由调用方自定（当前仅 raw：raw-{raw_files.id}），入参 = 绝对路径 + 时长；
+// feature 的 hls.ts 是薄适配层，只负责查表与时长来源，不触碰状态机内部。
 // 设计见 DESIGN.md §7；ffmpeg 为可选增强：缺失时 openHlsSession 抛 503，前端降级直连。
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createReadStream, existsSync, mkdirSync, renameSync, rmSync, promises as fs } from 'node:fs';

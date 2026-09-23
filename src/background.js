@@ -100,10 +100,8 @@ async function downloadToDisk(url, filename) {
     try { await chrome.downloads.erase({ id: downloadId }); } catch {}
     return { ok: false, error: '落盘中断' };
   }
-  // 本地媒体库登记（fire-and-forget，服务未启动等失败无害——下次扫描自会补齐）
-  if (item.filename) {
-    ledgerPost('/api/files', { absPath: item.filename, size: item.bytesReceived || 0 }).catch(() => {});
-  }
+  // v1.14.0 起：本地媒体库 files 表已退役，落盘后不再 POST /api/files 登记物理文件
+  // （判定全靠账本 vid 精确 + filename 匹配，见 server/DESIGN.md §1）。
   return { ok: true };
 }
 
@@ -119,8 +117,7 @@ function ledgerPost(path, body) {
 }
 
 /**
- * 本地服务 exists 查询（磁盘实况，权威判定层）。
- * 服务端账本优先：vid（video_id）精确命中不受站点改名影响；filename 回退。
+ * 本地服务 exists 查询（权威判定层；服务端两层：账本 vid 精确/filename 回退 → raw_files stem 匹配）。
  * @param {string} rel 完整相对路径（已归一化小写）
  * @param {string} [vid] 站点视频 id（空串 = 仅按 rel 匹配）
  * @returns {Promise<{ exists: boolean, matches: { path: string, type: string, size: number }[] } | null>} null = 服务不可用
@@ -143,7 +140,8 @@ async function ledgerExists(rel, vid = '') {
 }
 
 /**
- * 已下载判定（三层链第一二层的实现）：本地媒体库服务优先，
+ * 已下载判定（判定链前两层实现：服务 → downloads 回退，第三层 overwrite 自愈由落盘承担）：
+ * 本地媒体库服务优先（服务内两层：账本 vid 精确/filename 回退 → raw_files stem 匹配），
  * 不可用（未启动/超时）回退 chrome.downloads 历史校验。
  * @param {string} filename 可含子目录
  * @param {string} [vid] 站点视频 id（透传服务端账本精确命中）

@@ -14,9 +14,9 @@ afterEach(() => {
 
 describe('api', () => {
   it('成功返回解析后的 JSON', async () => {
-    fetchMock.mockResolvedValue(okJson({ ok: true, scanDirs: ['D:\\Videos'] }));
+    fetchMock.mockResolvedValue(okJson({ ok: true, ffmpegPath: 'D:\\ffmpeg.exe' }));
     const j = await fetchConfig();
-    expect(j.scanDirs).toEqual(['D:\\Videos']);
+    expect(j.ffmpegPath).toBe('D:\\ffmpeg.exe');
     expect(fetchMock).toHaveBeenCalledWith('/api/config', undefined);
   });
 
@@ -30,14 +30,14 @@ describe('api', () => {
     await expect(fetchConfig()).rejects.toThrow('ISE');
   });
 
-  it('saveConfig 以 POST + JSON 体发送', async () => {
+  it('saveConfig 以 POST + JSON 体发送（仅 ffmpegPath）', async () => {
     fetchMock.mockResolvedValue(okJson({ ok: true, warnings: [] }));
-    await saveConfig(['D:\\Videos', '']);
+    await saveConfig('D:\\ffmpeg.exe');
     const [path, opts] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(path).toBe('/api/config');
     expect(opts.method).toBe('POST');
     expect((opts.headers as Record<string, string>)['Content-Type']).toBe('application/json');
-    expect(opts.body).toBe(JSON.stringify({ scanDirs: ['D:\\Videos', ''] }));
+    expect(opts.body).toBe(JSON.stringify({ ffmpegPath: 'D:\\ffmpeg.exe' }));
   });
 
   it('fetchDownloads 拼接查询参数（空字段省略）', async () => {

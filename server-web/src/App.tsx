@@ -3,7 +3,6 @@ import type { ReactNode } from 'react';
 import { Layout } from '@/components/Layout';
 import { PlayerDialog } from '@/components/PlayerDialog';
 import type { PlaySource } from '@/components/PlayerDialog';
-import { Videos } from '@/features/Videos';
 import { Raw } from '@/features/Raw';
 import { Archive } from '@/features/Archive';
 import { Ledger } from '@/features/Ledger';
@@ -13,7 +12,7 @@ import { Studio } from '@/features/Studio';
 import { Actress } from '@/features/Actress';
 import { Settings } from '@/features/Settings';
 
-type Tab = 'videos' | 'raw' | 'archive' | 'ledger' | 'country' | 'tag' | 'studio' | 'actress' | 'settings';
+type Tab = 'raw' | 'archive' | 'ledger' | 'country' | 'tag' | 'studio' | 'actress' | 'settings';
 
 const icon = (path: ReactNode) => (
   <svg
@@ -32,16 +31,6 @@ const icon = (path: ReactNode) => (
 );
 
 const TABS = [
-  {
-    key: 'videos',
-    label: '视频库',
-    icon: icon(
-      <>
-        <rect x="2.5" y="4.5" width="19" height="15" rx="3" />
-        <path d="M10 9.2v5.6l5-2.8z" fill="currentColor" stroke="none" />
-      </>,
-    ),
-  },
   {
     key: 'raw',
     label: '原始资料',
@@ -127,7 +116,7 @@ const TABS = [
 ] as const satisfies readonly { key: Tab; label: string; icon: ReactNode }[];
 
 export default function App() {
-  const [tab, setTab] = useState<Tab>('videos');
+  const [tab, setTab] = useState<Tab>('raw');
   const [stat, setStat] = useState('加载中…');
   const [playing, setPlaying] = useState<PlaySource | null>(null);
 
@@ -145,14 +134,6 @@ export default function App() {
         activeTab={tab}
         onTabChange={setTab}
       >
-        {tab === 'videos' && (
-          <Videos
-            onStat={setStat}
-            onPlay={(it) =>
-              setPlaying({ path: it.path, direct: `/stream/${it.id}`, hls: `/stream/${it.id}/index.m3u8` })
-            }
-          />
-        )}
         {tab === 'raw' && <Raw onStat={setStat} onPlay={setPlaying} />}
         {tab === 'archive' && <Archive onStat={setStat} onPlay={setPlaying} />}
         {tab === 'ledger' && <Ledger />}

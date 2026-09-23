@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dirName, normPath, stemOf, typeOfExt, volumeOf } from './paths.ts';
+import { dirName, normPath, stemOf, volumeOf } from './paths.ts';
 
 describe('normPath', () => {
   it('反斜杠转正斜杠 + 去前导斜杠 + 小写', () => {
@@ -25,21 +25,6 @@ describe('volumeOf', () => {
   });
   it('非 Windows 形态返回 ?', () => {
     expect(volumeOf('/home/x.mp4')).toBe('?');
-  });
-});
-
-describe('typeOfExt', () => {
-  it('视频/封面扩展', () => {
-    expect(typeOfExt('mp4')).toBe('video');
-    expect(typeOfExt('TS')).toBe('video');
-    expect(typeOfExt('.jpg')).toBe('cover');
-    expect(typeOfExt('jpeg')).toBe('cover');
-    expect(typeOfExt('png')).toBe('cover');
-    expect(typeOfExt('webp')).toBe('cover');
-  });
-  it('未知返回 null', () => {
-    expect(typeOfExt('txt')).toBeNull();
-    expect(typeOfExt('')).toBeNull();
   });
 });
 

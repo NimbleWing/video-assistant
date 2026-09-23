@@ -96,7 +96,7 @@ export function upsertRawScanned(r: RawScannedRow): void {
 }
 
 /**
- * 判定链 raw 层（/api/exists 第三层）：stem 相等的现存视频行。
+ * 判定链 raw 层（/api/exists 第二层；files 层退役后由本层独扛）：stem 相等的现存视频行。
  * 匹配最初名（name，改名不更新）或最新名（raw_archive.name）——两者指向盘上同一物理文件；
  * missing/pending_missing 行排除（文件可能已不在盘上，与查重「仅现存行」口径一致）。
  * 判定边界 = 本地物理存在，与来源站点无关（多站点同名视频靠 stem 归一化覆盖）。
@@ -113,6 +113,14 @@ export function rawVideoMatches(rel: string): { path: string; size: number }[] {
       AND (LOWER(f.name) = ? OR LOWER(a.name) = ?)
   `).all(stem, stem) as SqlRow[];
   return rows.map((row) => ({ path: strOf(row.path), size: numOf(row.size) }));
+}
+
+/** 现存行统计（/api/ping 聚合用；与查重「仅现存行」同口径：missing=0 且 pending_missing=0）。 */
+export function rawStats(): { videos: number; images: number } {
+  const row = db.prepare(
+    "SELECT SUM(type = 'video') AS videos, SUM(type = 'image') AS images FROM raw_files WHERE missing = 0 AND pending_missing = 0",
+  ).get() as SqlRow;
+  return { videos: numOf(row.videos), images: numOf(row.images) };
 }
 
 /**

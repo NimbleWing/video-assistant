@@ -1,4 +1,4 @@
-// meta KV 表：配置存储（scan_dirs 等），后续 feature 可复用。
+// meta KV 表：配置存储（ffmpeg_path、raw_last_selection 等），后续 feature 可复用。
 import { db, strOf } from './db.ts';
 
 db.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);');

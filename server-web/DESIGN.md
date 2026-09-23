@@ -4,7 +4,7 @@
 
 ## 定位
 
-本地媒体库服务（`127.0.0.1:17321`）的管理页前端，独立 npm 包。技术栈：React 19 + TypeScript（strict）+ Tailwind CSS v4 + Vite 7 + Vitest（happy-dom + Testing Library）。功能与旧版手写 `server/public/index.html` 完全对齐并持续演进：视频库/原始资料/归档资料/下载账本/国家/标签/片商/女优/设置九标签 + Range 流播放弹窗。
+本地媒体库服务（`127.0.0.1:17321`）的管理页前端，独立 npm 包。技术栈：React 19 + TypeScript（strict）+ Tailwind CSS v4 + Vite 7 + Vitest（happy-dom + Testing Library）。功能与旧版手写 `server/public/index.html` 对齐并持续演进：原始资料/归档资料/下载账本/国家/标签/片商/女优/设置八标签 + Range 流播放弹窗。「视频库」标签已随 files 表退役移除（2026-09-23，见 `../server/DESIGN.md` §1）。
 
 ## 结构
 
@@ -12,15 +12,12 @@
 
 | 文件 | 职责 |
 |------|------|
-| `src/App.tsx` | 组合 Layout 与九页面（视频库/原始资料/归档资料/下载账本/国家/标签/片商/女优/设置）、头部统计、播放弹窗状态（视频 tab 卸载重挂即刷新，替代旧版 scan 后手动 loadVideos）；tab 配置（key/label/icon）定义于此 |
+| `src/App.tsx` | 组合 Layout 与八页面（原始资料/归档资料/下载账本/国家/标签/片商/女优/设置；**默认 tab = 原始资料**）、头部统计、播放弹窗状态（tab 卸载重挂即刷新）；tab 配置（key/label/icon）定义于此 |
 | `src/components/Layout/index.tsx` | 页面骨架抽象：顶栏（标题 + 补充信息 + 移动端汉堡）+ 左侧侧边栏导航（icon + 文字，可选）+ 内容区；泛型 `K extends string` 支撑标签 key 收窄 |
 | `src/components/Pager/index.tsx` | 共享分页条：上一页/下一页 + 页码（可选跳页输入框：回车/失焦提交、钳位 1..pages）+ 右侧可选「每页 N 条」选择器 |
-| `src/components/PlayerDialog/index.tsx` | 共享播放弹窗（自 Videos 泛化）：原生 `<dialog>` + `closedby="any"`，双源 `{direct, hls, preferDirect}`——默认 hls.js 主路径 + 降级链（见下）；`preferDirect` 时直连优先、`<video>` error 事件回退 hls；关闭/换源时停流清理，复制路径；由 App 持有状态全局挂载（tab 切换不卸载） |
+| `src/components/PlayerDialog/index.tsx` | 共享播放弹窗：原生 `<dialog>` + `closedby="any"`，双源 `{direct, hls, preferDirect}`——默认 hls.js 主路径 + 降级链（见下）；`preferDirect` 时直连优先、`<video>` error 事件回退 hls；关闭/换源时停流清理，复制路径；由 App 持有状态全局挂载（tab 切换不卸载）；Raw/Archive 页消费 |
 | `src/components/ConfirmDialog/index.tsx` | 共享确认弹窗：原生 `<dialog>` + `closedby="any"`（Esc/遮罩点击即取消），挂载式受控（父组件条件渲染，onConfirm 后卸载即关闭）；`danger` 红系确认按钮（`.act-danger`）；Raw 页查重删除使用 |
 | `src/components/RawCard/index.tsx` | 原始资料卡片（Raw/Archive 两页共享）：标题=当前名（path basename）；archived=1 时副行「最初：xx」；可选 `onHistory` 时信息区渲染「变更记录」入口（归档页用）；可选 `onDelete` 时元信息行尾渲染删除图标按钮（原始资料页用：删磁盘文件 + 库记录）；导出共用 `TrashButton`；图片条目头图 = `/api/raw/file/:id/content`；视频条目 = 类型图标 + ext 大字占位；hover 播放遮罩仅视频；missing 灰化 + 角标 |
-| `src/features/Videos/index.ts` | 桶导出：`Videos`、`VideoCard` |
-| `src/features/Videos/Videos.tsx` | **视频库页面**：搜索防抖 300ms、盘符/类型筛选（选中盘符消失自动回退全部）、分页可调每页条数（20/50/100）与跳页 |
-| `src/features/Videos/VideoCard.tsx` | 单卡（参考 tauri-react VideoProbeCard：封面/占位 + 时长/大小/盘符角标 + hover 播放遮罩与封面缩放 + 信息区；无封面用 art 渐变占位） |
 | `src/features/Raw/index.ts` | 桶导出：`Raw` |
 | `src/features/Raw/Raw.tsx` | **原始资料页面**（顶部扫描面板 + 下方卡片浏览）：磁盘卡片多选（`/api/raw/volumes`，容量条）+ 类型勾选（视频/图片，记忆自 meta）+ 开始扫描/进度条/取消（EventSource 订阅 `/api/raw/scan/events`：snapshot/progress/done）；待决策消失横幅（done 的 missingCount → 拉清单 + 批量删除/标记）；查重面板（工具栏「查重」按钮开合，`/api/raw/duplicates` 分组分页：组头类型徽标/份数/单份大小/冗余空间/hash 短码 + 文件行路径/盘符/日期、视频可播；**删除**：行级 🗑 与组级「删除多余副本」（保留组内第一个），`ConfirmDialog` 二次确认（列路径清单，超 10 条截断）后逐个 `POST /api/raw/file/:id/delete`，完成后刷新查重与文件列表；扫描 done 后随 refreshKey 自动刷新）；文件卡片分页浏览（搜索防抖 + 类型/盘符/missing/归档筛选——归档默认仅未归档，归档行在归档页有专属视图；卡片删除入口 → 同一 ConfirmDialog/删除链路，失败汇总页面级横幅；**图片卡片「设为头像」入口**（`RawCard onAvatar`）→ `AvatarPicker` 选女优 → `POST /api/actresses/:id/avatar`，成功 toast + 刷新） |
 | `src/features/Archive/index.ts` | 桶导出：`Archive`、`EventsDialog` |
@@ -41,7 +38,7 @@
 | `src/features/Video/index.ts` | 桶导出：`ArchiveDialog` |
 | `src/features/Video/ArchiveDialog.tsx` | **视频归档弹窗**（原始资料页视频卡片发起，单片流程；剧集切换仅占位禁用确认）：左播放区（原生格式直连 `/api/raw/file/:id/content`，ts/avi 等走 hls.js）+ 右表单——标题* /副标题/番号、演员多选（搜索+chips，**第一位演员决定归档目录**，变化即重置国家与标签）、国家单选（自动填充可改）、标签多选（自动填并集可改）、片商单选、封面区（**同名图片自动匹配**：同 stem 同目录优先→全库 path 升序；可清空、可搜索替换）→ `POST /api/videos/archive`；成功 toast + 刷新原始资料页 |
 | `src/features/Settings/index.ts` | 桶导出：`Settings` |
-| `src/features/Settings/Settings.tsx` | 设置页面：扫描目录保存、ffmpeg 路径配置与状态显示（POST /api/config）、立即扫描、日志尾部查看 |
+| `src/features/Settings/Settings.tsx` | 设置页面：ffmpeg 路径配置与状态显示（POST /api/config）、日志尾部查看（扫描目录/立即扫描已随 files 表退役移除） |
 | `src/lib/api.ts` | 类型化 API 客户端（fetch 包装：`ok:false` / HTTP 错误统一抛 `Error`，带服务端 error 信息；raw 系列 + SSE 由组件直连 EventSource） |
 | `src/lib/types.ts` | 接口模型（字段名对齐 server 各 feature types.ts，相对路径 re-export） |
 | `src/utils/format.ts` | 纯函数：`fmtSize` / `fmtDur` / `fmtTime` / `fmtDate` |
@@ -71,11 +68,11 @@
 - **徽标/chip**：暗底 tint + 亮色文字（7-8px 圆角）；chip 选中 `brand-soft + brand-hover`。
 - **输入**：`raised` 底透明边，聚焦描边 `brand`；空态用虚线框（`border-dashed`）。
 - 字体栈含 `Noto Sans TC / PingFang TC / Microsoft JhengHei`。
-- **视频卡片网格**：`grid grid-cols-2 md:3 xl:4 gap-4`；卡片 = 封面区（`aspect-video`、`object-cover`、hover `scale-105`；角标毛玻璃 `bg-black/65`：左上 ext 徽标、右上时长 `font-mono`、左下大小、右下盘符）+ 信息区（stem `line-clamp-2`、path 单行截断带 `title`、mtime 日期）。视频 hover 出品牌色圆形播放按钮遮罩，点击整卡触发 `onPlay`；封面条目无遮罩不可点。封面走 `/stream/{cover_id}`（服务端 stem 同名/目录名关联），无封面渲染 art 渐变 + 胶片图标占位。
+- **卡片网格**：`grid grid-cols-2 md:3 xl:4 gap-4`（Raw/Archive 页卡片）。
 
 ## 播放链路（hls.js + 降级链）
 
-PlayerDialog 双源入参 `{path, direct, hls?, preferDirect?}`：Videos 页传 `/stream/:id`（direct）+ `/stream/:id/index.m3u8`（hls）；Raw 页视频卡片——原生格式（mp4/webm/m4v/mov/mkv）传 `preferDirect`（直连 `/api/raw/file/:id/content`，省转码 CPU，`<video>` error 回退 hls），其余格式（ts/avi/wmv/flv/rm/rmvb/mpg）走 hls（`/api/raw/file/:id/index.m3u8`，服务端转码兜底；不支持的组合前端禁播提示）。
+PlayerDialog 双源入参 `{path, direct, hls?, preferDirect?}`：Raw 页视频卡片——原生格式（mp4/webm/m4v/mov/mkv）传 `preferDirect`（直连 `/api/raw/file/:id/content`，省转码 CPU，`<video>` error 回退 hls），其余格式（ts/avi/wmv/flv/rm/rmvb/mpg）走 hls（`/api/raw/file/:id/index.m3u8`，服务端转码兜底；不支持的组合前端禁播提示）。
 
 - **主路径**：`Hls.isSupported()` → `hls.js` 加载 m3u8（服务端 ffmpeg libx264 实时转码分段，设计见 `../server/DESIGN.md` §7）。remux 产出的 MP4 容器时基有缺陷（无 ctts/DTS，Chrome 直连播会抖动，copy 重整也救不了），转码重建时间轴后播放健康。
 - **降级链**（逐级回退，保证任何环境可播）：
@@ -83,12 +80,12 @@ PlayerDialog 双源入参 `{path, direct, hls?, preferDirect?}`：Videos 页传 
   2. `Hls.isSupported()` 为假（老 Safari 等）→ `canPlayType('application/vnd.apple.mpegurl')` 原生 HLS；
   3. 都不支持 → 直连 direct。
 - `preferDirect` 时链反转：直连优先；`<video>` 触发 `error` 事件（编解码不支持，如带 HEVC 的 mkv）→ 切 hls 源重试。
-- 换源/关闭清理：`hls.destroy()` + `video.pause()/load()`；封面/缩略图不走 HLS，固定 Range 直连。
+- 换源/关闭清理：`hls.destroy()` + `video.pause()/load()`；图片缩略图不走 HLS，固定 Range 直连。
 
 ## 构建与开发
 
 - `npm run build` = `tsc --noEmit && vite build`，产物直出 `../server/public`（`emptyOutDir` 清旧版；**文件名不带哈希**，diff 稳定），随仓库提交——服务侧保持零依赖、`start.bat` 开箱即用，代价是构建产物入库。
-- `npm run dev`：Vite 开发服（热更），`/api`、`/stream` 代理到 `127.0.0.1:17321`；服务端写操作 Origin 白名单已含 dev origin（`localhost:5173` / `127.0.0.1:5173`）。
+- `npm run dev`：Vite 开发服（热更），`/api` 代理到 `127.0.0.1:17321`；服务端写操作 Origin 白名单已含 dev origin（`localhost:5173` / `127.0.0.1:5173`）。
 - `npm run check` = typecheck + test + build，改动后必跑；**根目录 check 不覆盖本目录**（根 tsconfig/eslint 已排除）。
 
 ## 测试策略
@@ -96,11 +93,11 @@ PlayerDialog 双源入参 `{path, direct, hls?, preferDirect?}`：Videos 页传 
 - Vitest + happy-dom + Testing Library，`globals: true` + `src/test/setup.ts`（`IS_REACT_ACT_ENVIRONMENT`）。
 - 组件测试统一 `vi.mock('@/lib/api')`（别名经 vite resolve.alias 解析，与源码导入同一模块）；纯逻辑（format/api）直接测。
 - 已知坑：RTL `getByText` 默认只匹配元素的**直接文本节点**——混合内容（如 `<b>剧名</b> / 标题`）需 span 包裹或用 `selector` / `textContent` 断言。
-- 覆盖：格式化边界、API 错误路径与参数拼接、各 Section 交互（筛选/分页/防抖/chips/保存/扫描/日志）、PlayerDialog 的 hls 建链与降级（`vi.mock('hls.js')`）、ConfirmDialog 确认/取消回调、Raw 页（磁盘卡渲染/勾选与启动参数、EventSource mock 驱动进度与 done 后的消失横幅、卡片类型分派与筛选、查重面板分组/分页/删除确认与部分失败展示）。
+- 覆盖：格式化边界、API 错误路径与参数拼接、各 Section 交互（筛选/分页/防抖/chips/保存/日志）、PlayerDialog 的 hls 建链与降级（`vi.mock('hls.js')`）、ConfirmDialog 确认/取消回调、Raw 页（磁盘卡渲染/勾选与启动参数、EventSource mock 驱动进度与 done 后的消失横幅、卡片类型分派与筛选、查重面板分组/分页/删除确认与部分失败展示）。
 - 运行时依赖：react / react-dom / **hls.js**（播放链路唯一第三方运行时依赖）。
 
 ## 约定
 
 - TypeScript strict，无 eslint（typecheck + 测试把关）；注释与 UI 文案中文。
-- UI 行为保持与旧版一致：防抖 300ms、PAGE_SIZE 50、账本默认 status=failed、扫描结果摘要格式等。
+- UI 行为保持稳定：防抖 300ms、PAGE_SIZE 50、账本默认 status=failed 等。
 - 依赖改动只在 `server-web/package.json` 内，不影响扩展本体与根工具链。

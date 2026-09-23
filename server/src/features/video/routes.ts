@@ -94,7 +94,7 @@ const archiveRoute: Route['handler'] = async ({ req, res }) => {
 };
 
 export const videoRoutes: Route[] = [
-  // 注意：GET /api/videos 已被 media feature（物理文件视频库）占用，作品域走 /api/works
+  // 历史注记：GET /api/videos 曾被已退役的 media feature 占用，作品域沿用 /api/works
   { method: 'GET', path: '/api/works', handler: listRoute },
   { method: 'POST', path: '/api/videos/archive', handler: archiveRoute },
 ];
