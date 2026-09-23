@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { createActress, deleteActress, fetchActressDisks, fetchActresses, updateActress } from '@/lib/api';
+import { createActress, deleteActress, fetchActressDisks, fetchActresses, setActressAvatar, updateActress } from '@/lib/api';
 import type { ActressRow, ActressUpsertRequest, CountryRow, TagRow } from '@/lib/types';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { ActressCard } from './ActressCard';
@@ -54,9 +54,18 @@ export function Actress() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [qInput]);
 
-  const submitForm = async (payload: ActressUpsertRequest) => {
-    if (editing === 'create') await createActress(payload);
-    else if (editing) await updateActress(editing.id, payload);
+  const submitForm = async (payload: ActressUpsertRequest, avatarFileId?: number) => {
+    if (editing === 'create') {
+      const res = await createActress(payload);
+      // 选了头像图片：链式设头像（归档移动 head.{ext}）；失败不阻断创建，页面级提示
+      if (avatarFileId != null) {
+        try {
+          await setActressAvatar(res.item.id, avatarFileId);
+        } catch (e) {
+          setErr(`「${res.item.name}」已创建，但头像设置失败：${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+    } else if (editing) await updateActress(editing.id, payload);
     setEditing(null);
     refresh();
   };
@@ -130,7 +139,7 @@ export function Actress() {
       )}
 
       <p className="mt-3 shrink-0 text-xs text-dim">
-        创建时在所选磁盘建立 Archives/国家/女优/图集 目录树；头像从原始资料页图片卡片设置。
+        创建时在所选磁盘建立 Archives/国家/女优/图集 目录树；头像可在创建弹窗直接搜图选定，或事后从原始资料页图片卡片设置。
       </p>
 
       {editing ? (

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import type { CountryRow, ActressRow, ActressUpsertRequest, TagRow } from '@/lib/types';
+import type { CountryRow, ActressRow, ActressUpsertRequest, RawFileRow, TagRow } from '@/lib/types';
+import { fetchRawFiles } from '@/lib/api';
 import { RatingInput } from '@/components/RatingInput';
 
 interface Props {
@@ -8,13 +9,15 @@ interface Props {
   countries: CountryRow[];
   tags: TagRow[];
   disks: string[];
-  onSubmit: (payload: ActressUpsertRequest) => Promise<void>;
+  /** 第二参 avatarFileId：创建模式选了头像图片时回传，父组件负责创建后链式设头像。 */
+  onSubmit: (payload: ActressUpsertRequest, avatarFileId?: number) => Promise<void>;
   onCancel: () => void;
 }
 
 /**
  * 女优创建/编辑表单弹窗：名字、国家（必选）、评分 slider、标签多选、磁盘单选（创建）、别名动态列表。
  * 提交调 onSubmit（父组件负责请求与关闭）。
+ * 创建模式为左右两栏：左栏头像区——搜索本地 raw 图片库（关键词默认跟随名字），点选缩略图后上方大图预览。
  */
 export function ActressDialog({ init, countries, tags, disks, onSubmit, onCancel }: Props) {
   const editing = init != null;
@@ -27,12 +30,42 @@ export function ActressDialog({ init, countries, tags, disks, onSubmit, onCancel
   const [aliasDraft, setAliasDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const [avatarQ, setAvatarQ] = useState('');
+  const [avatarItems, setAvatarItems] = useState<RawFileRow[] | null>(null);
+  const [avatarSel, setAvatarSel] = useState<RawFileRow | null>(null);
+  /** 用户手动改过头像搜索框后，关键词不再跟随名字。 */
+  const avatarQTouched = useRef(false);
   const dlgRef = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
     const d = dlgRef.current;
     if (d && !d.open) d.showModal();
   }, []);
+
+  // 头像搜索关键词默认跟随名字输入
+  useEffect(() => {
+    if (editing || avatarQTouched.current) return;
+    setAvatarQ(name.trim());
+  }, [name, editing]);
+
+  // 头像图片搜索：本地 raw 图片库（未归档），防抖 300ms
+  useEffect(() => {
+    if (editing) return;
+    let alive = true;
+    const t = setTimeout(() => {
+      fetchRawFiles({ page: 1, size: 24, q: avatarQ.trim() || undefined, type: 'image' })
+        .then((d) => {
+          if (alive) setAvatarItems(d.items);
+        })
+        .catch(() => {
+          if (alive) setAvatarItems([]);
+        });
+    }, 300);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [avatarQ, editing]);
 
   const toggleTag = (id: number) => {
     setTagIds((prev) => {
@@ -80,7 +113,7 @@ export function ActressDialog({ init, countries, tags, disks, onSubmit, onCancel
       ...(editing ? {} : { disk }),
     };
     try {
-      await onSubmit(payload); // 父组件成功后卸载本组件（即关闭）
+      await onSubmit(payload, editing ? undefined : avatarSel?.id); // 父组件成功后卸载本组件（即关闭）
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
       setBusy(false);
@@ -89,9 +122,56 @@ export function ActressDialog({ init, countries, tags, disks, onSubmit, onCancel
 
   return (
     <dialog ref={dlgRef} onClose={onCancel} closedby="any">
-      <form onSubmit={submit} className="w-[min(560px,90vw)]">
+      <form onSubmit={submit} className={editing ? 'w-[min(560px,90vw)]' : 'w-[min(920px,95vw)]'}>
         <div className="mb-3 text-[15px] font-bold">{editing ? `编辑女优 · ${init!.name}` : '添加女优'}</div>
 
+        <div className={editing ? undefined : 'flex gap-5'}>
+          {!editing ? (
+            <div className="flex w-60 shrink-0 flex-col">
+              <div className="aspect-square w-full overflow-hidden rounded-xl border border-line bg-raised">
+                {avatarSel ? (
+                  <img src={`/api/raw/file/${avatarSel.id}/content`} alt="头像预览" className="size-full object-cover" />
+                ) : (
+                  <div className="flex size-full items-center justify-center text-xs text-dim">未选择头像</div>
+                )}
+              </div>
+              <input
+                className="mt-2 w-full"
+                placeholder="搜索图片（默认跟随名字）"
+                aria-label="搜索头像图片"
+                value={avatarQ}
+                onChange={(e) => {
+                  avatarQTouched.current = true;
+                  setAvatarQ(e.target.value);
+                }}
+              />
+              <div className="mt-2 grid max-h-56 grid-cols-3 content-start gap-1.5 overflow-y-auto">
+                {avatarItems == null ? (
+                  <p className="col-span-3 py-4 text-center text-xs text-dim">加载中…</p>
+                ) : avatarItems.length === 0 ? (
+                  <p className="col-span-3 py-4 text-center text-xs text-dim">没有匹配的图片</p>
+                ) : (
+                  avatarItems.map((f) => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      title={f.path}
+                      aria-label={`选择图片 ${f.name}`}
+                      className={`aspect-square overflow-hidden rounded-lg border ${
+                        avatarSel?.id === f.id ? 'border-brand ring-2 ring-brand' : 'border-line'
+                      }`}
+                      onClick={() => setAvatarSel((prev) => (prev?.id === f.id ? null : f))}
+                    >
+                      <img src={`/api/raw/file/${f.id}/content`} alt="" loading="lazy" className="size-full object-cover" />
+                    </button>
+                  ))
+                )}
+              </div>
+              <p className="mt-1.5 text-[11px] text-dim">点选缩略图设为头像（再点取消）；创建成功后图片归档为 head.扩展名</p>
+            </div>
+          ) : null}
+
+          <div className="min-w-0 flex-1">
         <label className="block text-xs text-dim" htmlFor="actress-name">
           名字
         </label>
@@ -204,6 +284,8 @@ export function ActressDialog({ init, countries, tags, disks, onSubmit, onCancel
           <button type="submit" className="act act-primary" disabled={busy}>
             {editing ? '保存' : '创建'}
           </button>
+        </div>
+          </div>
         </div>
       </form>
     </dialog>

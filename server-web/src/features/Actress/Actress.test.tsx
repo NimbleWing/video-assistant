@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createActress, deleteActress, fetchActressDisks, fetchActresses, setActressAvatar, updateActress } from '@/lib/api';
-import type { ActressRow, CountryRow, TagRow } from '@/lib/types';
+import { createActress, deleteActress, fetchActressDisks, fetchActresses, fetchRawFiles, setActressAvatar, updateActress } from '@/lib/api';
+import type { ActressRow, CountryRow, RawFileRow, TagRow } from '@/lib/types';
 import { Actress } from './Actress';
 import { AvatarPicker } from './AvatarPicker';
 
@@ -12,6 +12,7 @@ vi.mock('@/lib/api', () => ({
   updateActress: vi.fn(),
   deleteActress: vi.fn(),
   setActressAvatar: vi.fn(),
+  fetchRawFiles: vi.fn(),
 }));
 const mockedList = vi.mocked(fetchActresses);
 const mockedDisks = vi.mocked(fetchActressDisks);
@@ -19,6 +20,7 @@ const mockedCreate = vi.mocked(createActress);
 const mockedUpdate = vi.mocked(updateActress);
 const mockedDelete = vi.mocked(deleteActress);
 const mockedSetAvatar = vi.mocked(setActressAvatar);
+const mockedRawFiles = vi.mocked(fetchRawFiles);
 
 const countries: CountryRow[] = [{ id: 1, name: '日本' }, { id: 2, name: '美国' }];
 const tags: TagRow[] = [
@@ -53,6 +55,7 @@ async function boot(items: ActressRow[], disks = ['c:', 'd:']) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockedRawFiles.mockResolvedValue({ ok: true, total: 0, items: [], volumes: [] });
   vi.stubGlobal('fetch', vi.fn(async (url: string) => ({
     ok: true,
     json: async () => (String(url).includes('countries') ? { items: countries } : { items: tags }),
@@ -156,6 +159,53 @@ describe('Actress 页', () => {
     fireEvent.click(screen.getAllByText('删除').at(-1)!);
     await waitFor(() => expect(mockedDelete).toHaveBeenCalledWith(1));
   });
+
+  it('创建带头像：搜索本地图片（关键词跟随名字），点选预览，创建后链式 setActressAvatar', async () => {
+    const pic: RawFileRow = {
+      id: 77, path: 'd:/rawfiles/新女优/photo.png', hash: 'h', name: 'photo', ext: 'png', type: 'image',
+      size: 10, mtime: 1, volume: 'd:', missing: false, pending_missing: false, archived: false,
+      duration: null, width: null, height: null, first_seen: 1, last_seen: 1,
+    };
+    mockedRawFiles.mockResolvedValue({ ok: true, total: 1, items: [pic], volumes: [] });
+    await boot([]);
+    fireEvent.click(screen.getByText('添加女优'));
+    await screen.findByRole('dialog');
+    // 初始（空关键词）拉过一次；输入名字后防抖以名字为关键词再拉
+    await waitFor(() => expect(mockedRawFiles).toHaveBeenCalled(), { timeout: 1500 });
+    fireEvent.change(screen.getByLabelText('名字'), { target: { value: '新女优' } });
+    await waitFor(
+      () => expect(mockedRawFiles).toHaveBeenCalledWith(expect.objectContaining({ q: '新女优', type: 'image' })),
+      { timeout: 1500 },
+    );
+    // 点选缩略图 → 左侧大图预览
+    fireEvent.click(await screen.findByRole('button', { name: '选择图片 photo' }));
+    const preview = screen.getByAltText('头像预览') as HTMLImageElement;
+    expect(preview.src).toContain('/api/raw/file/77/content');
+    // 提交：先创建，再链式设头像
+    mockedCreate.mockResolvedValue({ ok: true, item: row({ id: 9, name: '新女优' }) });
+    mockedSetAvatar.mockResolvedValue({ ok: true, item: row({ id: 9, name: '新女优', avatar_file_id: 77 }) });
+    fireEvent.click(screen.getByText('创建'));
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalled());
+    await waitFor(() => expect(mockedSetAvatar).toHaveBeenCalledWith(9, 77));
+  });
+
+  it('创建时头像设置失败不阻断：页面级错误提示', async () => {
+    const pic: RawFileRow = {
+      id: 78, path: 'd:/rawfiles/p.png', hash: 'h', name: 'p', ext: 'png', type: 'image',
+      size: 10, mtime: 1, volume: 'd:', missing: false, pending_missing: false, archived: false,
+      duration: null, width: null, height: null, first_seen: 1, last_seen: 1,
+    };
+    mockedRawFiles.mockResolvedValue({ ok: true, total: 1, items: [pic], volumes: [] });
+    await boot([]);
+    fireEvent.click(screen.getByText('添加女优'));
+    await screen.findByRole('dialog');
+    fireEvent.click(await screen.findByRole('button', { name: '选择图片 p' }));
+    fireEvent.change(screen.getByLabelText('名字'), { target: { value: '某女优' } });
+    mockedCreate.mockResolvedValue({ ok: true, item: row({ id: 10, name: '某女优' }) });
+    mockedSetAvatar.mockRejectedValue(new Error('移动失败'));
+    fireEvent.click(screen.getByText('创建'));
+    expect(await screen.findByText(/已创建，但头像设置失败：移动失败/)).toBeTruthy();
+  });
 });
 
 describe('AvatarPicker（设为头像弹窗）', () => {
@@ -164,9 +214,9 @@ describe('AvatarPicker（设为头像弹窗）', () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ items: list }) })));
     const onDone = vi.fn();
     const file = { id: 55, path: 'd:/rawfiles/pic.jpg' } as unknown as Parameters<typeof AvatarPicker>[0]['file'];
+    mockedSetAvatar.mockResolvedValue({ ok: true, item: row() });
     render(<AvatarPicker file={file} onClose={() => {}} onDone={onDone} />);
     fireEvent.click(await screen.findByText('樱空桃'));
-    mockedSetAvatar.mockResolvedValue({ ok: true, item: row() });
     await waitFor(() => expect(mockedSetAvatar).toHaveBeenCalledWith(1, 55));
     await waitFor(() => expect(onDone).toHaveBeenCalledWith(expect.stringContaining('樱空桃')));
   });
