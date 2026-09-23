@@ -33,10 +33,11 @@ describe('fmtDur', () => {
     expect(fmtDur(-3)).toBe('');
   });
 
-  it('分:秒', () => {
+  it('分:秒；≥1 小时切 h:mm:ss', () => {
     expect(fmtDur(61)).toBe('1:01');
     expect(fmtDur(3599)).toBe('59:59');
-    expect(fmtDur(3600)).toBe('60:00');
+    expect(fmtDur(3600)).toBe('1:00:00');
+    expect(fmtDur(3661)).toBe('1:01:01');
   });
 });
 

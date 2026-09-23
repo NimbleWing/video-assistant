@@ -18,6 +18,8 @@ export interface RawFileRow {
   pending_missing: boolean;
   /** 已归档（发生过移动/改名）。 */
   archived: boolean;
+  /** 视频时长（秒；归档流程 ffmpeg 探测回填，未探测为 null）。 */
+  duration: number | null;
   first_seen: number;
   last_seen: number;
 }

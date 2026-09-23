@@ -1,6 +1,9 @@
 // videos + 四张多对多关系表：作品（原始资料页归档流落库）。
 // DDL + 全部数据操作，仅此文件触碰本五表。计数导出供 actress/tag/studio feature 真实化（放宽规则先例）。
+// video_file 缝合经 raw feature 导出纯查询（getRawFilesByIds）协作，同为先例范畴。
 import { db, numOf, strOf, type SqlRow } from '../../lib/db.ts';
+import { getRawFilesByIds } from '../raw/files.ts';
+import type { RawFileRow } from '../raw/types.ts';
 import type { VideoRow } from './types.ts';
 
 db.exec(`
@@ -60,7 +63,11 @@ interface VideoExtras {
   countries: Map<number, { id: number; name: string }[]>;
 }
 
-function toRow(r: SqlRow, x: VideoExtras): VideoRow {
+function toVideoFile(f: RawFileRow | undefined): VideoRow['video_file'] {
+  return f ? { id: f.id, path: f.path, ext: f.ext, size: f.size, duration: f.duration } : null;
+}
+
+function toRow(r: SqlRow, x: VideoExtras, files: Map<number, RawFileRow>): VideoRow {
   const id = numOf(r.id);
   return {
     id,
@@ -71,6 +78,7 @@ function toRow(r: SqlRow, x: VideoExtras): VideoRow {
     video_file_id: numOf(r.video_file_id),
     cover_file_id: r.cover_file_id == null ? null : numOf(r.cover_file_id),
     created_at: numOf(r.created_at),
+    video_file: toVideoFile(files.get(numOf(r.video_file_id))),
     actresses: x.actresses.get(id) ?? [],
     tags: x.tags.get(id) ?? [],
     studios: x.studios.get(id) ?? [],
@@ -121,16 +129,44 @@ function listVideosByIds(ids: number[]): Map<number, VideoRow> {
     x.countries.set(vid, arr);
   }
   const out = new Map<number, VideoRow>();
-  for (const r of base.values()) out.set(numOf(r.id), toRow(r, x));
+  const files = getRawFilesByIds([...base.values()].map((r) => numOf(r.video_file_id)));
+  for (const r of base.values()) out.set(numOf(r.id), toRow(r, x, files));
   return out;
 }
 
-/** 作品分页列表（title/subtitle/code LIKE；created_at 倒序）。 */
-export function listVideos(opt: { page?: number; size?: number; q?: string }): { total: number; items: VideoRow[] } {
+export interface ListVideosOpt {
+  page?: number;
+  size?: number;
+  q?: string;
+  /** kind 区分单片/剧集（视频库页传 single，将来剧集库页传 series）。 */
+  kind?: 'single' | 'series';
+  actressId?: number;
+  tagId?: number;
+  studioId?: number;
+}
+
+/** 作品分页列表（title/subtitle/code LIKE；kind/演员/标签/片商筛选；created_at 倒序）。 */
+export function listVideos(opt: ListVideosOpt): { total: number; items: VideoRow[] } {
   const page = Math.max(1, Number(opt.page) || 1);
   const size = Math.min(200, Math.max(1, Number(opt.size) || 50));
   const where: string[] = [];
   const params: (string | number)[] = [];
+  if (opt.kind === 'single' || opt.kind === 'series') {
+    where.push('kind = ?');
+    params.push(opt.kind);
+  }
+  if (opt.actressId) {
+    where.push('id IN (SELECT video_id FROM actress_videos WHERE actress_id = ?)');
+    params.push(opt.actressId);
+  }
+  if (opt.tagId) {
+    where.push('id IN (SELECT video_id FROM tag_videos WHERE tag_id = ?)');
+    params.push(opt.tagId);
+  }
+  if (opt.studioId) {
+    where.push('id IN (SELECT video_id FROM studio_videos WHERE studio_id = ?)');
+    params.push(opt.studioId);
+  }
   if (opt.q) {
     where.push("(title LIKE ? ESCAPE '\\' OR subtitle LIKE ? ESCAPE '\\' OR code LIKE ? ESCAPE '\\')");
     const like = `%${String(opt.q).replace(/[\\%_]/g, (c) => `\\${c}`)}%`;

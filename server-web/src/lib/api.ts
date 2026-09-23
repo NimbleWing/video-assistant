@@ -28,6 +28,7 @@ import type {
   TagsResponse,
   TagMutationResponse,
   VideoArchiveRequest,
+  VideoKind,
   VideoMutationResponse,
   WorksResponse,
 } from './types';
@@ -313,12 +314,26 @@ export function archiveVideo(payload: VideoArchiveRequest): Promise<VideoMutatio
   });
 }
 
-/** 作品分页列表（title/subtitle/code 搜索；将来作品页地基）。 */
-export function fetchWorks(query: { page?: number; size?: number; q?: string }): Promise<WorksResponse> {
+/** 作品分页列表（title/subtitle/code 搜索 + kind/演员/标签/片商筛选；视频库页地基）。 */
+export interface WorksQuery {
+  page?: number;
+  size?: number;
+  q?: string;
+  kind?: VideoKind;
+  actressId?: number;
+  tagId?: number;
+  studioId?: number;
+}
+
+export function fetchWorks(query: WorksQuery): Promise<WorksResponse> {
   const p = new URLSearchParams();
   if (query.page) p.set('page', String(query.page));
   if (query.size) p.set('size', String(query.size));
   if (query.q) p.set('q', query.q);
+  if (query.kind) p.set('kind', query.kind);
+  if (query.actressId) p.set('actressId', String(query.actressId));
+  if (query.tagId) p.set('tagId', String(query.tagId));
+  if (query.studioId) p.set('studioId', String(query.studioId));
   return api(`/api/works?${p.toString()}`);
 }
 

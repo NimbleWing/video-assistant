@@ -1,11 +1,13 @@
-// 作品 API 路由：POST /api/videos/archive（原始资料页归档流）+ GET /api/videos（作品列表）。
+// 作品 API 路由：POST /api/videos/archive（原始资料页归档流）+ GET /api/works（作品列表，视频库页地基）。
 // 归档流程：校验 → 目标目录（第一个演员的目录树）→ 命名 stem（番号 标题 副标题，空段跳过）
-// → 冲突 409 预检 → archiveRawFileTo 双文件移动 → insertVideo 事务落库。
+// → 冲突 409 预检 → archiveRawFileTo 双文件移动 → 尽力回填时长（ffmpeg 可用才探测）
+// → insertVideo 事务落库。
 import { promises as fs } from 'node:fs';
 import { asRecord, HttpError, json, readJson, type Route } from '../../lib/http.ts';
+import { ffmpegInfo, ffmpegProbeDuration } from '../../lib/hls-core.ts';
 import { dirName } from '../../lib/paths.ts';
 import { getActress } from '../actress/actresses.ts';
-import { archiveRawFileTo, getRawFile } from '../raw/files.ts';
+import { archiveRawFileTo, getRawFile, setRawDuration } from '../raw/files.ts';
 import { insertVideo, listVideos } from './videos.ts';
 
 const TITLE_MAX = 120;
@@ -15,6 +17,10 @@ const listRoute: Route['handler'] = ({ res, url }) => {
     page: Number(url.searchParams.get('page')) || 1,
     size: Number(url.searchParams.get('size')) || 50,
     q: url.searchParams.get('q') ?? undefined,
+    kind: (url.searchParams.get('kind') as 'single' | 'series' | null) ?? undefined,
+    actressId: Number(url.searchParams.get('actressId')) || undefined,
+    tagId: Number(url.searchParams.get('tagId')) || undefined,
+    studioId: Number(url.searchParams.get('studioId')) || undefined,
   });
   json(res, 200, { ok: true, ...r });
 };
@@ -77,6 +83,13 @@ const archiveRoute: Route['handler'] = async ({ req, res }) => {
   // 双文件归档移动（行跟随 + 事件）；之后才写库（失败时文件已被移回原位）
   await archiveRawFileTo(fileId, `${dir}/${stem}.${videoRow.ext}`);
   if (coverRow) await archiveRawFileTo(coverFileId!, `${dir}/${stem}.${coverRow.ext}`);
+
+  // 时长回填（尽力而为：ffmpeg 缺失/探测失败静默跳过，不阻断归档；<1s）
+  const ff = await ffmpegInfo();
+  if (ff.available) {
+    const dur = await ffmpegProbeDuration(ff.path, `${dir}/${stem}.${videoRow.ext}`);
+    if (dur != null && dur > 0) setRawDuration(fileId, Math.round(dur));
+  }
 
   const item = insertVideo({
     kind: 'single',

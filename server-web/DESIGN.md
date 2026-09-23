@@ -4,7 +4,7 @@
 
 ## 定位
 
-本地媒体库服务（`127.0.0.1:17321`）的管理页前端，独立 npm 包。技术栈：React 19 + TypeScript（strict）+ Tailwind CSS v4 + Vite 7 + Vitest（happy-dom + Testing Library）。功能与旧版手写 `server/public/index.html` 对齐并持续演进：原始资料/归档资料/下载账本/国家/标签/片商/女优/设置八标签 + Range 流播放弹窗。「视频库」标签已随 files 表退役移除（2026-09-23，见 `../server/DESIGN.md` §1）。
+本地媒体库服务（`127.0.0.1:17321`）的管理页前端，独立 npm 包。技术栈：React 19 + TypeScript（strict）+ Tailwind CSS v4 + Vite 7 + Vitest（happy-dom + Testing Library）。功能与旧版手写 `server/public/index.html` 对齐并持续演进：原始资料/归档资料/视频库/下载账本/国家/标签/片商/女优/设置九标签 + Range 流播放弹窗。「视频库」旧页曾随 files 表退役移除（2026-09-23），同日基于作品域（videos 表，kind=single）重建；将来剧集库页（kind=series）独立成 `features/Series`。
 
 ## 结构
 
@@ -12,7 +12,7 @@
 
 | 文件 | 职责 |
 |------|------|
-| `src/App.tsx` | 组合 Layout 与八页面（原始资料/归档资料/下载账本/国家/标签/片商/女优/设置；**默认 tab = 原始资料**）、头部统计、播放弹窗状态（tab 卸载重挂即刷新）；tab 配置（key/label/icon）定义于此 |
+| `src/App.tsx` | 组合 Layout 与九页面（原始资料/归档资料/视频库/下载账本/国家/标签/片商/女优/设置；**默认 tab = 原始资料**）、头部统计、播放弹窗状态（tab 卸载重挂即刷新）；tab 配置（key/label/icon）定义于此 |
 | `src/components/Layout/index.tsx` | 页面骨架抽象：顶栏（标题 + 补充信息 + 移动端汉堡）+ 左侧侧边栏导航（icon + 文字，可选）+ 内容区；泛型 `K extends string` 支撑标签 key 收窄 |
 | `src/components/Pager/index.tsx` | 共享分页条：上一页/下一页 + 页码（可选跳页输入框：回车/失焦提交、钳位 1..pages）+ 右侧可选「每页 N 条」选择器 |
 | `src/components/PlayerDialog/index.tsx` | 共享播放弹窗：原生 `<dialog>` + `closedby="any"`，双源 `{direct, hls, preferDirect}`——默认 hls.js 主路径 + 降级链（见下）；`preferDirect` 时直连优先、`<video>` error 事件回退 hls；关闭/换源时停流清理，复制路径；由 App 持有状态全局挂载（tab 切换不卸载）；Raw/Archive 页消费 |
@@ -35,7 +35,9 @@
 | `src/features/Actress/Actress.tsx` | **女优页面**（演员体系核心，仅网格视图）：卡片 = 头像区（`avatar_file_id` → `/api/raw/file/:id/content`，无头像名字首字占位）+ 名字（点击开编辑弹窗）+ 国家小字 + 评分（`87` / 「未评分」）+ 标签 chips 前 2 + `+N`（title 全量）+ 别名灰字预览 + `视频 N`（预留恒 0）+ hover `✎ 编辑 / 🗑 删除`（ConfirmDialog）；顶部搜索（防抖 300ms，q 匹配主名+别名）+ 添加按钮 |
 | `src/features/Actress/ActressDialog.tsx` | 创建/编辑共用表单弹窗（原生 `<dialog>`）：名字、国家下拉（fetchCountries，空字典提示先建国家）、评分 slider（0-100 + 「未评分」清除）、标签多选 chips（按 sort 序）、磁盘单选（`/api/actresses/disks`）、别名动态列表（+ 添加 / ✕ 删除）；创建提交后服务端 mkdir `Archives/国家/女优/图集`；编辑时磁盘不可改 |
 | `src/features/Actress/AvatarPicker.tsx` | 设为头像弹窗（原生 `<dialog>`）：搜索 + 女优列表选择 → `POST /api/actresses/:id/avatar {fileId}`（原始资料页图片卡片发起） |
-| `src/features/Video/index.ts` | 桶导出：`ArchiveDialog` |
+| `src/features/Video/index.ts` | 桶导出：`Video`、`ArchiveDialog` |
+| `src/features/Video/Video.tsx` | **视频库页面**（作品域 kind=single）：`/api/works?kind=single` 卡片分页浏览（搜索防抖 + 演员/标签/片商下拉筛选，字典全量拉取 + 每页条数/跳页）；**播放探活**——卡片点击先 HEAD `/api/raw/file/:id/content`，失败 → 页面级 err 横幅「文件无法访问或已丢失」（行状态过期：Archives 树不受扫描覆盖，手动删/移文件后库不知情），成功 → App 级 PlayerDialog（ext 原生格式 preferDirect，否则 hls） |
+| `src/features/Video/WorkCard.tsx` | 视频库卡片：头图**封面三态**——`cover_file_id=null` 中性「无封面」占位 / 图片正常 / onError err 色调「封面无法访问」占位（key 绑 id，useState 记 broken）；hover 播放遮罩（同 RawCard 视觉语言）；**番号 badge 左上 + 时长 badge 右下**（`raw_files.duration`，无值隐藏）；信息区 = 主标题（clamp 2）+ 副标题（dim）+ 演员（dim，· 连接）+ 标签 chips 前 3 + `+N` + 底行国家 · 片商 |
 | `src/features/Video/ArchiveDialog.tsx` | **视频归档弹窗**（原始资料页视频卡片发起，单片流程；剧集切换仅占位禁用确认）：左播放区（原生格式直连 `/api/raw/file/:id/content`，ts/avi 等走 hls.js）+ 右表单——标题* /副标题/番号、演员多选（搜索+chips，**第一位演员决定归档目录**，变化即重置国家与标签）、国家单选（自动填充可改）、标签多选（自动填并集可改）、片商单选、封面区（**同名图片自动匹配**：同 stem 同目录优先→全库 path 升序；可清空、可搜索替换）→ `POST /api/videos/archive`；成功 toast + 刷新原始资料页 |
 | `src/features/Settings/index.ts` | 桶导出：`Settings` |
 | `src/features/Settings/Settings.tsx` | 设置页面：ffmpeg 路径配置与状态显示（POST /api/config）、日志尾部查看（扫描目录/立即扫描已随 files 表退役移除） |

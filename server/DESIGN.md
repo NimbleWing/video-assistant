@@ -147,7 +147,8 @@ CREATE TABLE raw_files (
   volume          TEXT NOT NULL,              -- 'd:'（列表筛选 + 消失判定作用域）
   missing         INTEGER NOT NULL DEFAULT 0, -- 用户已确认的消失标记（不重报，查重排除）
   pending_missing INTEGER NOT NULL DEFAULT 0, -- 扫描发现消失、待用户决策
-  archived        INTEGER NOT NULL DEFAULT 0, -- 1=发生过移动/改名（单行跟随：id 不变，path/volume 随文件更新）
+  archived        INTEGER NOT NULL DEFAULT 0,  -- 1=发生过移动/改名（单行跟随：id 不变，path/volume 随文件更新）
+  duration        INTEGER,                    -- 视频时长（秒；归档流程 ffmpeg 探测回填，缺失为 NULL。时长是文件属性故归 raw_files）
   first_seen      INTEGER NOT NULL,
   last_seen       INTEGER NOT NULL
 );
@@ -246,7 +247,7 @@ CREATE TABLE videos (
   kind           TEXT NOT NULL CHECK (kind IN ('single','series')),  -- 本次只写 'single'；剧集待后续迭代
   title          TEXT NOT NULL,        -- 标题（必填）
   subtitle       TEXT,                 -- 副标题（可选）
-  code           TEXT,                 -- 番号（可选；不进文件名以外的展示）
+  code           TEXT,                 -- 番号（可选；落文件名 + 视频库卡片展示）
   video_file_id  INTEGER NOT NULL,     -- → raw_files.id（归档后的视频行；悬空容忍）
   cover_file_id  INTEGER,              -- → raw_files.id（归档后的封面行；可空）
   created_at     INTEGER NOT NULL      -- 归档时间（作品列表排序）
@@ -334,8 +335,8 @@ raw 已定决策记录：
 | `PUT /api/actresses/:id` | 页面 | 全量编辑（name/countryId/rating/tagIds/aliases，事务全量替换；disk 不可改；404）；**不联动磁盘目录** |
 | `POST /api/actresses/:id/delete` | 页面 | 删除 + 级联清 aliases/actress_tags（404）；头像文件保留（归档页可见） |
 | `POST /api/actresses/:id/avatar` | 页面 | 设为头像 `{fileId}`：raw 行必须 type='image'；物理移动（同盘 rename / 跨盘 copy+unlink）+ 改名 `head.{ext}` 至 `{disk}/Archives/{国家}/{女优}/图集/`；raw 行跟随新路径 archived=1 + raw_archive 登记 + raw_events 记 rename/move（真·归档）；更新 avatar_file_id；旧 head.* 保留 |
-| `POST /api/videos/archive` | 页面 | 视频归档（单片）：`{fileId, coverFileId?, title, subtitle?, code?, actressIds(≥1), countryId, tagIds, studioId?, kind:'single'}`——落盘至第一个演员目录树、命名 `{番号 标题 副标题}.{ext}`（空段跳过）、冲突 409、`archiveRawFileTo` 双文件移动 + videos 及四张关系表事务写入 |
-| `GET /api/works?page=&size=&q=` | 页面 | 作品分页列表（title/subtitle/code LIKE，`ORDER BY created_at DESC`）；条目 join 演员名/标签/片商/国家（将来作品页地基，本次最小实现）。注意：路径用 /api/works——避免与 video feature 语义混淆（历史注记：GET /api/videos 曾被已退役的 media feature 占用） |
+| `POST /api/videos/archive` | 页面 | 视频归档（单片）：`{fileId, coverFileId?, title, subtitle?, code?, actressIds(≥1), countryId, tagIds, studioId?, kind:'single'}`——落盘至第一个演员目录树、命名 `{番号 标题 副标题}.{ext}`（空段跳过）、冲突 409、`archiveRawFileTo` 双文件移动 + videos 及四张关系表事务写入；收尾尽力回填 `raw_files.duration`（ffmpeg 可用时 `ffmpeg -i` 探测，缺失/失败静默跳过，不阻断归档） |
+| `GET /api/works?page=&size=&q=&kind=&actressId=&tagId=&studioId=` | 页面 | 作品分页列表（title/subtitle/code LIKE，`ORDER BY created_at DESC`）；kind 区分单片/剧集（视频库页传 single，将来剧集库页传 series）；actressId/tagId/studioId 为 EXISTS 子查询筛选；条目 join 演员名/标签/片商/国家 + `video_file`（path/ext/size/duration，缝合 raw_files；正常恒有值，null 仅防御库被手工改动）。注意：路径用 /api/works——避免与 video feature 语义混淆（历史注记：GET /api/videos 曾被已退役的 media feature 占用） |
 | `POST /api/shutdown` | 扩展面板 | 优雅退出：响应 200 后延迟 200ms `process.exit(0)`（等响应刷盘）；面板「重启」按钮的下半程——先 shutdown 确认离线，再经 native messaging 拉起，避免双实例撞端口 |
 | `GET /api/raw/volumes` | 页面 | 原始资料盘符列表：探测 `A:`–`Z:` 根下 `RawFiles/` 目录，**只返回存在的盘**，附 statfs 总容量/剩余空间；网络盘等无盘符形态不支持 |
 | `POST /api/raw/scan` | 页面 | 启动原始资料扫描 `{volumes:['d:'], types:['video','image']}`：202 即返（异步任务）；已有任务 409；请求时二次校验 RawFiles 存在性（拔盘跳过记 warning） |
@@ -391,7 +392,7 @@ raw 已定决策记录：
 - 优先 `meta.ffmpeg_path`（管理页设置页可配），其次 PATH 上的 `ffmpeg`。
 - 探测结果进程内缓存（避免 ping 轮询反复 spawn）；保存配置后失效重探。
 - `ffmpegInfo()` 暴露 `{ available, path, source: 'config' | 'path' | null }`，供 `/api/config` 与 `/api/ping` 聚合。
-- 时长兜底：manifest 需要总时长——raw 侧无 DB 缓存列，每次建会话 spawn `ffmpeg -i` 解析 stderr `Duration:` 行现探。
+- 时长兜底：manifest 需要总时长——raw 侧每次建会话 spawn `ffmpeg -i` 解析 stderr `Duration:` 行现探（`raw_files.duration` 列已存在但仅归档行回填，HLS 建会话暂维持现探，后续可切换读列省一次 spawn）。
 
 ### 7.3 清单与分段
 

@@ -26,6 +26,7 @@ function item(partial: Partial<ArchivedItem> = {}): ArchivedItem {
     missing: false,
     pending_missing: false,
     archived: true,
+    duration: null,
     first_seen: 1,
     last_seen: 2,
     latest_name: 'renamed',

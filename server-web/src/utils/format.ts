@@ -12,9 +12,12 @@ export function fmtSize(n?: number | null): string {
 
 export function fmtDur(s?: number | null): string {
   if (!s || s <= 0) return '';
-  const m = Math.floor(s / 60);
-  const ss = Math.round(s % 60);
-  return `${m}:${String(ss).padStart(2, '0')}`;
+  const sec = Math.round(s);
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const ss = sec % 60;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return h > 0 ? `${h}:${pad(m)}:${pad(ss)}` : `${m}:${pad(ss)}`;
 }
 
 export function fmtTime(ms?: number | null): string {

@@ -72,6 +72,7 @@ function row(partial: Partial<RawFileRow> = {}): RawFileRow {
     missing: false,
     pending_missing: false,
     archived: false,
+    duration: null,
     first_seen: 1,
     last_seen: 2,
     ...partial,

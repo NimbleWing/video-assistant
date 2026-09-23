@@ -31,6 +31,7 @@ db.exec(`
     missing         INTEGER NOT NULL DEFAULT 0,
     pending_missing INTEGER NOT NULL DEFAULT 0,
     archived        INTEGER NOT NULL DEFAULT 0,
+    duration        INTEGER,
     first_seen      INTEGER NOT NULL,
     last_seen       INTEGER NOT NULL
   );
@@ -39,6 +40,12 @@ db.exec(`
 // 旧库迁移：P6 建的表没有 archived 列（列已存在时 ALTER 报 duplicate column，吞掉即可）
 try {
   db.exec('ALTER TABLE raw_files ADD archived INTEGER NOT NULL DEFAULT 0');
+} catch {
+  /* 列已存在 */
+}
+// duration 列（2026-09-23 视频库页：归档流程回填时长）
+try {
+  db.exec('ALTER TABLE raw_files ADD duration INTEGER');
 } catch {
   /* 列已存在 */
 }
@@ -166,6 +173,7 @@ function toRow(r: SqlRow): RawFileRow {
     missing: numOf(r.missing) === 1,
     pending_missing: numOf(r.pending_missing) === 1,
     archived: numOf(r.archived) === 1,
+    duration: r.duration == null ? null : numOf(r.duration),
     first_seen: numOf(r.first_seen),
     last_seen: numOf(r.last_seen),
   };
@@ -278,9 +286,28 @@ export function rawVolumeStats(): RawVolumeStat[] {
 /** 按 id 取行（内容端点 / HLS 适配层用）。 */
 export function getRawFile(id: number): RawFileRow | null {
   const row = db.prepare(
-    'SELECT id, path, hash, name, ext, type, size, mtime, volume, missing, pending_missing, archived, first_seen, last_seen FROM raw_files WHERE id = ?',
+    'SELECT id, path, hash, name, ext, type, size, mtime, volume, missing, pending_missing, archived, duration, first_seen, last_seen FROM raw_files WHERE id = ?',
   ).get(id) as SqlRow | undefined;
   return row ? toRow(row) : null;
+}
+
+/** 按 id 集批量取行（作品列表缝合 video_file 用；一次 IN 查询）。 */
+export function getRawFilesByIds(ids: number[]): Map<number, RawFileRow> {
+  const m = new Map<number, RawFileRow>();
+  if (!ids.length) return m;
+  const ph = ids.join(',');
+  for (const r of db.prepare(
+    `SELECT id, path, hash, name, ext, type, size, mtime, volume, missing, pending_missing, archived, duration, first_seen, last_seen
+     FROM raw_files WHERE id IN (${ph})`,
+  ).all() as SqlRow[]) {
+    m.set(numOf(r.id), toRow(r));
+  }
+  return m;
+}
+
+/** 回填视频时长（秒；归档流程 ffmpeg 探测后调用，探测失败不写）。 */
+export function setRawDuration(id: number, seconds: number): void {
+  db.prepare('UPDATE raw_files SET duration = ? WHERE id = ?').run(seconds, id);
 }
 
 /**

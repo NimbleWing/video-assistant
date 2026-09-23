@@ -10,9 +10,10 @@ import { Country } from '@/features/Country';
 import { Tag } from '@/features/Tag';
 import { Studio } from '@/features/Studio';
 import { Actress } from '@/features/Actress';
+import { Video } from '@/features/Video';
 import { Settings } from '@/features/Settings';
 
-type Tab = 'raw' | 'archive' | 'ledger' | 'country' | 'tag' | 'studio' | 'actress' | 'settings';
+type Tab = 'raw' | 'archive' | 'video' | 'ledger' | 'country' | 'tag' | 'studio' | 'actress' | 'settings';
 
 const icon = (path: ReactNode) => (
   <svg
@@ -50,6 +51,16 @@ const TABS = [
         <rect x="3" y="4" width="18" height="5" rx="1.5" />
         <path d="M5 9v9.5c0 1 .8 1.5 1.8 1.5h10.4c1 0 1.8-.5 1.8-1.5V9" />
         <path d="M10 13h4" />
+      </>,
+    ),
+  },
+  {
+    key: 'video',
+    label: '视频库',
+    icon: icon(
+      <>
+        <rect x="3" y="5" width="18" height="14" rx="2.5" />
+        <path d="M10.3 9.4v5.2l4.6-2.6z" fill="currentColor" stroke="none" />
       </>,
     ),
   },
@@ -136,6 +147,7 @@ export default function App() {
       >
         {tab === 'raw' && <Raw onStat={setStat} onPlay={setPlaying} />}
         {tab === 'archive' && <Archive onStat={setStat} onPlay={setPlaying} />}
+        {tab === 'video' && <Video onStat={setStat} onPlay={setPlaying} />}
         {tab === 'ledger' && <Ledger />}
         {tab === 'country' && <Country />}
         {tab === 'tag' && <Tag />}

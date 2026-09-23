@@ -33,7 +33,7 @@ const studios: StudioRow[] = [{ id: 21, name: '某片商', has_logo: false, vide
 const file: RawFileRow = {
   id: 99, path: 'c:/rawfiles/clip.mp4', hash: 'h', name: 'clip', ext: 'mp4', type: 'video',
   size: 100, mtime: 1, volume: 'c:', missing: false, pending_missing: false, archived: false,
-  first_seen: 1, last_seen: 1,
+  duration: null, first_seen: 1, last_seen: 1,
 };
 
 function boot() {
