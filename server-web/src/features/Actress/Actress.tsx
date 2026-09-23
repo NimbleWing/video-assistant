@@ -2,13 +2,12 @@ import { useEffect, useState } from 'react';
 import { createActress, deleteActress, fetchActressDisks, fetchActresses, updateActress } from '@/lib/api';
 import type { ActressRow, ActressUpsertRequest, CountryRow, TagRow } from '@/lib/types';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
-import { TrashButton } from '@/components/TrashButton';
+import { ActressCard } from './ActressCard';
 import { ActressDialog } from './ActressDialog';
 
 /**
  * 女优页面（演员体系核心，仅网格视图）：
- * 卡片 = 头像（avatar_file_id → /api/raw/file/:id/content，无则首字占位）+ 名字（点击编辑）
- * + 国家/评分 + 标签 chips（前 2 + N）+ 别名灰字 + 视频 N（预留）+ hover ✎ 编辑 / 🗑 删除。
+ * 卡片 = ActressCard（VideoCard 同款赛博结构：头像三态 + 中央编辑/删除 + 评分环改分 + 分区信息）。
  * 顶部搜索（防抖 300ms，匹配主名+别名）+ 添加按钮（dialog 表单）。
  */
 export function Actress() {
@@ -62,6 +61,23 @@ export function Actress() {
     refresh();
   };
 
+  // 评分环改分：女优为绝对分，复用全量编辑接口（其余字段原样回传）
+  const doRate = async (it: ActressRow, rating: number | null) => {
+    setErr('');
+    try {
+      await updateActress(it.id, {
+        name: it.name,
+        countryId: it.country_id,
+        rating,
+        tagIds: it.tags.map((t) => t.id),
+        aliases: it.aliases,
+      });
+      refresh();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   const doDelete = async (id: number) => {
     if (busy) return;
     setBusy(true);
@@ -100,73 +116,14 @@ export function Actress() {
         <div className="min-h-0 flex-1 overflow-auto">
           <div className="grid grid-cols-2 content-start gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
             {(items ?? []).map((it) => (
-              <div
+              <ActressCard
                 key={it.id}
-                className="card group/actress relative flex flex-col p-3 transition-[border-color,transform] duration-150 hover:-translate-y-0.5 hover:border-brand/60"
-              >
-                <span className="absolute right-2 top-2 z-10 flex gap-1 opacity-0 transition-opacity duration-150 group-hover/actress:opacity-100">
-                  <button
-                    type="button"
-                    className="flex size-6 items-center justify-center rounded-md bg-raised text-dim transition-colors hover:bg-brand-soft hover:text-brand-hover disabled:cursor-default disabled:opacity-40"
-                    aria-label={`编辑 ${it.name}`}
-                    title="编辑（名字/国家/评分/标签/别名）"
-                    onClick={() => setEditing(it)}
-                  >
-                    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                      <path d="M4.5 19.5h3L19 8a2.1 2.1 0 0 0-3-3L4.5 15.5v4z" />
-                    </svg>
-                  </button>
-                  <TrashButton label={`删除 ${it.name}`} title="删除女优" disabled={busy} onClick={() => setRemoving(it)} />
-                </span>
-
-                <div className="flex h-24 items-center justify-center overflow-hidden rounded-lg bg-raised">
-                  {it.avatar_file_id ? (
-                    <img
-                      src={`/api/raw/file/${it.avatar_file_id}/content`}
-                      alt={`${it.name} 头像`}
-                      className="h-full w-full object-cover"
-                    />
-                  ) : (
-                    <span className="text-2xl font-bold text-dim/50" aria-hidden>
-                      {it.name.slice(0, 1)}
-                    </span>
-                  )}
-                </div>
-
-                <span
-                  className="mt-2 cursor-text truncate text-[13px] font-medium transition-colors hover:text-brand-hover"
-                  title={`${it.name}（点击编辑）`}
-                  onClick={() => setEditing(it)}
-                >
-                  {it.name}
-                </span>
-                <div className="mt-1 flex items-center gap-2 text-xs text-dim">
-                  <span>{it.country_name || '—'}</span>
-                  <span>·</span>
-                  <span className="font-mono">{it.rating == null ? '未评分' : it.rating}</span>
-                </div>
-                {it.tags.length > 0 ? (
-                  <div className="mt-1.5 flex flex-wrap items-center gap-1">
-                    {it.tags.slice(0, 2).map((t) => (
-                      <span key={t.id} className="badge">
-                        {t.name}
-                      </span>
-                    ))}
-                    {it.tags.length > 2 ? (
-                      <span className="text-xs text-dim" title={it.tags.map((t) => t.name).join('、')}>
-                        +{it.tags.length - 2}
-                      </span>
-                    ) : null}
-                  </div>
-                ) : null}
-                {it.aliases.length > 0 ? (
-                  <div className="mt-1 truncate text-xs text-dim" title={it.aliases.join('、')}>
-                    {it.aliases.slice(0, 3).join('、')}
-                    {it.aliases.length > 3 ? ` 等${it.aliases.length}个` : ''}
-                  </div>
-                ) : null}
-                <div className="mt-1 text-xs text-dim">视频 {it.video_count}</div>
-              </div>
+                it={it}
+                busy={busy}
+                onEdit={setEditing}
+                onRemove={setRemoving}
+                onRate={(v, r) => void doRate(v, r)}
+              />
             ))}
           </div>
         </div>

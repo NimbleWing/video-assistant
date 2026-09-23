@@ -70,15 +70,30 @@ describe('Actress 页', () => {
       row({ id: 2, name: '深田えいみ', country_id: 2, country_name: '美国', rating: null, avatar_file_id: 33, aliases: ['Fukada'], tags: [{ id: 11, name: '高清', sort: 1 }] }),
     ]);
     expect(screen.queryByAltText('樱空桃 头像')).toBeNull(); // 无头像 → 占位
-    expect(screen.getByText('樱')).toBeTruthy();
+    expect(screen.getByText('无头像')).toBeTruthy();
     const img = screen.getByAltText('深田えいみ 头像') as HTMLImageElement;
     expect(img.src).toContain('/api/raw/file/33/content');
     expect(screen.getByText('日本')).toBeTruthy();
     expect(screen.getByText('87')).toBeTruthy();
-    expect(screen.getByText('未评分')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '为 深田えいみ 评分' })).toBeTruthy(); // 未评分 = 虚线环
     expect(screen.getByText('高清')).toBeTruthy();
     expect(screen.getByText('Fukada')).toBeTruthy();
     expect(screen.getAllByText('视频 0')).toHaveLength(2);
+  });
+
+  it('评分环改分：滑块改动 → updateActress 全量回传（仅 rating 变化）', async () => {
+    await boot([row({ aliases: ['Sakura'], tags: [{ id: 11, name: '高清', sort: 1 }] })]);
+    fireEvent.click(screen.getByRole('button', { name: '评分 87，点击修改' }));
+    fireEvent.change(screen.getByLabelText('评分'), { target: { value: '92' } });
+    await waitFor(() =>
+      expect(mockedUpdate).toHaveBeenCalledWith(1, {
+        name: '樱空桃',
+        countryId: 1,
+        rating: 92,
+        tagIds: [11],
+        aliases: ['Sakura'],
+      }),
+    );
   });
 
   it('空库显示空态', async () => {
