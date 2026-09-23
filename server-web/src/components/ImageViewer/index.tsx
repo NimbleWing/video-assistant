@@ -52,12 +52,19 @@ export function ImageViewer({ items, index, onClose }: Props) {
           slide.width = w;
           slide.height = h;
           slide.calculateSize();
+          // 核心在 setContent 时已按 0×0 完成初始定位（pan 停在左上角），
+          // 重设 currZoomLevel 与 pan 才能让图片回到视口居中（对齐核心 Slide.resize() 的初始分支）
+          slide.zoomAndPanToInitial();
+          slide.applyCurrentZoomPan();
         }
         content.load(isLazy, true);
       };
       img.onerror = () => content.onError();
       img.src = content.data.src;
     });
+    // 尺寸未知时 appendHeavy 先于内容就绪被消耗（heavyAppended=true 而 element 尚未创建），
+    // activate 时不再补挂载——loadComplete 时显式 append（幂等），否则切到的幻灯片空白
+    pswp.on('loadComplete', ({ content }) => content.append());
     pswp.on('close', () => onCloseRef.current());
     pswp.on('destroy', () => {
       destroyed = true;

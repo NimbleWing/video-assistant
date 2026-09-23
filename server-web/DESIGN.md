@@ -17,7 +17,7 @@
 | `src/components/Pager/index.tsx` | 共享分页条：上一页/下一页 + 页码（可选跳页输入框：回车/失焦提交、钳位 1..pages）+ 右侧可选「每页 N 条」选择器 |
 | `src/components/VideoPlayer/index.tsx` | **通用视频播放内核**：`PlaySource` `{path, direct, hls?, preferDirect?}`——默认 hls.js 主路径 + 降级链（见下）；`preferDirect` 时直连优先、`<video>` error 事件回退 hls；换源/卸载停流清理。PlayerDialog 与 ArchiveDialog 左播放区共用 |
 | `src/components/PlayerDialog/index.tsx` | 共享播放弹窗：原生 `<dialog>` + `closedby="any"` 弹层壳 + VideoPlayer 内核，复制路径；`PlaySource` 自此 re-export；由 App 持有状态全局挂载（tab 切换不卸载）；Raw/Archive/Video 页消费 |
-| `src/components/ImageViewer/index.tsx` | **通用图片查看器**（PhotoSwipe 封装，不渲染自身 DOM）：滚轮缩放（`wheelToZoom`）/拖拽平移/双击两级缩放/左右切图/Esc·下滑关闭；服务端图片尺寸未知——拦截 `contentLoad` 懒测量 naturalWidth/Height，回填 data/content/slide 宽高 + `calculateSize()` 重建缩放参数后 `content.load(isLazy, true)` 放行；`onClose` 经 ref 取最新避免内联回调重启实例；由 App 持有 `viewing` 状态全局挂载，Raw/Archive 页经 `onView(items, index)` 消费（gallery=当前页全部图片） |
+| `src/components/ImageViewer/index.tsx` | **通用图片查看器**（PhotoSwipe 封装，不渲染自身 DOM）：滚轮缩放（`wheelToZoom`）/拖拽平移/双击两级缩放/左右切图/Esc·下滑关闭；服务端图片尺寸未知——拦截 `contentLoad` 懒测量 naturalWidth/Height，回填 data/content/slide 宽高 + `calculateSize()` 重建缩放参数后 `content.load(isLazy, true)` 放行；**两处针对 5.4.4 异步尺寸的补偿**：回填后 `zoomAndPanToInitial()` + `applyCurrentZoomPan()` 重设居中（否则核心按 0×0 定位、图片钉在左上角），`loadComplete` 时显式 `content.append()`（否则 appendHeavy 先于 element 创建被消耗、切到的幻灯片空白）；`onClose` 经 ref 取最新避免内联回调重启实例；由 App 持有 `viewing` 状态全局挂载，Raw/Archive 页经 `onView(items, index)` 消费（gallery=当前页全部图片） |
 | `src/components/ConfirmDialog/index.tsx` | 共享确认弹窗：原生 `<dialog>` + `closedby="any"`（Esc/遮罩点击即取消），挂载式受控（父组件条件渲染，onConfirm 后卸载即关闭）；`danger` 红系确认按钮（`.act-danger`）；Raw 页查重删除使用 |
 | `src/components/TrashButton.tsx` | 删除图标按钮（卡片行/查重文件行等共用，Raw/Actress/Tag/Studio 消费） |
 | `src/features/Raw/index.ts` | 桶导出：`Raw` |

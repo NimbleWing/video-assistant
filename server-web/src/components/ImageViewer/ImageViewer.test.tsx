@@ -93,7 +93,7 @@ describe('ImageViewer 图片查看器', () => {
     expect(ins.destroyed).toBe(true);
   });
 
-  it('尺寸未知图片：拦截 contentLoad 懒测量，回填宽高并重建缩放参数后放行加载', async () => {
+  it('尺寸未知图片：拦截 contentLoad 懒测量，回填宽高、重设居中并放行加载；loadComplete 时补挂载', async () => {
     render(<ImageViewer items={ITEMS} index={0} onClose={() => {}} />);
     const ins = instances[0];
     const content = {
@@ -101,9 +101,16 @@ describe('ImageViewer 图片查看器', () => {
       data: { src: '/api/raw/file/8/content' } as { src: string; width?: number; height?: number },
       width: 0,
       height: 0,
-      slide: { width: 0, height: 0, calculateSize: vi.fn() },
+      slide: {
+        width: 0,
+        height: 0,
+        calculateSize: vi.fn(),
+        zoomAndPanToInitial: vi.fn(),
+        applyCurrentZoomPan: vi.fn(),
+      },
       load: vi.fn(),
       onError: vi.fn(),
+      append: vi.fn(),
     };
     const ev = { content, isLazy: false, preventDefault: vi.fn() };
     emit(ins, 'contentLoad', ev);
@@ -112,6 +119,11 @@ describe('ImageViewer 图片查看器', () => {
     expect(content.data.width).toBe(4000);
     expect(content.data.height).toBe(3000);
     expect(content.slide.calculateSize).toHaveBeenCalledOnce();
+    expect(content.slide.zoomAndPanToInitial).toHaveBeenCalledOnce();
+    expect(content.slide.applyCurrentZoomPan).toHaveBeenCalledOnce();
+    // 补挂载：核心 appendHeavy 已被提前消耗，切图幻灯片依赖此路径挂载元素
+    emit(ins, 'loadComplete', { content });
+    expect(content.append).toHaveBeenCalledOnce();
   });
 
   it('已有尺寸或非图片内容不拦截', () => {
