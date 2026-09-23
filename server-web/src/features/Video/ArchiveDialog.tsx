@@ -27,6 +27,11 @@ function deriveFromActresses(selected: ActressRow[]): { countryId: number; tagId
   return { countryId, tagIds };
 }
 
+/** 基础分 = 所选演员最高评分（未评分按 0；未选为 0）。展示分 = min(100, 基础分 + 加分)。 */
+function baseRatingOf(selected: ActressRow[]): number {
+  return selected.reduce((m, a) => Math.max(m, a.rating ?? 0), 0);
+}
+
 /**
  * 视频归档弹窗：左播放区（原生格式直连；ts/avi 等走 hls.js）+ 右表单。
  * 单片流程完整可用；剧集切换仅占位（禁用确认，待后续迭代）。
@@ -80,6 +85,9 @@ export function ArchiveDialog({ file, actresses, countries, tags, studios, onClo
       const derived = deriveFromActresses(next);
       setCountryId(derived.countryId);
       setTagIds(derived.tagIds);
+      // 加分上限随基础分变化（100 − 演员最高评分），超出即收拢
+      const maxAdd = 100 - baseRatingOf(next);
+      setRating((r) => (r != null && r > maxAdd ? maxAdd : r));
       return next;
     });
   };
@@ -151,6 +159,9 @@ export function ArchiveDialog({ file, actresses, countries, tags, studios, onClo
   const actressResults = actresses.filter(
     (a) => !needle || a.name.toLowerCase().includes(needle) || a.aliases.some((x) => x.toLowerCase().includes(needle)),
   );
+  // 加分制：基础分 = 所选演员最高评分；最终评分 = min(100, 基础分 + 加分)
+  const base = baseRatingOf(selected);
+  const score = Math.min(100, base + (rating ?? 0));
 
   return (
     <dialog ref={dlgRef} onClose={onClose} closedby="any">
@@ -206,9 +217,18 @@ export function ArchiveDialog({ file, actresses, countries, tags, studios, onClo
                   <input className="mt-1 w-full" value={code} maxLength={60} onChange={(e) => setCode(e.target.value)} />
                 </label>
                 <div className="col-span-2">
-                  <span className="text-xs text-dim">评分（可选）</span>
+                  <span className="text-xs text-dim">加分（可选，基础分 {base}，上限 {100 - base}）</span>
                   <div className="mt-1">
-                    <RatingInput value={rating} onChange={setRating} />
+                    <RatingInput value={rating} onChange={setRating} max={100 - base} />
+                  </div>
+                  <div className="mt-1 text-xs">
+                    最终评分：
+                    <span className="font-mono font-bold">
+                      {score}
+                      <span className="ml-1 font-normal text-dim">
+                        （基础分 {base}{rating != null ? ` + 加分 ${rating}` : '，未加分'}）
+                      </span>
+                    </span>
                   </div>
                 </div>
               </div>

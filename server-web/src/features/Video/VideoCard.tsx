@@ -9,7 +9,7 @@ interface Props {
   onPlay: (it: VideoRow) => void;
   /** 点击封面看大图（PhotoSwipe 查看器，App 层挂载）。 */
   onView: (it: VideoRow) => void;
-  /** 评分环修改（0-100；null = 清除）。 */
+  /** 评分环修改（加分配额 0 至 100−base_rating；null = 清除）。 */
   onRate: (it: VideoRow, rating: number | null) => void;
 }
 
@@ -64,6 +64,8 @@ export function VideoCard({ it, onPlay, onView, onRate }: Props) {
   const hasRes = vf?.width != null && vf?.height != null;
   const noCover = it.cover_file_id == null;
   const coverSrc = noCover ? '' : `/api/raw/file/${it.cover_file_id}/content`;
+  // 展示分 = min(100, 基础分 + 加分配额)；rating=null 即未评分
+  const score = it.rating == null ? null : Math.min(100, it.base_rating + it.rating);
 
   return (
     <div className="group relative mx-auto overflow-visible rounded-2xl bg-gray-900">
@@ -131,19 +133,19 @@ export function VideoCard({ it, onPlay, onView, onRate }: Props) {
             <div className="relative shrink-0">
               <button
                 type="button"
-                aria-label={it.rating == null ? `为 ${it.title} 评分` : `评分 ${it.rating}，点击修改`}
-                title={it.rating == null ? '未评分，点击评分' : `评分 ${it.rating}`}
+                aria-label={score == null ? `为 ${it.title} 评分` : `评分 ${score}，点击修改`}
+                title={score == null ? '未评分，点击评分' : `评分 ${score}`}
                 onClick={() => setEditingRating((v) => !v)}
                 className={
-                  it.rating != null
-                    ? `relative flex h-12 w-12 items-center justify-center rounded-full bg-gradient-to-br ${ratingColor(it.rating).from} ${ratingColor(it.rating).via} ${ratingColor(it.rating).to} shadow-lg ${ratingColor(it.rating).glow} transition-transform duration-200 hover:scale-110`
+                  score != null
+                    ? `relative flex h-12 w-12 items-center justify-center rounded-full bg-gradient-to-br ${ratingColor(score).from} ${ratingColor(score).via} ${ratingColor(score).to} shadow-lg ${ratingColor(score).glow} transition-transform duration-200 hover:scale-110`
                     : 'flex h-12 w-12 items-center justify-center rounded-full border border-dashed border-gray-700 text-gray-600 opacity-0 transition-all duration-200 hover:border-cyan-500/50 hover:text-cyan-400 group-hover:opacity-100'
                 }
               >
-                {it.rating != null ? (
+                {score != null ? (
                   <>
                     <span className="absolute inset-0 rounded-full bg-gradient-to-br from-white/20 to-transparent" />
-                    <span className="relative font-mono text-sm font-bold text-white">{it.rating}</span>
+                    <span className="relative font-mono text-sm font-bold text-white">{score}</span>
                   </>
                 ) : (
                   <Star className="h-5 w-5" />
@@ -153,6 +155,7 @@ export function VideoCard({ it, onPlay, onView, onRate }: Props) {
                 <div className="absolute left-0 top-14 z-20 w-64 rounded-xl border border-gray-700 bg-gray-900 p-3 shadow-2xl shadow-black/60">
                   <RatingInput
                     value={it.rating}
+                    max={100 - it.base_rating}
                     onChange={(v) => {
                       onRate(it, v);
                       if (v == null) setEditingRating(false);

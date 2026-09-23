@@ -1,11 +1,11 @@
-/** 评分行：slider 0-100 + 未评分清除（女优/作品评分共用约定）。 */
-export function RatingInput({ value, onChange }: { value: number | null; onChange: (v: number | null) => void }) {
+/** 评分行：slider 0-max + 未评分清除（女优绝对分 max=100；作品加分配额 max=100−基础分）。 */
+export function RatingInput({ value, onChange, max = 100 }: { value: number | null; onChange: (v: number | null) => void; max?: number }) {
   return (
     <div className="flex items-center gap-3">
       <input
         type="range"
         min={0}
-        max={100}
+        max={max}
         step={1}
         value={value ?? 0}
         aria-label="评分"
@@ -13,7 +13,7 @@ export function RatingInput({ value, onChange }: { value: number | null; onChang
         className="flex-1"
       />
       <span className="w-16 shrink-0 text-right font-mono text-xs text-dim">
-        {value == null ? '未评分' : `${value} / 100`}
+        {value == null ? '未评分' : `${value} / ${max}`}
       </span>
       <button
         type="button"

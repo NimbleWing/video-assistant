@@ -15,11 +15,11 @@ vi.mock('hls.js', () => ({ default: { isSupported: () => false } }));
 
 const actresses: ActressRow[] = [
   {
-    id: 1, name: '甲女优', country_id: 1, country_name: '日本', rating: null, disk: 'd:', avatar_file_id: null,
+    id: 1, name: '甲女优', country_id: 1, country_name: '日本', rating: 77, disk: 'd:', avatar_file_id: null,
     aliases: [], tags: [{ id: 11, name: '高清', sort: 1 }], video_count: 0,
   },
   {
-    id: 2, name: '乙女优', country_id: 2, country_name: '美国', rating: null, disk: 'e:', avatar_file_id: null,
+    id: 2, name: '乙女优', country_id: 2, country_name: '美国', rating: 55, disk: 'e:', avatar_file_id: null,
     aliases: [], tags: [{ id: 12, name: '经典', sort: 2 }], video_count: 0,
   },
 ];
@@ -90,7 +90,14 @@ describe('ArchiveDialog', () => {
     fireEvent.change(screen.getByLabelText(/标题（必填）/), { target: { value: '作品名' } });
     fireEvent.change(screen.getByLabelText(/番号（可选）/), { target: { value: 'ABC-1' } });
     fireEvent.change(screen.getByLabelText(/片商（可选）/, { selector: 'select' }), { target: { value: '21' } });
-    fireEvent.change(screen.getByLabelText('评分'), { target: { value: '90' } });
+    // 加分制：基础分 = 演员最高 77 → 滑块上限 23；拖到 22 → payload.rating = 22
+    const slider = screen.getByLabelText('评分') as HTMLInputElement;
+    expect(slider.max).toBe('23');
+    expect(screen.getByText(/加分（可选，基础分 77，上限 23）/)).toBeTruthy();
+    expect(screen.getByText('77')).toBeTruthy(); // 未加分时最终评分 = 基础分
+    fireEvent.change(slider, { target: { value: '22' } });
+    expect(screen.getByText('99')).toBeTruthy(); // 最终评分 = 77 + 22
+    expect(screen.getByText(/\+ 加分 22/)).toBeTruthy();
     mockedArchive.mockResolvedValue({ ok: true, item: {} as never });
     fireEvent.click(screen.getByText('确认归档'));
     await waitFor(() =>
@@ -100,7 +107,7 @@ describe('ArchiveDialog', () => {
         title: '作品名',
         subtitle: undefined,
         code: 'ABC-1',
-        rating: 90,
+        rating: 22,
         actressIds: [1, 2],
         countryId: 1,
         tagIds: expect.arrayContaining([11, 12]),

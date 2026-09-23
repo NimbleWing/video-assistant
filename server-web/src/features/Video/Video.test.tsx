@@ -25,7 +25,8 @@ function work(partial: Partial<VideoRow> = {}): VideoRow {
     title: '标题甲',
     subtitle: '副标题乙',
     code: 'ABC-123',
-    rating: 87,
+    rating: 37, // 加分配额：展示分 = 基础分 50 + 加分 37 = 87
+    base_rating: 50,
     video_file_id: 7,
     cover_file_id: 8,
     created_at: 1700000000000,
@@ -121,11 +122,14 @@ describe('Video 视频库页', () => {
   });
 
   it('评分环点击开改分弹层，slider 修改落库并就地更新', async () => {
-    mockedRate.mockResolvedValue({ ok: true, item: work({ rating: 66 }) });
+    mockedRate.mockResolvedValue({ ok: true, item: work({ rating: 16 }) });
     boot();
     fireEvent.click(await screen.findByRole('button', { name: /评分 87/ }));
-    fireEvent.change(screen.getByLabelText('评分'), { target: { value: '66' } });
-    await waitFor(() => expect(mockedRate).toHaveBeenCalledWith(11, 66));
+    // 加分上限 = 100 − 基础分 50 = 50；拖到 16 → 落库加分配额 16 → 展示分 50+16=66
+    const slider = screen.getByLabelText('评分') as HTMLInputElement;
+    expect(slider.max).toBe('50');
+    fireEvent.change(slider, { target: { value: '16' } });
+    await waitFor(() => expect(mockedRate).toHaveBeenCalledWith(11, 16));
     expect(await screen.findByText('66')).toBeTruthy();
   });
 

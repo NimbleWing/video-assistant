@@ -31,8 +31,8 @@ function idOf(sql: string): number {
 function seed() {
   db.exec("INSERT INTO countries (name) VALUES ('日本')");
   const countryId = idOf("SELECT id FROM countries WHERE name = '日本'");
-  db.exec(`INSERT INTO actresses (name, country_id, disk) VALUES ('A子', ${countryId}, 'd:')`);
-  db.exec(`INSERT INTO actresses (name, country_id, disk) VALUES ('B美', ${countryId}, 'd:')`);
+  db.exec(`INSERT INTO actresses (name, country_id, rating, disk) VALUES ('A子', ${countryId}, 77, 'd:')`);
+  db.exec(`INSERT INTO actresses (name, country_id, rating, disk) VALUES ('B美', ${countryId}, 55, 'd:')`);
   db.exec("INSERT INTO tags (name, sort) VALUES ('标签1', 1)");
   db.exec("INSERT INTO studios (name) VALUES ('片商X')");
   upsertRawScanned({
@@ -54,13 +54,13 @@ function seed() {
 const s = seed();
 
 describe('insertVideo 落库缝合', () => {
-  it('video_file 缝合 raw 行（id/path/ext/size/duration/分辨率）+ 四维 join + 评分', () => {
+  it('video_file 缝合 raw 行（id/path/ext/size/duration/分辨率）+ 四维 join + 加分配额与基础分', () => {
     const item = insertVideo({
       kind: 'single',
       title: '标题甲',
       subtitle: '副标题乙',
       code: 'ABC-123',
-      rating: 87,
+      rating: 20,
       videoFileId: s.fileId,
       coverFileId: null,
       actressIds: [s.a1, s.a2],
@@ -69,7 +69,8 @@ describe('insertVideo 落库缝合', () => {
       countryId: s.countryId,
     });
     expect(item.video_file).toEqual({ id: s.fileId, path: 'd:/rawfiles/v.mp4', ext: 'mp4', size: 100, duration: 1423, width: 1920, height: 1080 });
-    expect(item.rating).toBe(87);
+    expect(item.rating).toBe(20); // 加分配额
+    expect(item.base_rating).toBe(77); // 基础分 = 演员最高评分（A子 77 > B美 55）
     expect(item.actresses.map((a) => a.name)).toEqual(['A子', 'B美']);
     expect(item.tags.map((t) => t.name)).toEqual(['标签1']);
     expect(item.studios.map((x) => x.name)).toEqual(['片商X']);
@@ -96,12 +97,12 @@ describe('insertVideo 落库缝合', () => {
   });
 });
 
-describe('setVideoRating 评分修改', () => {
+describe('setVideoRating 加分修改', () => {
   it('设置/改分/清除；不存在返回 null', () => {
     const item = listVideos({ q: '标题甲' }).items[0]!;
-    expect(setVideoRating(item.id, 66)?.rating).toBe(66);
+    expect(setVideoRating(item.id, 23)?.rating).toBe(23);
     expect(setVideoRating(item.id, null)?.rating).toBeNull();
-    expect(setVideoRating(999999, 80)).toBeNull();
+    expect(setVideoRating(999999, 10)).toBeNull();
   });
 });
 

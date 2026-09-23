@@ -3,21 +3,23 @@
 // 归档流程：校验 → 目标目录（第一个演员的目录树）→ 命名 stem（番号 标题 副标题，空段跳过）
 // → 冲突 409 预检 → archiveRawFileTo 双文件移动 → 尽力回填时长/分辨率（ffmpeg 可用才探测）
 // → insertVideo 事务落库。
+// 评分加分制（2026-09-24）：rating = 加分配额，基础分 = 关联演员最高评分（未评分按 0），
+// 取值域 0 至 100−基础分；展示分 = min(100, 基础分 + 加分)。
 import { promises as fs } from 'node:fs';
 import { asRecord, HttpError, json, readJson, type Route } from '../../lib/http.ts';
 import { ffmpegInfo, ffmpegProbeMeta } from '../../lib/hls-core.ts';
 import { dirName } from '../../lib/paths.ts';
-import { getActress } from '../actress/actresses.ts';
+import { getActress, maxActressRating } from '../actress/actresses.ts';
 import { archiveRawFileTo, getRawFile, setRawVideoMeta } from '../raw/files.ts';
 import { getVideo, insertVideo, listVideos, setVideoRating } from './videos.ts';
 
 const TITLE_MAX = 120;
 
-/** 评分解析：null=未评分/清除；否则须 0-100 整数（与女优评分同约定）。 */
-function parseRating(raw: unknown): number | null {
+/** 加分配额解析：null=不加分/清除；否则须 0-max 整数（max = 100 − 基础分，由调用方按演员算出）。 */
+function parseRating(raw: unknown, max: number): number | null {
   if (raw == null) return null;
   const n = Number(raw);
-  if (!Number.isInteger(n) || n < 0 || n > 100) throw new HttpError(400, '评分须为 0-100 整数');
+  if (!Number.isInteger(n) || n < 0 || n > max) throw new HttpError(400, `加分须为 0-${max} 整数`);
   return n;
 }
 
@@ -44,6 +46,8 @@ const archiveRoute: Route['handler'] = async ({ req, res }) => {
 
   const actressIds = Array.isArray(body?.actressIds) ? body.actressIds.map((v) => Number(v)) : [];
   if (!actressIds.length || !actressIds.every((n) => Number.isInteger(n) && n > 0)) throw new HttpError(400, '归档需要至少一位演员');
+  // 加分配额前置校验（须在文件移动前完成：400 不能留下已移位的文件）
+  const rating = parseRating(body?.rating, 100 - maxActressRating(actressIds));
   const countryId = Number(body?.countryId);
   if (!Number.isInteger(countryId) || countryId <= 0) throw new HttpError(400, '缺少国家或国家 id 非法');
 
@@ -107,7 +111,7 @@ const archiveRoute: Route['handler'] = async ({ req, res }) => {
     title,
     subtitle: subtitle || null,
     code: code || null,
-    rating: parseRating(body?.rating),
+    rating,
     videoFileId: fileId,
     coverFileId,
     actressIds,
@@ -118,13 +122,14 @@ const archiveRoute: Route['handler'] = async ({ req, res }) => {
   json(res, 200, { ok: true, item });
 };
 
-/** 卡片评分环修改：{ rating: 0-100 | null }。 */
+/** 卡片评分环修改：{ rating: 加分配额 | null }（上限 100 − 该作品 base_rating）。 */
 const ratingRoute: Route['handler'] = async ({ req, res, params }) => {
   const id = Number(params.id);
   if (!Number.isInteger(id) || id <= 0) throw new HttpError(400, 'bad id');
-  if (!getVideo(id)) throw new HttpError(404, '作品不存在');
+  const video = getVideo(id);
+  if (!video) throw new HttpError(404, '作品不存在');
   const body = asRecord(await readJson(req));
-  const item = setVideoRating(id, parseRating(body?.rating));
+  const item = setVideoRating(id, parseRating(body?.rating, 100 - video.base_rating));
   json(res, 200, { ok: true, item });
 };
 

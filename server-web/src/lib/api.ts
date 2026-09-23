@@ -337,7 +337,7 @@ export function fetchWorks(query: WorksQuery): Promise<WorksResponse> {
   return api(`/api/works?${p.toString()}`);
 }
 
-/** 作品评分修改（0-100；null = 清除）。 */
+/** 作品加分修改（加分配额 0 至 100−基础分；null = 清除）。 */
 export function setVideoRating(id: number, rating: number | null): Promise<VideoMutationResponse> {
   return api(`/api/videos/${id}/rating`, {
     method: 'PUT',

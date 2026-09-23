@@ -593,8 +593,8 @@ describe('app 集成：视频归档（单片流程 + 作品落库）', () => {
       body: JSON.stringify(body),
     });
     const country = await (await post('/api/countries', { name: T.country })).json() as { item: { id: number } };
-    const a1 = await (await post('/api/actresses', { name: T.actress, countryId: country.item.id, disk: 'd:', tagIds: [], aliases: [] })).json() as { item: ActressItem };
-    const a2 = await (await post('/api/actresses', { name: T.actress2, countryId: country.item.id, disk: 'd:', tagIds: [], aliases: [] })).json() as { item: ActressItem };
+    const a1 = await (await post('/api/actresses', { name: T.actress, countryId: country.item.id, rating: 80, disk: 'd:', tagIds: [], aliases: [] })).json() as { item: ActressItem };
+    const a2 = await (await post('/api/actresses', { name: T.actress2, countryId: country.item.id, rating: 55, disk: 'd:', tagIds: [], aliases: [] })).json() as { item: ActressItem };
     const tag = await (await post('/api/tags', { name: T.tag })).json() as { item: { id: number } };
     const studio = await (await post('/api/studios', { name: T.studio })).json() as { item: { id: number } };
     return { countryId: country.item.id, a1: a1.item.id, a2: a2.item.id, tagId: tag.item.id, studioId: studio.item.id };
@@ -632,18 +632,44 @@ describe('app 集成：视频归档（单片流程 + 作品落库）', () => {
     const vid = await makeRaw('clip.mp4', 'mp4', 'video', 'varch-v1');
     const cover = await makeRaw('clip.jpg', 'jpg', 'image', 'varch-c1');
     try {
+      // 加分制校验：基础分 = 演员最高评分 80 → 上限 20；21 → 400 且不动文件
+      const over = await fetch(`${base}/api/videos/archive`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fileId: vid.id, title: '标题', rating: 21,
+          actressIds: [ids.a1, ids.a2], countryId: ids.countryId, tagIds: [], kind: 'single',
+        }),
+      });
+      expect(over.status).toBe(400);
+      expect((await fs.readFile(vid.path)).length).toBeGreaterThan(0); // 原文件未动
+
       const r = await fetch(`${base}/api/videos/archive`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           fileId: vid.id, coverFileId: cover.id,
-          title: '标题', subtitle: '副题', code: 'ABC-123',
+          title: '标题', subtitle: '副题', code: 'ABC-123', rating: 20,
           actressIds: [ids.a1, ids.a2], countryId: ids.countryId, tagIds: [ids.tagId], studioId: ids.studioId, kind: 'single',
         }),
       });
       expect(r.status).toBe(200);
-      const j = await r.json() as { item: { id: number; title: string; code: string } };
+      const j = await r.json() as { item: { id: number; title: string; code: string; rating: number | null; base_rating: number } };
       expect(j.item.title).toBe('标题');
+      expect(j.item.rating).toBe(20); // 加分配额
+      expect(j.item.base_rating).toBe(80); // 基础分 = 演员最高评分
+
+      // 卡片评分环：加分上限 100−80=20——21 → 400；15 → 200；null → 清除
+      const put = (body: unknown) => fetch(`${base}/api/videos/${j.item.id}/rating`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      expect((await put({ rating: 21 })).status).toBe(400);
+      const ok15 = await (await put({ rating: 15 })).json() as { item: { rating: number | null } };
+      expect(ok15.item.rating).toBe(15);
+      const clr = await (await put({ rating: null })).json() as { item: { rating: number | null } };
+      expect(clr.item.rating).toBeNull();
 
       // 落盘：第一个演员目录树（第二位演员目录无文件）、命名「番号 标题 副题」
       const stem = 'ABC-123 标题 副题';

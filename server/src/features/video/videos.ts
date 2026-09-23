@@ -23,11 +23,17 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS studio_videos  (video_id INTEGER NOT NULL, studio_id  INTEGER NOT NULL, PRIMARY KEY (video_id, studio_id));
   CREATE TABLE IF NOT EXISTS country_videos (video_id INTEGER NOT NULL, country_id INTEGER NOT NULL, PRIMARY KEY (video_id, country_id));
 `);
-// rating 列（2026-09-23 视频卡片复刻：作品评分 0-100，与女优评分同约定）
+// rating 列（2026-09-23 视频卡片复刻：作品评分；2026-09-24 语义改为加分制——
+// rating = 加分配额（0 至 100−基础分），基础分 = 关联演员最高评分，展示分 = min(100, 基础分 + 加分)）
 try {
   db.exec('ALTER TABLE videos ADD rating INTEGER');
 } catch {
   /* 列已存在 */
+}
+// 加分制迁移：旧绝对分无法换算，一次性清零重评（PRAGMA user_version 幂等栅栏）
+if (numOf((db.prepare('PRAGMA user_version').get() as SqlRow).user_version) < 1) {
+  db.exec('UPDATE videos SET rating = NULL');
+  db.exec('PRAGMA user_version = 1');
 }
 
 /** 作品归档写入（文件移动已由路由层完成）：videos + 四张关系表，单事务。 */
@@ -66,6 +72,8 @@ export function insertVideo(v: {
 
 interface VideoExtras {
   actresses: Map<number, { id: number; name: string }[]>;
+  /** 各作品基础分（关联演员最高评分，未评分按 0）。 */
+  base: Map<number, number>;
   tags: Map<number, { id: number; name: string; sort: number }[]>;
   studios: Map<number, { id: number; name: string }[]>;
   countries: Map<number, { id: number; name: string }[]>;
@@ -84,6 +92,7 @@ function toRow(r: SqlRow, x: VideoExtras, files: Map<number, RawFileRow>): Video
     subtitle: r.subtitle == null ? null : strOf(r.subtitle),
     code: r.code == null ? null : strOf(r.code),
     rating: r.rating == null ? null : numOf(r.rating),
+    base_rating: x.base.get(id) ?? 0,
     video_file_id: numOf(r.video_file_id),
     cover_file_id: r.cover_file_id == null ? null : numOf(r.cover_file_id),
     created_at: numOf(r.created_at),
@@ -100,15 +109,16 @@ function listVideosByIds(ids: number[]): Map<number, VideoRow> {
   const ph = ids.length ? ids.join(',') : '0';
   const base = new Map<number, SqlRow>();
   for (const r of db.prepare(`SELECT * FROM videos WHERE id IN (${ph})`).all() as SqlRow[]) base.set(numOf(r.id), r);
-  const x: VideoExtras = { actresses: new Map(), tags: new Map(), studios: new Map(), countries: new Map() };
+  const x: VideoExtras = { actresses: new Map(), base: new Map(), tags: new Map(), studios: new Map(), countries: new Map() };
   for (const r of db.prepare(
-    `SELECT av.video_id AS vid, a.id AS aid, a.name AS aname FROM actress_videos av
+    `SELECT av.video_id AS vid, a.id AS aid, a.name AS aname, a.rating AS arating FROM actress_videos av
      JOIN actresses a ON a.id = av.actress_id WHERE av.video_id IN (${ph}) ORDER BY av.actress_id ASC`,
   ).all() as SqlRow[]) {
     const vid = numOf(r.vid);
     const arr = x.actresses.get(vid) ?? [];
     arr.push({ id: numOf(r.aid), name: strOf(r.aname) });
     x.actresses.set(vid, arr);
+    x.base.set(vid, Math.max(x.base.get(vid) ?? 0, r.arating == null ? 0 : numOf(r.arating)));
   }
   for (const r of db.prepare(
     `SELECT tv.video_id AS vid, t.id AS tid, t.name AS tname, t.sort AS tsort FROM tag_videos tv
@@ -194,7 +204,7 @@ export function getVideo(id: number): VideoRow | null {
   return listVideosByIds([id]).get(id) ?? null;
 }
 
-/** 更新评分（0-100 或 null 清除；路由层校验取值域）。目标不存在返回 null。 */
+/** 更新加分配额（0 至 100−基础分 或 null 清除；取值域由路由层按 base_rating 校验）。目标不存在返回 null。 */
 export function setVideoRating(id: number, rating: number | null): VideoRow | null {
   const r = db.prepare('UPDATE videos SET rating = ? WHERE id = ?').run(rating, id);
   return Number(r.changes) > 0 ? getVideo(id) : null;

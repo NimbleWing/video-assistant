@@ -177,6 +177,14 @@ export function setActressAvatar(actressId: number, fileId: number): void {
   db.prepare('UPDATE actresses SET avatar_file_id = ? WHERE id = ?').run(fileId, actressId);
 }
 
+/** 给定演员 id 集的最高评分（未评分按 0；空集/均不存在为 0）——作品加分制的基础分（归档路由校验用）。 */
+export function maxActressRating(ids: number[]): number {
+  if (!ids.length) return 0;
+  const ph = ids.map(() => '?').join(',');
+  const r = db.prepare(`SELECT MAX(COALESCE(rating, 0)) AS m FROM actresses WHERE id IN (${ph})`).get(...ids) as SqlRow;
+  return numOf(r.m);
+}
+
 /** 标签使用计数（tag feature 的 actor_count 真实化用——放宽规则下的跨 feature 纯读）。 */
 export function tagUsageCounts(): Map<number, number> {
   const m = new Map<number, number>();

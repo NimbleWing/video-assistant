@@ -9,8 +9,10 @@ export interface VideoRow {
   title: string;
   subtitle: string | null;
   code: string | null;
-  /** 评分（0-100，可空；与女优评分同约定）。 */
+  /** 加分配额（0 至 100−base_rating，可空；null = 未加分）。展示分 = min(100, base_rating + rating)。 */
   rating: number | null;
+  /** 基础分：关联演员最高评分（演员未评分按 0；无演员为 0）。 */
+  base_rating: number;
   video_file_id: number;
   cover_file_id: number | null;
   created_at: number;
@@ -40,6 +42,7 @@ export interface VideoArchiveRequest {
   title: string;
   subtitle?: string;
   code?: string;
+  /** 加分配额（0 至 100−演员最高评分；null/缺省 = 不加分）。 */
   rating?: number | null;
   actressIds: number[];
   countryId: number;
