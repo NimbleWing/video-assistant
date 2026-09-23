@@ -12,8 +12,9 @@
 
 | 文件 | 职责 |
 |------|------|
-| `src/App.tsx` | 组合 Layout 与九页面（原始资料/归档资料/视频库/下载账本/国家/标签/片商/女优/设置；**默认 tab = 原始资料**）、头部统计、播放弹窗状态 + 图片查看器状态（tab 卸载重挂即刷新）；tab 配置（key/label/icon）定义于此 |
+| `src/App.tsx` | 组合 Layout 与九页面（原始资料/归档资料/视频库/下载账本/国家/标签/片商/女优/设置；**默认 tab = 原始资料**）、头部统计、播放弹窗状态 + 图片查看器状态（tab 卸载重挂即刷新）；tab 配置（key/label/icon）定义于此；顶栏标题「本地媒体库」可点击 → QrDialog 手机扫码弹窗 |
 | `src/components/Layout/index.tsx` | 页面骨架抽象：顶栏（标题 + 补充信息 + 移动端汉堡）+ 左侧侧边栏导航（icon + 文字，可选）+ 内容区；泛型 `K extends string` 支撑标签 key 收窄 |
+| `src/components/QrDialog.tsx` | 手机扫码访问弹窗（原生 `<dialog>`）：`GET /api/lan` 取局域网 IPv4 + 端口，qrcode-generator 本地生成 SVG 二维码（内容 `http://{ip}:{port}/`，多网卡 chips 切换）；弹窗注明手机端只读（服务端写操作 Origin 白名单不含局域网来源） |
 | `src/components/Pager/index.tsx` | 共享分页条：上一页/下一页 + 页码（可选跳页输入框：回车/失焦提交、钳位 1..pages）+ 右侧可选「每页 N 条」选择器 |
 | `src/components/VideoPlayer/index.tsx` | **通用视频播放内核**：`PlaySource` `{path, direct, hls?, preferDirect?}`——默认 hls.js 主路径 + 降级链（见下）；`preferDirect` 时直连优先、`<video>` error 事件回退 hls；换源/卸载停流清理。PlayerDialog 与 ArchiveDialog 左播放区共用 |
 | `src/components/PlayerDialog/index.tsx` | 共享播放弹窗：原生 `<dialog>` + `closedby="any"` 弹层壳 + VideoPlayer 内核，复制路径；`PlaySource` 自此 re-export；由 App 持有状态全局挂载（tab 切换不卸载）；Raw/Archive/Video 页消费 |
@@ -107,7 +108,7 @@ VideoPlayer（PlayerDialog/ArchiveDialog 共用内核）双源入参 `{path, dir
 - 组件测试统一 `vi.mock('@/lib/api')`（别名经 vite resolve.alias 解析，与源码导入同一模块）；纯逻辑（format/api）直接测。
 - 已知坑：RTL `getByText` 默认只匹配元素的**直接文本节点**——混合内容（如 `<b>剧名</b> / 标题`）需 span 包裹或用 `selector` / `textContent` 断言。
 - 覆盖：格式化边界、API 错误路径与参数拼接、各 Section 交互（筛选/分页/防抖/chips/保存/日志）、PlayerDialog 的 hls 建链与降级（`vi.mock('hls.js')`）、ConfirmDialog 确认/取消回调、Raw 页（磁盘卡渲染/勾选与启动参数、EventSource mock 驱动进度与 done 后的消失横幅、卡片类型分派与筛选、查重面板分组/分页/删除确认与部分失败展示）。
-- 运行时依赖：react / react-dom / **hls.js**（视频播放）/ **photoswipe**（图片查看器，手势与缩放交互不做自实现，测试桩掉模块级行为只验封装层）。
+- 运行时依赖：react / react-dom / **hls.js**（视频播放）/ **photoswipe**（图片查看器，手势与缩放交互不做自实现，测试桩掉模块级行为只验封装层）/ **qrcode-generator**（QrDialog 本地生成二维码 SVG，零依赖纯 JS）。
 
 ## 约定
 

@@ -26,6 +26,13 @@ export interface LogResponse {
   tail: string;
 }
 
+/** 局域网访问信息（管理页标题二维码弹窗数据源）：本机局域网 IPv4 列表 + 服务端口。 */
+export interface LanResponse {
+  ok: boolean;
+  port: number;
+  ips: string[];
+}
+
 export interface ExistsMatch {
   path: string;
   type: 'video' | 'cover';

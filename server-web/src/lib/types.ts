@@ -4,6 +4,7 @@
 export type {
   PingResponse,
   LogResponse,
+  LanResponse,
   ExistsMatch,
   ExistsResponse,
   ConfigResponse,

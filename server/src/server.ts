@@ -8,5 +8,5 @@ initHlsCache(); // 清理上次运行残留的 HLS 分段缓存
 
 const server = createApp();
 server.listen(PORT, HOST, () => {
-  console.log(`[media-server] http://${HOST}:${PORT} （媒体库 ${path.join(SERVER_ROOT, 'media.db')}）`);
+  console.log(`[media-server] http://127.0.0.1:${PORT}（局域网已放开，写操作仍限白名单）（媒体库 ${path.join(SERVER_ROOT, 'media.db')}）`);
 });

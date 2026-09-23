@@ -97,7 +97,7 @@ server/src/
 
 - **ffmpeg 为可选增强，不破坏零依赖**：HLS 流播放（§7）依赖外部 ffmpeg 进程——启动时探测（配置路径优先、PATH 回退），缺失仅意味着 HLS 端点 503、前端降级 Range 直连（维持现状画质），`start.bat` 开箱即用不受影响。运行时其余部分维持零 npm 依赖。
 - **管理页前端**：源码在 `../server-web`（独立 npm 包：React + TypeScript + Tailwind CSS + Vite + Vitest），`npm run build` 产物直出 `server/public`（文件名不带哈希、随仓库提交——服务侧维持零依赖、`start.bat` 开箱即用，代价是构建产物入库）。开发走 `npm run dev`（Vite dev server 代理 `/api`、`/stream` 到 17321；服务端写操作 Origin 白名单已含 dev origin）。
-- 监听 `127.0.0.1:17321`。
+- 监听 `0.0.0.0:17321`（2026-09-24 起放开局域网：手机扫码经局域网 IP 访问管理页；写操作 Origin 白名单不变——局域网来源写仍 403，手机端为**只读**浏览/播放）。**局域网连不通的排查（防火墙 Profile/程序路径错配、多网卡虚拟 IP 等）见 `FIREWALL.md`**。
 - **启动方式**（二选一）：
   - 手动：`server/start.bat`（`node --no-warnings --experimental-sqlite src/server.ts`）
    - 面板一键：离线指示灯点击 → `chrome.runtime.sendNativeMessage('com.rouvideo.media', {cmd:'start'})` → native host（`native-host.ts`，经 `native-host.cmd` 包装）以 detached 方式 spawn `src/server.ts` 后即退出，服务独立存活；面板轮询 ping 确认上线。需先运行 `server/install-native.bat` 注册（HKCU 注册表 + host manifest，`allowed_origins` 锁扩展 ID；卸载用 `uninstall-native.bat`）。依赖 node 在 PATH。
@@ -310,6 +310,7 @@ raw 已定决策记录：
 | 接口 | 方向 | 说明 |
 |------|------|------|
 | `GET /api/ping` | 扩展面板 | 心跳：`{ok, uptime, videos, covers, downloads:{status:count}, ffmpeg:{available, path}}`；videos/covers = raw_files 现存 video/image 计数；面板打开期间 30s 轮询——在线（绿）点击 = 新标签页打开管理页，离线（红）点击 = native messaging 启动服务 |
+| `GET /api/lan` | 页面 | 局域网访问信息 `{ok, port, ips[]}`：os.networkInterfaces 过滤 IPv4 非 internal，**真实物理网卡优先**（192.168/10 段排前，172.16-31 段多为 WSL/Hyper-V 虚拟网卡排后）；管理页标题点击弹二维码（手机同 WiFi 扫码访问）的数据源 |
 | `GET /api/log` | 管理页 | 服务日志尾部 200 行（native 启动时重定向到 server/server.log） |
 | `GET /api/exists?rel=剧名/xx.mp4&vid=<videoId>` | 扩展 | 账本优先（`status∈complete/skipped`，vid 精确 → filename 相等回退不限 site，命中 matches 首位带账本 filename）→ raw_files 回退（现存视频行，stem 匹配最初名/最新名）；返回 `{exists, matches:[{path,type,size}]}`；仅 `type='video'` 计为已下载 |
 | `POST /api/downloads` | 扩展 | 账本 upsert（一行一视频）：开始（downloading）/最终失败（failed+error）/取消/跳过/完成（complete，带 size/duration） |
@@ -357,7 +358,7 @@ raw 已定决策记录：
 | `GET /api/raw/file/:id/content` | 页面 | 图片缩略图 / 原生格式视频 Range 直连（mp4/webm/m4v/mov/mkv） |
 | `GET /api/raw/file/:id/index.m3u8` + `/seg/:seg` | 页面 | 非原生格式视频 HLS 转码（复用 lib/hls-core；ffmpeg 缺失 503 → 前端禁播提示） |
 
-安全：仅监听 127.0.0.1；校验 `Origin`/`Referer` 头，放行扩展 origin（`chrome-extension://fieogbjpjaiokpmfkokckebfaojncomm`）与自身页面，其余 403。无鉴权 token（本地个人使用，接受）。
+安全：监听 `0.0.0.0`（2026-09-24 起，支持局域网只读访问）；写操作校验 `Origin` 头，放行扩展 origin（`chrome-extension://fieogbjpjaiokpmfkokckebfaojncomm`）与本机自身页面（127.0.0.1:17321 / vite dev），局域网 IP 来源的写操作仍 403（手机端只读）。无鉴权 token（本地个人使用，接受——局域网内任何人可浏览/播放媒体库为已知取舍）。
 
 ## 6. 扫描机制
 

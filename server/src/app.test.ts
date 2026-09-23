@@ -9,7 +9,7 @@ import { db } from './lib/db.ts';
 import { normPath } from './lib/paths.ts';
 import { getRawByPath, upsertRawScanned } from './features/raw/files.ts';
 import { setExitHandlerForTest } from './features/system/routes.ts';
-import type { PingResponse } from './features/system/types.ts';
+import type { LanResponse, PingResponse } from './features/system/types.ts';
 
 /** 女优条目（本文件局部形状，断言用）。 */
 interface ActressItem {
@@ -51,6 +51,17 @@ describe('app 集成', () => {
     expect(j.ok).toBe(true);
     expect(typeof j.videos).toBe('number');
     expect(typeof j.uptime).toBe('number');
+  });
+
+  it('GET /api/lan 返回局域网 IPv4 列表与端口', async () => {
+    const r = await fetch(`${base}/api/lan`);
+    expect(r.status).toBe(200);
+    const j = (await r.json()) as LanResponse;
+    expect(j.ok).toBe(true);
+    expect(j.port).toBe(17321);
+    expect(Array.isArray(j.ips)).toBe(true);
+    for (const ip of j.ips) expect(ip).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
+    expect(j.ips).not.toContain('127.0.0.1');
   });
 
   it('GET /api/exists 空库返回不存在', async () => {

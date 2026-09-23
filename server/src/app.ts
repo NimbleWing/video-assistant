@@ -10,15 +10,17 @@ import { tagRoutes } from './features/tag/index.ts';
 import { studioRoutes } from './features/studio/index.ts';
 import { actressRoutes } from './features/actress/index.ts';
 import { videoRoutes } from './features/video/index.ts';
-import { systemRoutes } from './features/system/index.ts';
+import { systemRoutes, PORT } from './features/system/index.ts';
 
-export const HOST = '127.0.0.1';
-export const PORT = 17321;
+/** 监听地址：0.0.0.0 放开局域网（手机扫码只读浏览/播放）；写操作由 Origin 白名单把守，局域网来源仍 403。 */
+export const HOST = '0.0.0.0';
+export { PORT };
 
-/** 允许发起写操作的来源：扩展 + 管理页自身 + server-web 开发服（vite）；无 Origin（curl 等）放行 */
+/** 允许发起写操作的来源：扩展 + 管理页自身（本机回环）+ server-web 开发服（vite）；无 Origin（curl 等）放行。
+ *  局域网 IP 来源（手机扫码访问）不在白名单——写操作 403，手机端只读。 */
 const ALLOWED_ORIGINS = [
   'chrome-extension://fieogbjpjaiokpmfkokckebfaojncomm',
-  `http://${HOST}:${PORT}`,
+  'http://127.0.0.1:17321',
   'http://localhost:5173',
   'http://127.0.0.1:5173',
 ];

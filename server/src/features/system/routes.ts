@@ -1,15 +1,39 @@
 // 服务级 API 路由：/api/ping（心跳，聚合 raw+ledger 统计）、/api/log（服务日志尾部）、
 // /api/shutdown（面板重启的下半程）、/api/exists（判定：账本→raw 两层）、
-// /api/config（ffmpeg_path 配置）。ping/exists 是仅有的跨 feature 聚合点
-// （exists/config 于 2026-09-23 随 media feature 退役移入，见 DESIGN.md §1）。
+// /api/config（ffmpeg_path 配置）、/api/lan（局域网访问信息，二维码弹窗数据源）。
+// ping/exists 是仅有的跨 feature 聚合点（exists/config 于 2026-09-23 随 media feature 退役移入，见 DESIGN.md §1）。
 import { promises as fs } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { asRecord, HttpError, json, readJson, type Route } from '../../lib/http.ts';
 import { SERVER_ROOT } from '../../lib/db.ts';
 import { ffmpegInfo, getFfmpegPath, resetFfmpegProbe, setFfmpegPath } from '../../lib/hls-core.ts';
 import { dlStatusCounts, findDownloadedHit } from '../ledger/index.ts';
 import { rawStats, rawVideoMatches } from '../raw/index.ts';
-import type { ConfigResponse, LogResponse, PingResponse } from './types.ts';
+import type { ConfigResponse, LanResponse, LogResponse, PingResponse } from './types.ts';
+
+/** 服务端口（定义于此供 app.ts 复用，避免 routes→app 循环依赖）。 */
+export const PORT = 17321;
+
+/** 局域网访问信息：本机 IPv4（非 internal）+ 端口（手机扫码访问管理页）。 */
+const lanRoute: Route['handler'] = ({ res }) => {
+  const ips: string[] = [];
+  for (const list of Object.values(os.networkInterfaces())) {
+    for (const it of list ?? []) {
+      if (it.family === 'IPv4' && !it.internal) ips.push(it.address);
+    }
+  }
+  // 真实物理网卡优先：192.168/10 段排前；172.16-31 段多为 WSL/Hyper-V 等虚拟网卡排后（段内字典序）
+  const rank = (ip: string): number => {
+    if (ip.startsWith('192.168.') || ip.startsWith('10.')) return 0;
+    const m = /^172\.(\d+)\./.exec(ip);
+    if (m && Number(m[1]) >= 16 && Number(m[1]) <= 31) return 1;
+    return 2;
+  };
+  ips.sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+  const body: LanResponse = { ok: true, port: PORT, ips };
+  json(res, 200, body);
+};
 
 const pingRoute: Route['handler'] = async ({ res }) => {
   const s = rawStats();
@@ -96,6 +120,7 @@ const shutdownRoute: Route['handler'] = ({ res }) => {
 
 export const systemRoutes: Route[] = [
   { method: 'GET', path: '/api/ping', handler: pingRoute },
+  { method: 'GET', path: '/api/lan', handler: lanRoute },
   { method: 'GET', path: '/api/log', handler: logRoute },
   { method: 'GET', path: '/api/exists', handler: existsRoute },
   { method: 'GET', path: '/api/config', handler: getConfigRoute },

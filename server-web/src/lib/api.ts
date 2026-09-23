@@ -8,6 +8,7 @@ import type {
   CountryMutationResponse,
   CountryRow,
   DownloadsResponse,
+  LanResponse,
   LogResponse,
   RawArchivedResponse,
   RawDuplicatesResponse,
@@ -180,6 +181,11 @@ export function fetchRawDuplicates(query: { page: number; size: number }): Promi
 /** 删除磁盘文件 + raw_files 行（查重清理，不可恢复）。 */
 export function deleteRawFile(id: number): Promise<RawFileDeleteResponse> {
   return api(`/api/raw/file/${id}/delete`, { method: 'POST' });
+}
+
+/** 局域网访问信息（标题二维码弹窗）：本机局域网 IPv4 列表 + 端口。 */
+export function fetchLan(): Promise<LanResponse> {
+  return api('/api/lan');
 }
 
 // ---------------------------------------------------------------------------

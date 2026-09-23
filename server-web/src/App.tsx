@@ -5,6 +5,7 @@ import { PlayerDialog } from '@/components/PlayerDialog';
 import type { PlaySource } from '@/components/PlayerDialog';
 import { ImageViewer } from '@/components/ImageViewer';
 import type { ViewImage } from '@/components/ImageViewer';
+import { QrDialog } from '@/components/QrDialog';
 import { Raw } from '@/features/Raw';
 import { Archive } from '@/features/Archive';
 import { Ledger } from '@/features/Ledger';
@@ -133,6 +134,7 @@ export default function App() {
   const [stat, setStat] = useState('加载中…');
   const [playing, setPlaying] = useState<PlaySource | null>(null);
   const [viewing, setViewing] = useState<{ items: ViewImage[]; index: number } | null>(null);
+  const [qrOpen, setQrOpen] = useState(false);
 
   return (
     <>
@@ -140,7 +142,14 @@ export default function App() {
         title={
           <>
             <span aria-hidden className="inline-block size-2.5 shrink-0 rounded-full bg-brand shadow-[0_0_10px_#f07759aa]" />
-            本地媒体库
+            <button
+              type="button"
+              title="手机扫码访问（同一 WiFi）"
+              className="cursor-pointer rounded-md px-1 transition-colors hover:bg-raised"
+              onClick={() => setQrOpen(true)}
+            >
+              本地媒体库
+            </button>
           </>
         }
         headerExtra={stat}
@@ -162,6 +171,7 @@ export default function App() {
       </Layout>
       <PlayerDialog item={playing} onClose={() => setPlaying(null)} />
       <ImageViewer items={viewing?.items ?? null} index={viewing?.index ?? 0} onClose={() => setViewing(null)} />
+      {qrOpen ? <QrDialog onClose={() => setQrOpen(false)} /> : null}
     </>
   );
 }
