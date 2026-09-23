@@ -252,6 +252,8 @@
     padding: 14px;
     max-width: 92vw;
     box-shadow: 0 24px 80px #000000a8;
+    /* Tailwind preflight 的 * { margin: 0 } 会清掉 UA 默认 margin: auto，显式恢复水平垂直居中 */
+    margin: auto;
   }
   dialog::backdrop {
     background: rgb(6 8 11 / 0.7);
